@@ -1,7 +1,7 @@
-# 第一刀验证手册
+# 临时 profile 验证手册
 
-适用范围：`@artomyuan/dsh-caduceus` 第一刀（骨架 + 四个纯逻辑模块 + 单测）。
-真机飞书验收（设计稿 A1–A14）属于第二刀，需要长连接、扫码/凭据与真实聊天，本手册不覆盖。
+适用范围：`@artomyuan/dsh-caduceus` 的构建/单测自检与**临时 profile** 安装冒烟。
+第一刀交付了骨架与纯逻辑模块；第二刀（飞书传输 + agent 桥接 + 状态层）已完成代码与单测，**真机飞书验收（A1–A17）需要真实凭据**，清单与验证方法见 [SLICE2.md](SLICE2.md)。
 
 > **硬约束声明：本刀没有执行安装、没有启动或重启任何服务。**
 > 下面第 2、3 节是给第二刀准备的**临时 profile** 验证步骤，只在 `/tmp` 下的临时 `DSH_HOME` 里操作；
@@ -30,8 +30,8 @@ pnpm smoke     # 等价：node scripts/smoke.mjs
 预期：
 
 - `npx tsc --noEmit` 退出 0、无输出（本刀实测退出 0）；
-- 单测输出 `# tests 48`、`# pass 48`、`# fail 0`；
-- smoke 输出 `smoke ok: scopeKey / parseCommand / truncateCardContent / SessionStore v3 / persona sync`。
+- 单测输出 `# tests 101`、`# pass 101`、`# fail 0`（第一刀 48 例保留，第二刀新增 53 例）；
+- smoke 输出 `smoke ok: scopeKey / parseCommand / truncate / SessionStore v3 / persona / transport(thread+fallback) / status / cards / bridge-final`。
 
 ## 1. 准备临时 DSH_HOME 并只读复制生产 web profile
 
@@ -98,7 +98,7 @@ grep -cE "name: '@artomyuan/dsh-caduceus" "$VERIFY_HOME/dump.yml"
 node "$PKG/scripts/smoke.mjs"
 ```
 
-预期：`smoke ok: scopeKey / parseCommand / truncateCardContent / SessionStore v3 / persona sync`。
+预期：`smoke ok: scopeKey / parseCommand / truncate / SessionStore v3 / persona / transport(thread+fallback) / status / cards / bridge-final`。
 
 **冒烟 3：全量单测**
 
@@ -108,7 +108,7 @@ cd "$PKG"
 node --test "$PKG/.test-dist/test/"*.test.js
 ```
 
-预期：`# pass 48` 且 `# fail 0`（第一刀基线）。
+预期：`# tests 101`、`# pass 101`、`# fail 0`。
 
 ## 4. 收尾：先核对生产未被改动，再清掉临时目录
 
@@ -121,15 +121,16 @@ cd "$PKG" && git status --short
 
 预期：三项 `OK`；`git status` 只有构建产物被 `.gitignore` 忽略、无未预期改动。
 
-## 5. 本刀明确未验证的项（第二刀）
+## 5. 需真机才能验证的项
 
-- 启动日志 `caduceus ready ×2` 与标题 provider 注册行（entry 目前是空壳）；
-- **官方标题 provider 是否被重复挂载**：dsh-base 已有一行 `- id: session-title-llm`（`@deepseek-ai/dsh-session-title-first-prompt-llm`），本包 patch 又按设计稿 §7 插入 `- id: session-title-first-prompt`。dump-config 能组合通过，但两行是否会争抢 provider 注册，需在第二刀真机确认；若冲突，第二刀的修法是改 patch 语义而不是撕毁设计稿；
-- 同群两话题两条 key / 同话题同一 sessionId 的**真机**行为（存储层已单测）；
-- 标题、`/sessions`、`/rename` 与 `sessionTitle.rename/get` 的接线；
-- 飞书发送：文本编辑 ≤20 次、卡片 patch 5 QPS / 14 天 / ≤30 KB / `update_multi: true`；
-- 回复降级（230071 / 230072 / 230019 → chat_id 直发）与 `uuid` 去重；
-- 人格块在真实 `~/.agents/AGENTS.md` 的落盘与指令预算行（本刀只测临时文件）；
-- A1–A14 全部真机判据。
+第二刀的代码与单测已完成；以下只能对真实飞书应用验证，逐条验证方法见 [SLICE2.md](SLICE2.md)：
 
-以上均依赖第二刀的传输与桥接实现，本刀不做任何服务启停或凭据操作。
+- 长连接建立与两个 entry 的 `ready` 日志、官方标题 provider 注册行；
+- **官方标题 provider 是否被重复挂载**：dsh-base 已有一行 `- id: session-title-llm`（`@deepseek-ai/dsh-session-title-first-prompt-llm`），本包 patch 又按设计稿 §7 插入 `- id: session-title-first-prompt`。dump-config 能组合通过，但两行是否会争抢 provider 注册，需真机确认；若冲突，应改 patch 语义而不是撕毁设计稿；
+- 同群两话题两条 key / 同话题同一 sessionId 的真机行为（存储层已单测）；
+- 话题回复的 `thread_id`、230071/230072/230019 降级与 uuid 去重；
+- 过程卡 patch 频率/终稿新消息/状态卡步数/终端主动推送/忙时三档；
+- 人格块在真实 `~/.agents/AGENTS.md` 的落盘与指令预算行；
+- A1–A17 全部真机判据。
+
+本仓库不执行任何服务启停，也不在验证中安装进生产 profile。
