@@ -81,7 +81,13 @@ export interface BridgeOptions {
     agent: AgentLike,
     line: string,
   ) => Promise<HarnessCommandResult | undefined>;
-  /** Title service seam (`/rename`, `/sessions`, `/status`). */
+  /**
+   * Title service seam (`/rename`, `/sessions`, `/status`). Resolved lazily on
+   * every use because `ctx.get('sessionTitle')` can be undefined at apply time
+   * (the service registers after the plugin mounts).
+   */
+  readonly sessionTitleProvider?: () => SessionTitleLike | undefined;
+  /** Direct title service (tests); `sessionTitleProvider` takes precedence. */
   readonly sessionTitle?: SessionTitleLike;
   /** `/persona show|sync` handler shared with the persona entry. */
   readonly persona?: (action: 'show' | 'sync') => Promise<PersonaCommandResult>;

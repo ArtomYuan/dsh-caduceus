@@ -18,6 +18,9 @@ import {
   formatStartupLine,
   maskAppId,
   scopeKind,
+  sessionIdTimestamp,
+  sessionTimeLabel,
+  shortSessionId,
 } from '../src/observability.js';
 import { FakeLogger } from './support/fakes.js';
 
@@ -121,19 +124,39 @@ test('启动行：appId 只露前缀+后 4 位，appSecret 任何片段都不出
 
 test('scope 行：kind=p2p/topic/group-user/group-shared，key 前 16 位且 NUL 可读', () => {
   const p2p = formatScopeLine('p2p', 'oc_chat', 'feishu-12345678', true);
-  assert.equal(p2p, 'scope: kind=p2p key=oc_chat session=feishu-1');
+  assert.equal(p2p, 'scope: kind=p2p key=oc_chat session=12345678');
 
   const topicKey = 'oc_chat\u0000omt_topic1234567890';
   assert.equal(scopeKind('group', topicKey, true), 'topic');
   const topic = formatScopeLine('group', topicKey, 'feishu-12345678', true);
-  assert.equal(topic, 'scope: kind=topic key=oc_chat\\0omt_topi session=feishu-1');
+  assert.equal(topic, 'scope: kind=topic key=oc_chat\\0omt_topi session=12345678');
 
   const userKey = 'oc_chat\u0000ou_user1234567890';
   assert.equal(scopeKind('group', userKey, true), 'group-user');
   assert.equal(formatScopeLine('group', userKey, 'feishu-abcdef12', true),
-    'scope: kind=group-user key=oc_chat\\0ou_user1 session=feishu-a');
+    'scope: kind=group-user key=oc_chat\\0ou_user1 session=abcdef12');
 
   assert.equal(scopeKind('group', 'oc_chat', false), 'group-shared');
   assert.equal(formatScopeLine('group', 'oc_chat', 'feishu-abcdef12', false),
-    'scope: kind=group-shared key=oc_chat session=feishu-a');
+    'scope: kind=group-shared key=oc_chat session=abcdef12');
+});
+
+test('会话 id：展示尾 8 位，epoch 解析与相对时间格式化', () => {
+  const id = 'feishu-1793460837083';
+  assert.equal(shortSessionId(id), id.slice(-8));
+  assert.equal(shortSessionId('short'), 'short');
+
+  const now = Date.parse('2026-10-31T23:00:00Z');
+  const fiveMinutesAgo = now - 5 * 60 * 1000;
+  const twoHoursAgo = now - 2 * 60 * 60 * 1000;
+  const threeDaysAgo = now - 3 * 24 * 60 * 60 * 1000;
+
+  assert.equal(sessionIdTimestamp(`feishu-${fiveMinutesAgo}`), fiveMinutesAgo);
+  assert.equal(sessionIdTimestamp('feishu-legacy-01'), undefined);
+  assert.equal(sessionIdTimestamp('feishu-123'), undefined);
+  assert.equal(sessionTimeLabel(fiveMinutesAgo, now), '5 分钟前');
+  assert.equal(sessionTimeLabel(twoHoursAgo, now), '2 小时前');
+  assert.equal(sessionTimeLabel(now - 1_000, now), '刚刚');
+  assert.equal(sessionTimeLabel(threeDaysAgo, now), '10-28 23:00');
+  assert.equal(sessionTimeLabel(undefined, now), '—');
 });

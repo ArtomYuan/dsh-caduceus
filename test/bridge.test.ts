@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 
 import { Bridge } from '../src/bridge/bridge.js';
-import type { AgentLike, BridgeConfig, BusyMode } from '../src/bridge/types.js';
+import type { AgentLike, BridgeConfig, BusyMode, SessionTitleLike } from '../src/bridge/types.js';
 import type { HarnessCommandResult } from '../src/commands/harness.js';
 import { scopeKey, SESSION_MAP_VERSION, SessionStore } from '../src/session-key.js';
 import type { StatusEventLike } from '../src/status.js';
@@ -54,6 +54,8 @@ interface HarnessOptions {
   readonly seedMap?: Readonly<Record<string, string>>;
   /** Ordinary-group isolation switch (default true). */
   readonly groupSessionsPerUser?: boolean;
+  /** Deferred title service (lazy-resolution tests); overrides `title`. */
+  readonly titleProvider?: () => SessionTitleLike | undefined;
 }
 
 interface Harness {
@@ -124,7 +126,9 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
       bridgeSeq += 1;
       return `feishu-bridge-${bridgeSeq}`;
     },
-    sessionTitle: titles,
+    ...(options.titleProvider === undefined
+      ? { sessionTitle: titles }
+      : { sessionTitleProvider: options.titleProvider }),
     ...(options.commandRunner === undefined
       ? {}
       : { runHarnessCommand: options.commandRunner }),
@@ -304,7 +308,7 @@ test('/status 在空闲与运行中两种状态都可读且可区分', async (t)
 
   await h.bridge.handleInbound(inbound('/status'));
   const idle = recordedTexts(h.transport).at(-1) ?? '';
-  assert.match(idle, /等待输入/);
+  assert.match(idle, /空闲/);
   assert.match(idle, /步数：0/);
 
   await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 1_000));
@@ -619,7 +623,7 @@ test('agent 就绪后强制重渲状态卡：同一 message_id 且带上标题',
   assert.equal(firstLine, '会话：服务端标题', 'status card keeps `会话：{title}` as its first line');
 });
 
-test('/sessions 行格式：▸ 标题 · 相对时间 · sessionId 前 8 位', async (t) => {
+test('/sessions 行格式：▸ 标题 · 相对时间 · sessionId 后 8 位', async (t) => {
   const h = makeHarness(t);
   await h.bridge.handleInbound(inbound('hi'));
   const session = liveAgent(h).session;
@@ -631,7 +635,7 @@ test('/sessions 行格式：▸ 标题 · 相对时间 · sessionId 前 8 位', 
   await h.bridge.handleInbound(inbound('/sessions'));
   const text = recordedTexts(h.transport).at(-1) ?? '';
   assert.match(text, /^\* ▸ 会话标题 · 刚刚 · [a-z0-9-]{8}$/m, text);
-  assert.ok(text.includes(String(session.id).slice(0, 8)), text);
+  assert.ok(text.includes(String(session.id).slice(-8)), text);
   assert.ok(!text.includes(String(session.id)), 'full sessionId must not be printed');
   assert.equal(text.split('\n').at(-1), '用 /rename <标题> 改当前会话名');
 });
@@ -849,11 +853,11 @@ test('/sessions --all：同 chat 混合旧键/话题键/用户键全部列出且
   const currentLine = lines.find((line) => line.startsWith('* ▸ '));
   assert.ok(currentLine !== undefined, text);
   assert.match(currentLine, /^\* ▸ 我的会话 · (刚刚|\d+ 分钟前) · [a-z0-9-]{8} · 用户 ou_me$/);
-  assert.ok(lines.some((line) => /feishu-l · 旧会话$/.test(line)), text);
-  assert.ok(lines.some((line) => /feishu-t · 话题 omt_oldt$/.test(line)), text);
-  assert.ok(lines.some((line) => /feishu-u · 用户 ou_other$/.test(line)), text);
-  assert.equal(lines.at(-1), '用 /resume <id 前 8 位> 继续某条会话');
-  assert.ok(!text.includes('feishu-o'), 'other chat sessions must not be listed');
+  assert.ok(lines.some((line) => /egacy-01 · 旧会话$/.test(line)), text);
+  assert.ok(lines.some((line) => /topic-01 · 话题 omt_oldt$/.test(line)), text);
+  assert.ok(lines.some((line) => /-user-01 · 用户 ou_other$/.test(line)), text);
+  assert.equal(lines.at(-1), '用 /resume <id 后 8 位> 继续某条会话');
+  assert.ok(!text.includes('herchat'), 'other chat sessions must not be listed');
   assert.equal(lines.length, 6, text); // header + 4 sessions + hint
 });
 
@@ -876,10 +880,10 @@ test('/sessions 不带参数：只列当前 scopeKey，不出现其他 scope 的
   const currentId = h.store.get(
     scopeKey('group', 'oc_chat', null, 'ou_me'),
   ) as string;
-  assert.ok(text.includes(currentId.slice(0, 8)), text);
-  assert.ok(!text.includes('feishu-l'), text);
-  assert.ok(!text.includes('feishu-t'), text);
-  assert.ok(!text.includes('feishu-u'), text);
+  assert.ok(text.includes(currentId.slice(-8)), text);
+  assert.ok(!text.includes('egacy-01'), text);
+  assert.ok(!text.includes('topic-01'), text);
+  assert.ok(!text.includes('-user-01'), text);
   assert.equal(text.split('\n').at(-1), '用 /rename <标题> 改当前会话名');
 });
 
@@ -895,8 +899,9 @@ test('/resume 前缀：唯一命中时切换到该会话', async (t) => {
   const before = h.store.get(currentKey);
   assert.notEqual(before, 'feishu-unique-1234');
 
+  const tail = 'feishu-unique-1234'.slice(-8);
   await h.bridge.handleInbound(
-    inbound('/resume feishu-u', { chatType: 'group', senderOpenId: 'ou_me', mentions: ['ou_bot'] }),
+    inbound(`/resume ${tail}`, { chatType: 'group', senderOpenId: 'ou_me', mentions: ['ou_bot'] }),
   );
   assert.equal(h.store.get(currentKey), 'feishu-unique-1234');
   assert.ok(h.agents.resumed.includes('feishu-unique-1234'));
@@ -907,8 +912,8 @@ test('/resume 前缀：多条命中时给歧义提示且不切换', async (t) =>
   const h = makeHarness(t, {
     botOpenId: 'ou_bot',
     seedMap: {
-      'oc_chat\u0000omt_ambig1111': 'feishu-ambig-1111',
-      'oc_chat\u0000ou_ambig2222': 'feishu-ambig-2222',
+      'oc_chat\u0000omt_ambig1111': 'feishu-ambig-11111111',
+      'oc_chat\u0000ou_ambig2222': 'feishu-other-11111111',
     },
   });
   await h.bridge.handleInbound(
@@ -918,11 +923,11 @@ test('/resume 前缀：多条命中时给歧义提示且不切换', async (t) =>
   const before = h.store.get(currentKey);
 
   await h.bridge.handleInbound(
-    inbound('/resume feishu-a', { chatType: 'group', senderOpenId: 'ou_me', mentions: ['ou_bot'] }),
+    inbound('/resume 11111111', { chatType: 'group', senderOpenId: 'ou_me', mentions: ['ou_bot'] }),
   );
   const text = recordedTexts(h.transport).at(-1) ?? '';
   assert.match(text, /命中 2 条会话/);
-  assert.ok(text.includes('feishu-a'));
+  assert.ok(text.includes('11111111'));
   assert.equal(h.store.get(currentKey), before, 'ambiguous prefix must not switch');
 });
 
@@ -932,11 +937,11 @@ test('/resume：零命中与过短前缀都给出明确提示', async (t) => {
   const currentKey = scopeKey('p2p', 'oc_chat', null, 'ou_user');
   const before = h.store.get(currentKey);
 
-  await h.bridge.handleInbound(inbound('/resume feishu-zzzzzzzz'));
+  await h.bridge.handleInbound(inbound('/resume 99999999'));
   assert.match(recordedTexts(h.transport).at(-1) ?? '', /没找到匹配的会话/);
 
   await h.bridge.handleInbound(inbound('/resume feishu'));
-  assert.match(recordedTexts(h.transport).at(-1) ?? '', /前缀至少 8 位/);
+  assert.match(recordedTexts(h.transport).at(-1) ?? '', /尾号至少 8 位/);
   assert.equal(h.store.get(currentKey), before);
 });
 
@@ -962,7 +967,7 @@ test('/sessions --all：p2p 当前会话的 scope 标签为「私聊」', async 
   const currentLine = text.split('\n').find((line) => line.startsWith('* ▸ '));
   assert.ok(currentLine !== undefined, text);
   assert.match(currentLine, / · 私聊$/);
-  assert.equal(text.split('\n').at(-1), '用 /resume <id 前 8 位> 继续某条会话');
+  assert.equal(text.split('\n').at(-1), '用 /resume <id 后 8 位> 继续某条会话');
 });
 
 test('命令分发日志：owned / unknown passthrough / parse-fail', async (t) => {
@@ -1020,4 +1025,82 @@ test('门禁日志：p2p 接受 / 群无 @ 丢弃都带 chat/thread/sender 前�
   for (const line of gateLines) {
     assert.match(line, /chat=oc_chat thread=(omt_t|-)?.*sender=ou_/);
   }
+});
+
+test('sessionTitle 惰性解析：服务晚挂载后 /rename /sessions /status 都可用', async (t) => {
+  const titles = new FakeTitleService();
+  let mounted: FakeTitleService | undefined;
+  const h = makeHarness(t, { titleProvider: () => mounted });
+  await h.bridge.handleInbound(inbound('hi'));
+  const session = liveAgent(h).session;
+  titles.titles.set(String(session.id), '晚挂载标题');
+
+  // Before mount: no crash, no title (status card/reply says 标题生成中).
+  await h.bridge.handleInbound(inbound('/status'));
+  assert.match(recordedTexts(h.transport).at(-1) ?? '', /标题生成中/);
+
+  mounted = titles;
+  await h.bridge.handleInbound(inbound('/status'));
+  assert.match(recordedTexts(h.transport).at(-1) ?? '', /晚挂载标题/);
+  await h.bridge.handleInbound(inbound('/sessions'));
+  assert.match(recordedTexts(h.transport).at(-1) ?? '', /晚挂载标题/);
+  await h.bridge.handleInbound(inbound('/rename 新标题'));
+  assert.match(recordedTexts(h.transport).at(-1) ?? '', /已重命名：新标题/);
+  assert.deepEqual(titles.renamed.at(-1), {
+    sessionId: String(session.id),
+    title: '新标题',
+  });
+});
+
+test('/resume 支持完整 sessionId（chat 内任意 scope）', async (t) => {
+  const target = 'feishu-1793460837083';
+  const h = makeHarness(t, {
+    botOpenId: 'ou_bot',
+    seedMap: { 'oc_chat\u0000omt_full': target },
+  });
+  const command = (text: string) =>
+    inbound(text, { chatType: 'group', senderOpenId: 'ou_me', mentions: ['ou_bot'] });
+  await h.bridge.handleInbound(command('hi'));
+  const key = scopeKey('group', 'oc_chat', null, 'ou_me');
+  assert.notEqual(h.store.get(key), target);
+
+  await h.bridge.handleInbound(command(`/resume ${target}`));
+  assert.equal(h.store.get(key), target);
+  assert.match(recordedTexts(h.transport).at(-1) ?? '', /已恢复会话 feishu-1793460837083/);
+});
+
+test('/sessions --all：时间从 feishu-<epoch_ms> 解析，非法 id 显示 —，展示尾 8 位', async (t) => {
+  const now = Date.parse('2026-10-31T23:00:00Z');
+  const fiveMin = now - 5 * 60 * 1000;
+  const twoHours = now - 2 * 60 * 60 * 1000;
+  const threeDays = now - 3 * 24 * 60 * 60 * 1000;
+  const h = makeHarness(t, {
+    botOpenId: 'ou_bot',
+    seedMap: {
+      'oc_chat\u0000omt_5m': `feishu-${fiveMin}`,
+      'oc_chat\u0000omt_2h': `feishu-${twoHours}`,
+      'oc_chat\u0000ou_3d': `feishu-${threeDays}`,
+      'oc_chat\u0000ou_bad': 'feishu-not-a-timestamp',
+    },
+  });
+  h.clock.advance(now);
+  const command = (text: string) =>
+    inbound(text, { chatType: 'group', senderOpenId: 'ou_me', mentions: ['ou_bot'] });
+  await h.bridge.handleInbound(command('hi'));
+  await h.bridge.handleInbound(command('/sessions --all'));
+
+  const lines = (recordedTexts(h.transport).at(-1) ?? '').split('\n');
+  const lineFor = (id: string) => lines.find((line) => line.includes(id.slice(-8)));
+  const line5m = lineFor(`feishu-${fiveMin}`);
+  const line2h = lineFor(`feishu-${twoHours}`);
+  const line3d = lineFor(`feishu-${threeDays}`);
+  const lineBad = lineFor('feishu-not-a-timestamp');
+  assert.ok(line5m !== undefined);
+  assert.ok(line2h !== undefined);
+  assert.ok(line3d !== undefined);
+  assert.ok(lineBad !== undefined);
+  assert.match(line5m, / · 5 分钟前 · /);
+  assert.match(line2h, / · 2 小时前 · /);
+  assert.match(line3d, / · 10-28 23:00 · /);
+  assert.match(lineBad, / · — · /);
 });

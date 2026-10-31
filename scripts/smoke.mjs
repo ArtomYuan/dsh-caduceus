@@ -25,7 +25,13 @@ const { StatusTracker, shouldNotifyTerminal, terminalNotice } = await load('stat
 const { CARD_BYTE_LIMIT, cardByteSize, progressCard } = await load('render/index.js');
 const { Bridge } = await load('bridge/index.js');
 const { FileLogger } = await load('file-logger.js');
-const { formatScopeLine, formatStartupLine } = await load('observability.js');
+const {
+  formatScopeLine,
+  formatStartupLine,
+  sessionIdTimestamp,
+  sessionTimeLabel,
+  shortSessionId,
+} = await load('observability.js');
 
 const dir = await mkdtemp(join(tmpdir(), 'dsh-caduceus-smoke-'));
 try {
@@ -342,7 +348,11 @@ try {
     'feishu-12345678',
     true,
   );
-  assert.equal(scopeLine, 'scope: kind=topic key=oc_smoke\\0omt_a session=feishu-1');
+  assert.equal(scopeLine, 'scope: kind=topic key=oc_smoke\\0omt_a session=12345678');
+  const ts = Date.parse('2026-10-31T22:55:00Z');
+  assert.equal(sessionIdTimestamp(`feishu-${ts}`), ts);
+  assert.equal(sessionTimeLabel(ts, Date.parse('2026-10-31T23:00:00Z')), '5 分钟前');
+  assert.equal(shortSessionId('feishu-1793460837083'), '60837083');
 
   console.log(
     'smoke ok: scopeKey / parseCommand / truncate / SessionStore v4 / persona / transport(thread+fallback) / status / cards / bridge-final / file-log',

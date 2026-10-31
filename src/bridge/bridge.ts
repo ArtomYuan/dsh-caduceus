@@ -22,7 +22,12 @@ import { planSlashLine, type OwnedCommand } from '../commands/dispatch.js';
 import { helpText } from '../commands/parse.js';
 import { evaluateGate, logGate } from '../gate.js';
 import { silentLogger, type LoggerLike } from '../logger.js';
-import { formatScopeLine } from '../observability.js';
+import {
+  formatScopeLine,
+  sessionIdTimestamp,
+  sessionTimeLabel,
+  shortSessionId,
+} from '../observability.js';
 import { progressCard, statusCard } from '../render/cards.js';
 import { CardStream, systemClock } from '../render/stream.js';
 import type { CardChannel, Clock } from '../render/stream.js';
@@ -71,26 +76,6 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** UTC `HH:MM:SSZ` label used for diagnostics. */
-function clockLabel(ms: number): string {
-  const date = new Date(ms);
-  const hh = String(date.getUTCHours()).padStart(2, '0');
-  const mm = String(date.getUTCMinutes()).padStart(2, '0');
-  const ss = String(date.getUTCSeconds()).padStart(2, '0');
-  return `${hh}:${mm}:${ss}Z`;
-}
-
-/** Human relative time for `/sessions` (e.g. `刚刚`, `5 分钟前`, `2 小时前`). */
-function relativeTime(ms: number, now: number): string {
-  const seconds = Math.max(0, Math.floor((now - ms) / 1000));
-  if (seconds < 60) return '刚刚';
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} 分钟前`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} 小时前`;
-  return `${Math.floor(hours / 24)} 天前`;
-}
-
 /** Extract the assistant's text from one `assistant/message` payload. */
 export function assistantTextFromEvent(data: unknown): string {
   const record = data as { message?: { content?: unknown } } | undefined;
@@ -130,7 +115,7 @@ export class Bridge {
   readonly #clock: Clock;
   readonly #now: () => number;
   readonly #mint: () => string;
-  readonly #sessionTitle: SessionTitleLike | undefined;
+  readonly #sessionTitleProvider: () => SessionTitleLike | undefined;
   readonly #queue = new ScopeQueue();
   readonly #states = new Map<string, ScopeState>();
   readonly #scopeBySession = new Map<string, string>();
@@ -145,7 +130,10 @@ export class Bridge {
     this.#clock = options.clock ?? systemClock;
     this.#now = options.now ?? (() => this.#clock.now());
     this.#mint = options.mintSessionId ?? mintSessionId;
-    this.#sessionTitle = options.sessionTitle;
+    const provider =
+      options.sessionTitleProvider ??
+      (options.sessionTitle === undefined ? undefined : () => options.sessionTitle);
+    this.#sessionTitleProvider = provider ?? (() => undefined);
     if (!this.#sessionMap.isLoaded) this.#sessionMap.load();
     for (const key of this.#sessionMap.keys()) {
       const sessionId = this.#sessionMap.get(key);
@@ -491,10 +479,11 @@ export class Bridge {
     const title = this.#titleForSessionId(state, sessionId);
     const currentId = state.sessionId ?? this.#sessionMap.get(state.key);
     const timestamp =
-      sessionId === currentId ? this.#lastActivityAt(state) : state.previousSessionAt;
-    const time = timestamp === undefined ? '—' : relativeTime(timestamp, this.#now());
+      sessionIdTimestamp(sessionId) ??
+      (sessionId === currentId ? this.#lastActivityAt(state) : state.previousSessionAt);
+    const time = sessionTimeLabel(timestamp, this.#now());
     const marker = isCurrent ? '* ' : '';
-    return `${marker}▸ ${title} · ${time} · ${sessionId.slice(0, 8)}`;
+    return `${marker}▸ ${title} · ${time} · ${shortSessionId(sessionId)}`;
   }
 
   /**
@@ -521,7 +510,7 @@ export class Bridge {
     return [
       '本聊天下的会话（含其他 scope）：',
       ...ordered.map((row) => this.#allSessionLine(state, row)),
-      '用 /resume <id 前 8 位> 继续某条会话',
+      '用 /resume <id 后 8 位> 继续某条会话',
     ].join('\n');
   }
 
@@ -532,10 +521,12 @@ export class Bridge {
       owner !== undefined && owner.sessionId === row.sessionId && owner.title !== undefined
         ? owner.title
         : this.#titleForSessionId(state, row.sessionId);
-    const timestamp = owner === undefined ? undefined : this.#lastActivityAt(owner);
-    const time = timestamp === undefined ? '—' : relativeTime(timestamp, this.#now());
+    const timestamp =
+      sessionIdTimestamp(row.sessionId) ??
+      (owner === undefined ? undefined : this.#lastActivityAt(owner));
+    const time = sessionTimeLabel(timestamp, this.#now());
     const marker = isCurrent ? '* ' : '';
-    return `${marker}▸ ${title} · ${time} · ${row.sessionId.slice(0, 8)} · ${this.#scopeLabel(
+    return `${marker}▸ ${title} · ${time} · ${shortSessionId(row.sessionId)} · ${this.#scopeLabel(
       state,
       row.key,
     )}`;
@@ -549,7 +540,7 @@ export class Bridge {
 
   #titleForSessionId(state: ScopeState, sessionId: string): string {
     if (state.sessionId === sessionId && state.title !== undefined) return state.title;
-    const service = this.#sessionTitle;
+    const service = this.#sessionTitleService();
     if (service !== undefined) {
       const agent = this.#agents.get(sessionId);
       if (agent !== undefined) {
@@ -564,13 +555,18 @@ export class Bridge {
     return '（未命名）';
   }
 
+  /** Resolve the title service on each use (it may register after apply). */
+  #sessionTitleService(): SessionTitleLike | undefined {
+    return this.#sessionTitleProvider();
+  }
+
   #titleOf(state: ScopeState): string | undefined {
     if (state.title !== undefined) return state.title;
     return this.#titleOfSession(state);
   }
 
   #titleOfSession(state: ScopeState): string | undefined {
-    const service = this.#sessionTitle;
+    const service = this.#sessionTitleService();
     if (service === undefined) return undefined;
     const sessionId = state.sessionId ?? this.#sessionMap.get(state.key);
     if (sessionId === undefined) return undefined;
@@ -599,7 +595,7 @@ export class Bridge {
   }
 
   async #rename(state: ScopeState, title: string): Promise<void> {
-    const service = this.#sessionTitle;
+    const service = this.#sessionTitleService();
     if (service === undefined) {
       await this.#replyText(state, '标题服务未挂载（sessionTitle），无法重命名。');
       return;
@@ -644,7 +640,7 @@ export class Bridge {
 
     if (selected.length === 0) {
       if (query.length < 8) {
-        await this.#replyText(state, '前缀至少 8 位（或输入完整 sessionId）。');
+        await this.#replyText(state, '尾号至少 8 位（或输入完整 sessionId）。');
       } else {
         await this.#replyText(state, `没找到匹配的会话：${query}（可用 /sessions --all 查看）`);
       }
@@ -653,16 +649,16 @@ export class Bridge {
     if (selected.length > 1) {
       const lines = selected
         .slice(0, 5)
-        .map((match) => `· ${match.sessionId.slice(0, 8)} · ${this.#scopeLabel(state, match.keys[0] as string)}`);
+        .map((match) => `· ${shortSessionId(match.sessionId)} · ${this.#scopeLabel(state, match.keys[0] as string)}`);
       await this.#replyText(
         state,
-        `前缀 ${query} 命中 ${selected.length} 条会话，请输入更多字符：\n${lines.join('\n')}`,
+        `尾号 ${query} 命中 ${selected.length} 条会话，请输入更多字符：\n${lines.join('\n')}`,
       );
       return;
     }
     const target = selected[0] as { sessionId: string; keys: string[] };
     if (query.length < 8 && target.sessionId !== query) {
-      await this.#replyText(state, '前缀至少 8 位（或输入完整 sessionId）。');
+      await this.#replyText(state, '尾号至少 8 位（或输入完整 sessionId）。');
       return;
     }
     await this.#switchSession(state, target.sessionId);
@@ -712,7 +708,9 @@ export class Bridge {
     for (const key of this.#scopeKeysForChat(state.chatId)) {
       const sessionId = this.#sessionMap.get(key);
       if (sessionId === undefined) continue;
-      if (sessionId !== query && !sessionId.startsWith(query)) continue;
+      if (sessionId !== query) {
+        if (query.length < 8 || !sessionId.endsWith(query)) continue;
+      }
       const keys = matches.get(sessionId);
       if (keys === undefined) matches.set(sessionId, [key]);
       else keys.push(key);

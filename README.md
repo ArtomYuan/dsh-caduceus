@@ -72,9 +72,9 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 | 命令 | 说明 |
 |:--|:--|
 | `/new` | 为当前聊天/话题新建会话，旧会话保留 |
-| `/sessions [--all]` | 默认只列当前 scopeKey：`▸ 标题 · 相对时间 · sessionId 前 8 位`（当前行 `* `，无标题「（未命名）」，末尾提示 `/rename`）。`--all` 列出同一 chatId 下所有 scope（旧键/话题/用户），行尾加 scope 标签，末尾提示用 `/resume <id 前 8 位>` |
+| `/sessions [--all]` | 默认只列当前 scopeKey：`▸ 标题 · 时间 · sessionId 后 8 位`（当前行 `* `，无标题「（未命名）」，末尾提示 `/rename`）。时间优先从 `feishu-<epoch_ms>` 解析（刚刚 / N 分钟前 / N 小时前 / MM-DD HH:mm），解析不出才 `—`。`--all` 列出同一 chatId 下所有 scope（旧键/话题/用户），行尾加 scope 标签，末尾提示用 `/resume <id 后 8 位>` |
 | `/rename <标题>` | 重命名当前会话的标题（标题非法时回一句人话） |
-| `/resume [id\|前缀]` | 无参恢复本 scope 上一条；带参可按完整 sessionId 或 ≥8 位不歧义前缀在本 chat 所有 scope 内恢复（命中多条给歧义提示） |
+| `/resume [id\|尾号]` | 无参恢复本 scope 上一条；带参可按完整 sessionId 或 ≥8 位不歧义**尾号**在本 chat 所有 scope 内恢复（命中多条给歧义提示） |
 | `/stop` | 中断当前正在运行的一轮（`cancel({kind:'user'})`） |
 | `/status` | 显示本会话状态、步数、工具数、起止时间与最近事件 |
 | `/persona [show\|sync]` | 查看或同步 SOUL 人格块 |
@@ -94,7 +94,7 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 ## 状态层与卡片
 
 - **过程卡**：每轮一张，`cardThrottleMs` 节流（默认 400 ms，内容不变不 patch），只放尾部约 8 KB 内容，卡片 ≤ 30 KB。
-- **状态卡**：每话题一张，展示进行中 / 等待输入 / 待审批 / 失败 / 完成（含步数、工具数、起止时间），终态定格。
+- **状态卡**：每话题一张，展示空闲 / 运行中 / 待审批 / 失败 / 完成（含步数、工具数、起止时间），终态定格；从未跑过回合的会话是「空闲」，有回合且结束后才是「完成」。
 - **标题时序**：标题未落盘时状态卡写「标题生成中」；`session/title` 到达后**就地 patch 同一张状态卡**（复用节流），不新发消息；agent create/resume 完成后还会**强制重渲一次**现有状态卡（首渲染可能早于标题服务就绪，只 patch、不新发）。
 - **终稿**：`turn/end` 后**新发**一条消息（绝不编辑过程卡），标题就绪时首行为 `▸ {标题}`、空一行后接正文；标题未就绪则只发正文（不写「未命名」）。本轮后到的 provider 标题不会补发/编辑终稿，下一轮自然带上。
 - `turn/end` 的 `reason.kind ∈ {error, interrupted, blocked}` 时再主动推一条消息，无需用户询问。
@@ -112,7 +112,7 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 - 启动行：`ready appId=cli_xxx…abcd defaultCwd=… groupSessionsPerUser=… throttle=… busyMode=…`（appId 只露前 7 + 后 4 位，**appSecret 任何片段都不打印**）；
 - 门禁每条判定一行：`gate accept: p2p|mentioned …` / `gate drop: no-mention|bot-sender|not-allowed-chat|not-allowed-user|empty-text …`，附 `chat=`/`thread=`/`sender=` 前 12 位；
 - 命令分发：`command: /status`、`command: unknown passthrough /xxx`、`command: parse-fail <原文前 40>`；
-- 会话键：`scope: kind=p2p|topic|group-user|group-shared key=<前 16 位> session=<前 8 位>`。
+- 会话键：`scope: kind=p2p|topic|group-user|group-shared key=<前 16 位> session=<后 8 位>`。
 
 ## 存储
 

@@ -6,7 +6,7 @@
  * `reason.kind`). No extra data source is invented.
  *
  * Mapping:
- * - no turn yet → 等待输入 (`waiting-input`)
+ * - no turn yet → 空闲 (`idle`)
  * - inside a turn → 运行中 (`running`), steps counted from `step/start`
  * - `turn/end completed` → 完成 (`completed`)
  * - `turn/end error` → 失败 (`failed`) with the provider message
@@ -22,6 +22,7 @@
 
 /** Derived session states. */
 export type StatusState =
+  | 'idle'
   | 'waiting-input'
   | 'running'
   | 'completed'
@@ -72,7 +73,7 @@ interface TurnBoundaryData {
   readonly turn?: number;
 }
 
-const INITIAL: StatusSnapshot = { state: 'waiting-input', steps: 0, tools: 0, turn: 0 };
+const INITIAL: StatusSnapshot = { state: 'idle', steps: 0, tools: 0, turn: 0 };
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : undefined;
@@ -173,6 +174,8 @@ export function stateForTurnEnd(kind: string | undefined): StatusState {
 /** Human label for a state (Chinese, as the surface speaks Chinese). */
 export function statusLabel(state: StatusState): string {
   switch (state) {
+    case 'idle':
+      return '空闲';
     case 'waiting-input':
       return '等待输入';
     case 'running':
@@ -200,6 +203,8 @@ export function statusTemplate(state: StatusState): string {
     case 'waiting-approval':
       return 'orange';
     case 'interrupted':
+      return 'grey';
+    case 'idle':
       return 'grey';
     case 'waiting-input':
       return 'grey';

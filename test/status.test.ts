@@ -18,12 +18,12 @@ function event(type: string, data: unknown, time = 0): StatusEventLike {
   return { type, data, time };
 }
 
-test('初始状态为等待输入，/status 文本非空且可区分', () => {
+test('初始状态为空闲，/status 文本非空且可区分', () => {
   const tracker = new StatusTracker();
   const idle = tracker.get();
-  assert.equal(idle.state, 'waiting-input');
-  assert.equal(statusLabel(idle.state), '等待输入');
-  assert.match(statusText(idle), /状态：等待输入/);
+  assert.equal(idle.state, 'idle');
+  assert.equal(statusLabel(idle.state), '空闲');
+  assert.match(statusText(idle), /状态：空闲/);
 
   tracker.apply(event('turn/start', { turn: 1 }, 1_000));
   const running = tracker.get();
@@ -110,12 +110,12 @@ test('max-tokens 归入失败（需要续写）', () => {
   assert.equal(tracker.get().state, 'failed');
 });
 
-test('reset 回到等待输入', () => {
+test('reset 回到空闲', () => {
   const tracker = new StatusTracker();
   tracker.apply(event('turn/start', { turn: 1 }, 1_000));
   tracker.apply(event('turn/end', { turn: 1, reason: { kind: 'completed' } }, 2_000));
   tracker.reset();
-  assert.equal(tracker.get().state, 'waiting-input');
+  assert.equal(tracker.get().state, 'idle');
   assert.equal(tracker.get().steps, 0);
 });
 
@@ -128,4 +128,16 @@ test('只有 error/interrupted/blocked 触发主动推送', () => {
   assert.equal(shouldNotifyTerminal(undefined), false);
   assert.equal(terminalNotice('completed'), undefined);
   assert.equal(terminalNotice(undefined), undefined);
+});
+
+test('/status 三态：空闲 → 运行中 → 完成', () => {
+  const tracker = new StatusTracker();
+  assert.equal(statusLabel(tracker.get().state), '空闲');
+
+  tracker.apply(event('turn/start', { turn: 1 }, 1_000));
+  assert.equal(statusLabel(tracker.get().state), '运行中');
+
+  tracker.apply(event('turn/end', { turn: 1, reason: { kind: 'completed' } }, 2_000));
+  assert.equal(statusLabel(tracker.get().state), '完成');
+  assert.equal(statusLabel(tracker.get().state), '完成', 'a completed turn stays 完成');
 });

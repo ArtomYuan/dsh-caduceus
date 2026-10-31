@@ -141,7 +141,8 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
     agents: makeAgents(ctx),
     config: resolved.bridge,
     logger,
-    sessionTitle: ctx.get('sessionTitle') as SessionTitleLike | undefined,
+    // Lazy per use: the service can register AFTER this plugin mounts.
+    sessionTitleProvider: () => ctx.get('sessionTitle') as SessionTitleLike | undefined,
     persona: (action) => runPersonaCommand(action, { logger }),
     runHarnessCommand: async (agent, line) => {
       const commands = ctx.get('commands') as CommandRuntime | undefined;
