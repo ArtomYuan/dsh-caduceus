@@ -70,7 +70,7 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 | 命令 | 说明 |
 |:--|:--|
 | `/new` | 为当前聊天/话题新建会话，旧会话保留 |
-| `/sessions` | 列出本聊天/话题的会话与标题 |
+| `/sessions` | 列出本聊天/话题的会话：`标题 · 时间 · sessionId 前 8 位`（无标题显示「（未命名）」） |
 | `/rename <标题>` | 重命名当前会话的标题（标题非法时回一句人话） |
 | `/resume [id]` | 恢复本聊天/话题的上一条或指定会话 |
 | `/stop` | 中断当前正在运行的一轮（`cancel({kind:'user'})`） |
@@ -84,8 +84,8 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 
 - **非人类消息一律丢弃**：`sender.sender_type !== 'user'`（应用 / 机器人 / 缺失）在归一化层就被过滤，绝不会成为 prompt 或 fallback 标题（真机事故：应用自改进通知被当成首条用户消息）。
 - **p2p**：不需要 @。
-- **群普通消息**：需要 @ 机器人。
-- **群内话题**：该 `scopeKey` 已有会话时**免 @**（继续对话）；新话题的**首条仍需 @**。
+- **群聊（含群内话题）**：**一律需要 @ 到机器人**才处理；不 @ 直接丢弃并 debug 记一行 `group message without mention`。
+  - 话题**不再免 @**：真机实测同一话题两个 bot 同时在线时，免 @ 会导致两个 agent 同时接同一句话（2026-10-31 17:39），用户定案群聊一律 @。
 - 单人群豁免暂未实现（需要 chat 成员 API 与缓存，成本大于收益）；未实现前统一按 @ 规则，行为可预测。
 - @ 判定依据：事件里的 mention open_id 与 `bot/v3/info` 解析出的机器人 open_id 比对；解析失败时退化为「有任一 mention 就放行」，并在 debug 日志里标注。
 
@@ -93,7 +93,7 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 
 - **过程卡**：每轮一张，`cardThrottleMs` 节流（默认 400 ms，内容不变不 patch），只放尾部约 8 KB 内容，卡片 ≤ 30 KB。
 - **状态卡**：每话题一张，展示进行中 / 等待输入 / 待审批 / 失败 / 完成（含步数、工具数、起止时间），终态定格。
-- **标题时序**：标题未落盘时状态卡写「标题生成中」；`session/title` 到达后**就地 patch 同一张状态卡**（复用节流），不新发消息。
+- **标题时序**：标题未落盘时状态卡写「标题生成中」；`session/title` 到达后**就地 patch 同一张状态卡**（复用节流），不新发消息；agent create/resume 完成后还会**强制重渲一次**现有状态卡（首渲染可能早于标题服务就绪，只 patch、不新发）。
 - **终稿**：`turn/end` 后**新发**一条消息（绝不编辑过程卡）；`turn/end` 的 `reason.kind ∈ {error, interrupted, blocked}` 时再主动推一条消息，无需用户询问。
 - **回复位置**：入站 `thread_id ?? root_id` 归一为话题 id，出站 `reply_in_thread` 回同一话题；230071 / 230072 / 230019 自动降级为 `chat_id` 直发。
 - **重试幂等**：每次发送带 `uuid`，降级/重试复用同一 uuid（飞书侧 1 小时内至多成功一条）。

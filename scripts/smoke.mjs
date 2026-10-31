@@ -287,6 +287,24 @@ try {
   assert.ok(final, 'final answer must be a new message');
   assert.ok(calls.some((call) => call.op === 'sendCard' || (call.op === 'reply' && call.payload.kind === 'card')));
 
+  // 11. Group gate: a group message without a bot mention is dropped even when
+  //     the topic already has a session (no topic exemption anymore).
+  const followupsBefore = [...fakeAgents.live.values()][0].followups.length;
+  await bridge.handleInbound({
+    messageId: 'om_group_no_mention',
+    chatId: 'oc_bridge',
+    chatType: 'group',
+    senderOpenId: 'ou_bridge',
+    threadId: 'omt_bridge',
+    text: '群里没 @',
+    createdAt: 0,
+  });
+  assert.equal(
+    [...fakeAgents.live.values()][0].followups.length,
+    followupsBefore,
+    'group message without mention must be dropped',
+  );
+
   console.log(
     'smoke ok: scopeKey / parseCommand / truncate / SessionStore v3 / persona / transport(thread+fallback) / status / cards / bridge-final',
   );

@@ -66,6 +66,15 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** UTC `HH:MM:SSZ` label used by `/sessions` (deterministic across hosts). */
+function clockLabel(ms: number): string {
+  const date = new Date(ms);
+  const hh = String(date.getUTCHours()).padStart(2, '0');
+  const mm = String(date.getUTCMinutes()).padStart(2, '0');
+  const ss = String(date.getUTCSeconds()).padStart(2, '0');
+  return `${hh}:${mm}:${ss}Z`;
+}
+
 /** Extract the assistant's text from one `assistant/message` payload. */
 export function assistantTextFromEvent(data: unknown): string {
   const record = data as { message?: { content?: unknown } } | undefined;
@@ -253,6 +262,7 @@ export class Bridge {
         state.sessionId = fresh;
         state.pendingCreate = true;
         state.running = false;
+        state.title = undefined;
         state.status.reset();
         state.progress?.dispose();
         state.progress = undefined;
@@ -396,14 +406,45 @@ export class Bridge {
     const current = state.sessionId ?? this.#sessionMap.get(state.key);
     const lines: string[] = [];
     if (current !== undefined) {
-      const title = this.#titleOfSession(state);
-      lines.push(`· 当前：${current}${title === undefined ? '' : ` — ${title}`}`);
+      lines.push(`· ${this.#sessionListLine(state, current)}`);
     }
     if (state.previousSessionId !== undefined && state.previousSessionId !== current) {
-      lines.push(`· 上一条：${state.previousSessionId}`);
+      lines.push(`· ${this.#sessionListLine(state, state.previousSessionId)}`);
     }
     if (lines.length === 0) return '本聊天/话题还没有会话，直接发消息或 /new 开始。';
     return ['本聊天/话题的会话：', ...lines].join('\n');
+  }
+
+  /**
+   * One `/sessions` row: `<title> · <time> · <sessionId 前 8 位>`.
+   * The title comes from `sessionTitle.get(session)` when that session has a
+   * live agent; a missing/empty title renders as `（未命名）`, never blank.
+   * Time is the latest turn/event timestamp available for the scope, `—` when
+   * unknown (e.g. a session that has not produced an event in this process).
+   */
+  #sessionListLine(state: ScopeState, sessionId: string): string {
+    const title = this.#titleForSessionId(state, sessionId);
+    const snapshot = state.status.get();
+    const timestamp = snapshot.startedAt ?? snapshot.endedAt ?? snapshot.lastEventAt;
+    const time = timestamp === undefined ? '—' : clockLabel(timestamp);
+    return `${title} · ${time} · ${sessionId.slice(0, 8)}`;
+  }
+
+  #titleForSessionId(state: ScopeState, sessionId: string): string {
+    if (state.sessionId === sessionId && state.title !== undefined) return state.title;
+    const service = this.#sessionTitle;
+    if (service !== undefined) {
+      const agent = this.#agents.get(sessionId);
+      if (agent !== undefined) {
+        try {
+          const title = service.get(agent.session)?.title;
+          if (title !== undefined && title.trim().length > 0) return title;
+        } catch {
+          // Fall through to the unnamed placeholder.
+        }
+      }
+    }
+    return '（未命名）';
   }
 
   #titleOf(state: ScopeState): string | undefined {
@@ -480,11 +521,13 @@ export class Bridge {
     state.sessionId = target;
     state.pendingCreate = false;
     state.running = false;
+    state.title = undefined;
     state.status.reset();
     this.#bindSession(state, target);
     try {
       const { agent } = await this.#agents.resume({ resumeSessionId: target });
       this.#bindSession(state, String(agent.session.id));
+      await this.#afterAgentReady(state);
       await this.#replyText(state, `已恢复会话 ${target}。`);
     } catch (error) {
       await this.#replyText(state, `恢复会话失败：${errorMessage(error)}`);
@@ -495,11 +538,26 @@ export class Bridge {
     state: ScopeState,
   ): Promise<{ agent: AgentLike; sessionId: string; cwd: string } | undefined> {
     try {
-      return await this.#resolveAgent(state);
+      const resolved = await this.#resolveAgent(state);
+      await this.#afterAgentReady(state);
+      return resolved;
     } catch (error) {
       this.#logger.warn(`agent resolution failed for ${state.key}: ${errorMessage(error)}`);
       return undefined;
     }
+  }
+
+  /**
+   * The first status-card render can happen before the agent (and therefore the
+   * title service) is resolvable; title events that arrive earlier are lost.
+   * Once create/resume returns, pull the title from the service and force one
+   * in-place re-render of the EXISTING status card (same message_id, no new
+   * message). The session/title subscription still handles later changes.
+   */
+  async #afterAgentReady(state: ScopeState): Promise<void> {
+    const title = this.#titleOfSession(state);
+    if (title !== undefined) state.title = title;
+    if (state.statusStream?.messageId !== undefined) await this.#renderStatus(state);
   }
 
   async #resolveAgent(
@@ -577,14 +635,14 @@ export class Bridge {
   }
 
   /**
-   * Group @ gate (design doc is silent; real-device requirement):
-   * - p2p needs no mention;
-   * - a group message needs an @-mention of the bot;
-   * - a group TOPIC message is exempt when this scope already has a session
-   *   (continuing the conversation); a new topic's first message still needs @.
-   * A single-person-group exemption is intentionally NOT implemented: it needs
-   * the chat-membership API, which costs a per-chat call and a cache; the @
-   * requirement stays predictable instead.
+   * Trigger gate (user decision after real-device feedback):
+   * - p2p: no mention needed;
+   * - group chat: ALWAYS requires an @-mention of this bot — including group
+   *   topics, whether or not the scope already has a session.
+   *
+   * The previous "bound topic is exempt" shortcut was removed because two bots
+   * sharing a topic both answered an unmentioned message. A single-person-group
+   * exemption is also intentionally not implemented (chat-membership API cost).
    */
   #accepts(message: InboundMessage): boolean {
     if (message.chatType === 'p2p') return true;
@@ -600,13 +658,8 @@ export class Bridge {
       return true;
     }
 
-    if (message.threadId !== undefined && message.threadId.length > 0) {
-      const key = scopeKey(message.chatId, message.threadId);
-      if (this.#sessionMap.has(key)) return true;
-    }
-
     this.#logger.debug(
-      `group message without @bot ignored (chat ${message.chatId}, thread ${message.threadId ?? '-'})`,
+      `group message without mention ignored (chat ${message.chatId}, thread ${message.threadId ?? '-'})`,
     );
     return false;
   }

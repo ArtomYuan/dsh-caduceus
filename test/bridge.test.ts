@@ -444,13 +444,18 @@ test('@ 门禁：群里 @ 机器人通过', async (t) => {
   assert.equal(liveAgent(h).followups.length, 1);
 });
 
-test('话题豁免：已绑定话题的群消息免 @（继续对话）', async (t) => {
+test('群内话题（已绑定会话）仍需 @：无 @ 丢弃，不再免 @', async (t) => {
   const h = makeHarness(t, { botOpenId: 'ou_bot', prebindTopic: true });
   await h.bridge.handleInbound(
-    inbound('话题内继续', { chatType: 'group', threadId: 'omt_t' }),
+    inbound('话题内继续（无 @）', { chatType: 'group', threadId: 'omt_t' }),
   );
-  assert.equal(h.agents.resumed.length, 1, 'bound topic must resume, not create');
-  assert.equal(liveAgent(h).followups.length, 1);
+  assert.equal(h.agents.resumed.length, 0, 'bound topic must NOT bypass the @ gate');
+  assert.equal(h.agents.created.length, 0);
+  assert.equal(h.transport.calls.length, 0);
+  assert.ok(
+    h.logger.entries.some((entry) => entry.message.includes('group message without mention')),
+    'a debug line must record the dropped group message',
+  );
 });
 
 test('话题语义：新话题首条仍需 @，加 @ 后才建档', async (t) => {
@@ -538,4 +543,80 @@ test('标题先到：状态卡首次渲染即用标题，不写「标题生成�
   assert.ok(statusCard !== undefined);
   assert.match(JSON.stringify(statusCard.card), /早到标题/);
   assert.ok(!JSON.stringify(statusCard.card).includes('标题生成中'));
+});
+
+test('群内话题（已绑定会话）加上 @ 机器人后正常处理', async (t) => {
+  const h = makeHarness(t, { botOpenId: 'ou_bot', prebindTopic: true });
+  await h.bridge.handleInbound(
+    inbound('@机器人 话题内继续', {
+      chatType: 'group',
+      threadId: 'omt_t',
+      mentions: ['ou_bot'],
+    }),
+  );
+  assert.equal(h.agents.resumed.length, 1);
+  assert.equal(liveAgent(h).followups.length, 1);
+});
+
+test('agent 就绪后强制重渲状态卡：同一 message_id 且带上标题', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('hi'));
+  const session = liveAgent(h).session;
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 1_000));
+
+  const statusCard = recordedCards(h.transport).find(
+    (entry) => entry.card.header?.title.content === '飞书会话 · 状态',
+  );
+  assert.ok(statusCard !== undefined);
+  assert.match(JSON.stringify(statusCard.card), /标题生成中/);
+
+  // The title appears in the service only after the first render (the real
+  // failure mode: title events arrived before this bridge bound the session).
+  h.titles.titles.set(String(session.id), '服务端标题');
+  h.clock.advance(400);
+  await tick();
+  const cardCountBefore = recordedCards(h.transport).length;
+
+  // Any resolution path ends in create/resume returning → force one re-render.
+  await h.bridge.handleInbound(inbound('继续问一句'));
+  h.clock.advance(400);
+  await tick();
+
+  assert.equal(
+    recordedCards(h.transport).length,
+    cardCountBefore,
+    'agent-ready refresh must reuse the same card, not send a new one',
+  );
+  const patches = patchedCards(h.transport).filter(
+    (patch) => patch.messageId === statusCard.messageId,
+  );
+  assert.ok(patches.length >= 1, 'existing status card must be patched');
+  assert.match(JSON.stringify(patches.at(-1)?.card), /服务端标题/);
+});
+
+test('/sessions 行格式：标题 · 时间 · sessionId 前 8 位', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('hi'));
+  const session = liveAgent(h).session;
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 1_700_000_000_000));
+  h.titles.titles.set(String(session.id), '会话标题');
+  h.clock.advance(400);
+  await tick();
+
+  await h.bridge.handleInbound(inbound('/sessions'));
+  const text = recordedTexts(h.transport).at(-1) ?? '';
+  assert.match(text, /· 会话标题 · \d{2}:\d{2}:\d{2}Z · [a-z0-9-]{8}$/, text);
+  assert.ok(text.includes(String(session.id).slice(0, 8)), text);
+  assert.ok(!text.includes(String(session.id)), 'full sessionId must not be printed');
+});
+
+test('/sessions 标题为空时显示「（未命名）」而不是空白', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('hi'));
+  const session = liveAgent(h).session;
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 1_700_000_000_000));
+
+  await h.bridge.handleInbound(inbound('/sessions'));
+  const text = recordedTexts(h.transport).at(-1) ?? '';
+  assert.match(text, /· （未命名） · \d{2}:\d{2}:\d{2}Z · [a-z0-9-]{8}$/, text);
 });

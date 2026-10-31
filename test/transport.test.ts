@@ -212,3 +212,17 @@ test('normalize: 应用消息即使 @ 了机器人也不进入会话（sender_ty
   );
   assert.equal(message, undefined);
 });
+
+test('normalize: bot 消息即使 @ 了机器人也不进入会话', () => {
+  const message = normalizeMessageEvent(
+    raw(
+      {
+        mentions: [{ id: { open_id: 'ou_bot' } }],
+        thread_id: 'omt_thread',
+        content: JSON.stringify({ text: '<at user_id="ou_bot">@机器人</at> 机器人通知' }),
+      },
+      'bot',
+    ),
+  );
+  assert.equal(message, undefined);
+});
