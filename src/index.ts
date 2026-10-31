@@ -24,6 +24,7 @@ import { defaultLogPath } from './home.js';
 import { adaptLogger, teeLoggers, type LoggerLike } from './logger.js';
 import { formatStartupLine } from './observability.js';
 import { runPersonaCommand } from './persona/command.js';
+import { hasSessionLog } from './session-files.js';
 import { SessionStore } from './session-key.js';
 import { createLarkFeishuApi } from './transport/lark.js';
 import { ReliableTransport } from './transport/reliable.js';
@@ -141,6 +142,7 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
     agents: makeAgents(ctx),
     config: resolved.bridge,
     logger,
+    sessionExists: (sessionId) => hasSessionLog(sessionId),
     // Lazy per use: the service can register AFTER this plugin mounts.
     sessionTitleProvider: () => ctx.get('sessionTitle') as SessionTitleLike | undefined,
     persona: (action) => runPersonaCommand(action, { logger }),

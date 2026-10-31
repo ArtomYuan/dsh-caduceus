@@ -56,6 +56,8 @@ interface HarnessOptions {
   readonly groupSessionsPerUser?: boolean;
   /** Deferred title service (lazy-resolution tests); overrides `title`. */
   readonly titleProvider?: () => SessionTitleLike | undefined;
+  /** Disk-existence predicate for /sessions ghost markers (default: true). */
+  readonly sessionExists?: (sessionId: string) => boolean;
 }
 
 interface Harness {
@@ -133,6 +135,7 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
       ? {}
       : { runHarnessCommand: options.commandRunner }),
     ...(options.persona === undefined ? {} : { persona: options.persona }),
+    ...(options.sessionExists === undefined ? {} : { sessionExists: options.sessionExists }),
   });
   return { dir, store, transport, agents, clock, logger, titles, bridge };
 }
@@ -432,6 +435,12 @@ test('resume 失败时重铸新 session，不让聊天永久卡死', async (t) =
   assert.notEqual(reminted, firstSession);
   assert.equal(h.agents.created.length, 2);
   assert.equal(liveAgent(h).followups.length, 1);
+  const warning = h.logger.entries.find(
+    (entry) => entry.level === 'warn' && entry.message.includes('never landed'),
+  );
+  assert.ok(warning !== undefined, h.logger.entries.map((entry) => entry.message).join(' | '));
+  assert.ok(warning.message.includes(firstSession), warning.message);
+  assert.ok(warning.message.includes(reminted as string), warning.message);
 });
 
 test('无关 session 的事件被忽略', async (t) => {
@@ -1103,4 +1112,56 @@ test('/sessions --all：时间从 feishu-<epoch_ms> 解析，非法 id 显示 �
   assert.match(line2h, / · 2 小时前 · /);
   assert.match(line3d, / · 10-28 23:00 · /);
   assert.match(lineBad, / · — · /);
+});
+
+test('/new 立即物化会话：create 调用与 map 写入同一个 id，回复短 id', async (t) => {
+  const h = makeHarness(t);
+  const key = scopeKey('p2p', 'oc_chat', null, 'ou_user');
+  await h.bridge.handleInbound(inbound('/new'));
+
+  const mapped = h.store.get(key);
+  assert.ok(mapped !== undefined);
+  const createCall = h.agents.createCalls.at(-1);
+  assert.ok(createCall !== undefined);
+  assert.equal(createCall.sessionId, mapped);
+  assert.equal(createCall.meta.cwd, h.dir);
+  assert.ok(h.agents.live.has(mapped as string), 'created agent must be live');
+  assert.match(
+    recordedTexts(h.transport).at(-1) ?? '',
+    new RegExp(`已新建会话 ${mapped.slice(-8)}`),
+  );
+  // /new no longer relies on a later resume.
+  await h.bridge.handleInbound(inbound('/rename 物化后'));
+  assert.equal(h.logger.entries.filter((entry) => entry.message.startsWith('resume failed')).length, 0);
+});
+
+test('/new 物化失败：不写 map、回错误文案、保留旧会话', async (t) => {
+  const h = makeHarness(t);
+  const key = scopeKey('p2p', 'oc_chat', null, 'ou_user');
+  h.agents.failCreateWith = new Error('boom');
+  await h.bridge.handleInbound(inbound('/new'));
+
+  assert.equal(h.store.get(key), undefined, 'failed /new must not create a ghost map entry');
+  assert.equal(h.store.keys().length, 0);
+  assert.match(recordedTexts(h.transport).at(-1) ?? '', /新建会话失败：boom/);
+});
+
+test('/sessions：map 里有但磁盘无日志的条目标「（未落地）」', async (t) => {
+  const ghostKey = 'oc_chat\u0000omt_ghost';
+  const h = makeHarness(t, {
+    botOpenId: 'ou_bot',
+    sessionExists: () => false,
+    seedMap: { [ghostKey]: 'feishu-ghost-11111111' },
+  });
+  const command = (text: string) =>
+    inbound(text, { chatType: 'group', senderOpenId: 'ou_me', mentions: ['ou_bot'] });
+  await h.bridge.handleInbound(command('hi'));
+  await h.bridge.handleInbound(command('/sessions --all'));
+
+  const text = recordedTexts(h.transport).at(-1) ?? '';
+  const ghostLine = text.split('\n').find((line) => line.includes('11111111'));
+  assert.ok(ghostLine !== undefined, text);
+  assert.match(ghostLine, /（未落地）$/);
+  const currentLine = text.split('\n').find((line) => line.startsWith('* ▸ '));
+  assert.ok(currentLine !== undefined && !currentLine.includes('（未落地）'), text);
 });

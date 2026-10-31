@@ -71,7 +71,7 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 
 | 命令 | 说明 |
 |:--|:--|
-| `/new` | 为当前聊天/话题新建会话，旧会话保留 |
+| `/new` | 为当前聊天/话题**立即创建**新会话（写 map 前先 create，失败不写 map），旧会话保留；回复只显示短 id |
 | `/sessions [--all]` | 默认只列当前 scopeKey：`▸ 标题 · 时间 · sessionId 后 8 位`（当前行 `* `，无标题「（未命名）」，末尾提示 `/rename`）。时间优先从 `feishu-<epoch_ms>` 解析（刚刚 / N 分钟前 / N 小时前 / MM-DD HH:mm），解析不出才 `—`。`--all` 列出同一 chatId 下所有 scope（旧键/话题/用户），行尾加 scope 标签，末尾提示用 `/resume <id 后 8 位>` |
 | `/rename <标题>` | 重命名当前会话的标题（标题非法时回一句人话） |
 | `/resume [id\|尾号]` | 无参恢复本 scope 上一条；带参可按完整 sessionId 或 ≥8 位不歧义**尾号**在本 chat 所有 scope 内恢复（命中多条给歧义提示） |
@@ -131,6 +131,7 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
   - 普通群（无话题）：`chatId + "\u0000" + sender_open_id`（**按人隔离**，与 Hermes `group_sessions_per_user` 默认一致；`groupSessionsPerUser=false` 时回退 `chatId` 整群共享）；
   - 群内话题：`chatId + "\u0000" + threadId`（多人共享，与 Hermes `thread_sessions_per_user` 默认一致）。
 - 旧格式可读：v4 为当前格式；v3 是 `entries` 对象（老键**原样保留**为旧共享会话，**不批量改写**）；v2 是扁平 `{ "<scope key>": "feishu-<ts>" }`；v1 把这些字符串放在 `sessions` 下。下一次落盘写成 v4。
+- `/new` 会先调用 `agents.create` 再写 map；create 失败则不写，避免「幽灵 id」。`/sessions` 对 map 中存在、但磁盘无会话文件且无 live agent 的条目标注 `（未落地）`。
 - 写入是原子的：先写同目录 `.tmp`，再 `rename` 覆盖；权限 `0600`。
 - 标题不落此表：唯一来源是 dsh 的 `sessionTitle.get(session)`。
 

@@ -320,7 +320,26 @@ try {
     'group message without mention must be dropped',
   );
 
-  // 12. Visible file log + startup/scope lines (no secret leakage).
+  // 12. /new materializes immediately: a live agent exists and the map points
+  //     at exactly that id (no ghost entry waiting to fail a later resume).
+  const liveBefore = fakeAgents.live.size;
+  await bridge.handleInbound({
+    messageId: 'om_new',
+    chatId: 'oc_bridge',
+    chatType: 'p2p',
+    senderOpenId: 'ou_bridge',
+    text: '/new',
+    createdAt: 0,
+  });
+  assert.equal(fakeAgents.live.size, liveBefore + 1);
+  const newSessionId = bridgeStore.get('oc_bridge');
+  assert.ok(newSessionId !== undefined);
+  assert.ok(fakeAgents.live.has(newSessionId), 'new session must be live, not a ghost id');
+  const lastReply = calls.filter((call) => call.op === 'reply' && call.payload.kind === 'text').at(-1);
+  assert.ok(lastReply !== undefined && lastReply.payload.kind === 'text');
+  assert.ok(lastReply.payload.text.includes('已新建会话'));
+
+  // 13. Visible file log + startup/scope lines (no secret leakage).
   const logFile = join(dir, 'log', 'caduceus.log');
   const fileLogger = new FileLogger({
     filePath: logFile,

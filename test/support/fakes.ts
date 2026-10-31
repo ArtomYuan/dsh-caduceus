@@ -256,8 +256,14 @@ export class FakeAgent implements AgentLike {
 export class FakeAgents implements AgentsLike {
   readonly live = new Map<string, FakeAgent>();
   readonly created: string[] = [];
+  readonly createCalls: {
+    readonly sessionId: string;
+    readonly meta: { readonly cwd: string };
+  }[] = [];
   readonly resumed: string[] = [];
   readonly failResume = new Set<string>();
+  /** When set, the next create rejects once (for /new failure tests). */
+  failCreateWith: Error | undefined;
   createGate: Promise<void> | undefined;
   resumeGate: Promise<void> | undefined;
 
@@ -265,6 +271,12 @@ export class FakeAgents implements AgentsLike {
     readonly sessionId: string;
     readonly meta: { readonly cwd: string };
   }): Promise<{ readonly agent: FakeAgent }> {
+    this.createCalls.push({ sessionId: options.sessionId, meta: options.meta });
+    if (this.failCreateWith !== undefined) {
+      const error = this.failCreateWith;
+      this.failCreateWith = undefined;
+      throw error;
+    }
     this.created.push(options.sessionId);
     if (this.createGate !== undefined) await this.createGate;
     const agent = new FakeAgent(options.sessionId);

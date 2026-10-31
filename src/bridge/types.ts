@@ -93,4 +93,10 @@ export interface BridgeOptions {
   readonly persona?: (action: 'show' | 'sync') => Promise<PersonaCommandResult>;
   /** Time source for elapsed rendering; defaults to the clock. */
   readonly now?: () => number;
+  /**
+   * True when a session id has a durable log on disk. Used by `/sessions` to
+   * mark ghost entries `（未落地）`. Defaults to `() => true` (unknown = assume
+   * landed); the gateway wires the real filesystem check.
+   */
+  readonly sessionExists?: (sessionId: string) => boolean;
 }

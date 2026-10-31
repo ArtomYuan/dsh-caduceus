@@ -115,6 +115,7 @@ export class Bridge {
   readonly #clock: Clock;
   readonly #now: () => number;
   readonly #mint: () => string;
+  readonly #sessionExists: (sessionId: string) => boolean;
   readonly #sessionTitleProvider: () => SessionTitleLike | undefined;
   readonly #queue = new ScopeQueue();
   readonly #states = new Map<string, ScopeState>();
@@ -130,6 +131,7 @@ export class Bridge {
     this.#clock = options.clock ?? systemClock;
     this.#now = options.now ?? (() => this.#clock.now());
     this.#mint = options.mintSessionId ?? mintSessionId;
+    this.#sessionExists = options.sessionExists ?? (() => true);
     const provider =
       options.sessionTitleProvider ??
       (options.sessionTitle === undefined ? undefined : () => options.sessionTitle);
@@ -283,32 +285,41 @@ export class Bridge {
   async #runOwned(state: ScopeState, command: OwnedCommand): Promise<void> {
     switch (command.kind) {
       case 'new': {
+        // Materialize the session NOW: a map entry pointing at a session that
+        // was never created becomes a ghost id that fails the next resume.
         const current = state.sessionId ?? this.#sessionMap.get(state.key);
-        if (current !== undefined) {
-          state.previousSessionId = current;
-          state.previousSessionAt = this.#lastActivityAt(state) ?? this.#now();
-        }
+        const cwd = this.#sessionMap.getCwd(state.key) ?? this.#config.defaultCwd;
         const fresh = this.#mint();
-        this.#sessionMap.set(state.key, fresh);
-        this.#sessionMap.setCwd(
-          state.key,
-          this.#sessionMap.getCwd(state.key) ?? this.#config.defaultCwd,
-        );
-        state.sessionId = fresh;
-        state.pendingCreate = true;
-        state.running = false;
-        state.title = undefined;
-        state.status.reset();
-        state.progress?.dispose();
-        state.progress = undefined;
-        state.statusStream?.dispose();
-        state.statusStream = undefined;
-        state.lastOutput = '';
-        this.#bindSession(state, fresh);
-        await this.#replyText(
-          state,
-          `已新建会话 ${fresh}。上一会话可用 /resume 恢复。`,
-        );
+        try {
+          const { agent } = await this.#agents.create({ sessionId: fresh, meta: { cwd } });
+          // Commit only after create succeeded; on failure nothing is written.
+          if (current !== undefined) {
+            state.previousSessionId = current;
+            state.previousSessionAt = this.#lastActivityAt(state) ?? this.#now();
+          }
+          this.#sessionMap.set(state.key, fresh);
+          if (this.#sessionMap.getCwd(state.key) === undefined) {
+            this.#sessionMap.setCwd(state.key, cwd);
+          }
+          state.sessionId = fresh;
+          state.pendingCreate = false;
+          state.running = false;
+          state.title = undefined;
+          state.status.reset();
+          state.progress?.dispose();
+          state.progress = undefined;
+          state.statusStream?.dispose();
+          state.statusStream = undefined;
+          state.lastOutput = '';
+          this.#bindSession(state, fresh);
+          this.#bindSession(state, String(agent.session.id));
+          await this.#replyText(
+            state,
+            `已新建会话 ${shortSessionId(fresh)}。上一会话可用 /resume 恢复。`,
+          );
+        } catch (error) {
+          await this.#replyText(state, `新建会话失败：${errorMessage(error)}`);
+        }
         return;
       }
       case 'sessions': {
@@ -483,7 +494,7 @@ export class Bridge {
       (sessionId === currentId ? this.#lastActivityAt(state) : state.previousSessionAt);
     const time = sessionTimeLabel(timestamp, this.#now());
     const marker = isCurrent ? '* ' : '';
-    return `${marker}▸ ${title} · ${time} · ${shortSessionId(sessionId)}`;
+    return `${marker}▸ ${title} · ${time} · ${shortSessionId(sessionId)}${this.#ghostSuffix(sessionId)}`;
   }
 
   /**
@@ -529,13 +540,23 @@ export class Bridge {
     return `${marker}▸ ${title} · ${time} · ${shortSessionId(row.sessionId)} · ${this.#scopeLabel(
       state,
       row.key,
-    )}`;
+    )}${this.#ghostSuffix(row.sessionId)}`;
   }
 
   /** Latest timestamp this scope has seen for its current session, if any. */
   #lastActivityAt(state: ScopeState): number | undefined {
     const snapshot = state.status.get();
     return snapshot.startedAt ?? snapshot.endedAt ?? snapshot.lastEventAt;
+  }
+
+  /** A session is "landed" when it is live now or has a durable log on disk. */
+  #isLanded(sessionId: string): boolean {
+    if (this.#agents.get(sessionId) !== undefined) return true;
+    return this.#sessionExists(sessionId);
+  }
+
+  #ghostSuffix(sessionId: string): string {
+    return this.#isLanded(sessionId) ? '' : ' （未落地）';
   }
 
   #titleForSessionId(state: ScopeState, sessionId: string): string {
@@ -798,8 +819,10 @@ export class Bridge {
     } catch (error) {
       // The mapped session has no persisted log (or is stale): remint rather
       // than leaving the chat permanently broken.
-      this.#logger.warn(`resume failed for ${sessionId}; reminting: ${errorMessage(error)}`);
       const fresh = this.#mint();
+      this.#logger.warn(
+        `resume failed for ${sessionId}: ${errorMessage(error)}; old id never landed, reminting (old=${sessionId}, new=${fresh})`,
+      );
       state.previousSessionId = sessionId;
       state.previousSessionAt = this.#lastActivityAt(state) ?? this.#now();
       state.sessionId = fresh;
