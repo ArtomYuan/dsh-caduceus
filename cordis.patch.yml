@@ -1,16 +1,14 @@
 # dsh-caduceus bundle patch (design doc §7).
 #
-# One package, two self-owned entries plus the official title provider, so that
-# `dsh plugin add` is the only install step. The title provider is the official
-# row from dsh 0.2.1-rc.2; the surface owns no title logic (design doc §9).
+# One package, two self-owned entries. `dsh plugin add` is the only install step.
 #
-# Slice 1: the two caduceus entries are loadable no-op scaffolds; the Feishu
-# transport and the agent bridge land in slice 2.
+# NOTE (2026-10-31, verified on 0.2.1-rc.2): the base profile ALREADY mounts
+# `session-title` plus `session-title-llm` (first-prompt provider). Inserting a
+# second provider row here registers the same provider id twice and fails at
+# load, so this bundle adds no title row — the surface only calls
+# `sessionTitle.rename()` / `.get()`.
 - insert:
     - id: caduceus-gateway
       name: '@artomyuan/dsh-caduceus'
     - id: caduceus-persona
       name: '@artomyuan/dsh-caduceus/persona'
-    - id: session-title-first-prompt
-      name: '@deepseek-ai/dsh-session-title-first-prompt-llm'
-      config: { maxTitleBytes: 120, fallbackMaxBytes: 80 }
