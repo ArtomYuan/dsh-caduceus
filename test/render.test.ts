@@ -39,25 +39,45 @@ function textCard(text: string): FeishuCard {
 test('卡片必须带 config.update_multi=true', () => {
   for (const card of [
     textCard('x'),
-    progressCard({ title: '过程', stateLabel: '运行中', steps: 1, tools: 0, tail: 'x' }),
+    progressCard({ title: '过程', stateLabel: '运行中', steps: 1, tools: 0 }),
   ]) {
     assert.equal(card.config.update_multi, true);
   }
 });
 
-test('超长过程内容截断后卡片仍 ≤30KB 且含省略提示', () => {
-  const tail = '汉😀'.repeat(6000); // ~ 18000 bytes, above the 8 KB tail budget
+test('过程卡不承载正文：只含状态行/最近事件/收尾提示，且 ≤30KB', () => {
+  const body = '第一句完整回答。第二句完整回答。';
   const card = progressCard({
     title: '过程',
     stateLabel: '运行中',
     steps: 2,
     tools: 1,
-    tail,
+    sessionTitle: '会话标题',
+    recentEvent: 'tool/call',
+    startedAt: 0,
+    now: 5_000,
   });
-  assert.ok(cardByteSize(card) <= CARD_BYTE_LIMIT, `card is ${cardByteSize(card)} bytes`);
   const serialized = JSON.stringify(card);
-  assert.match(serialized, /已省略 \d+ 字符/);
-  assert.ok(!serialized.includes('\uFFFD'));
+  for (const sentence of ['第一句完整回答', '第二句完整回答', body]) {
+    assert.ok(!serialized.includes(sentence), 'process card must never carry the answer body');
+  }
+  assert.match(serialized, /会话：会话标题/);
+  assert.match(serialized, /步数 2/);
+  assert.match(serialized, /工具 1/);
+  assert.match(serialized, /已运行 5s/);
+  assert.match(serialized, /最近：tool\/call/);
+  assert.match(serialized, /收尾会另发一条终稿/);
+
+  const long = progressCard({
+    title: '过程',
+    stateLabel: '运行中',
+    steps: 2,
+    tools: 1,
+    sessionTitle: '长'.repeat(5_000),
+    recentEvent: 'x'.repeat(5_000),
+  });
+  assert.ok(cardByteSize(long) <= CARD_BYTE_LIMIT, `card is ${cardByteSize(long)} bytes`);
+  assert.ok(!JSON.stringify(long).includes('\uFFFD'));
 });
 
 test('tailText: 短文本原样、长文本 UTF-8 安全截尾', () => {

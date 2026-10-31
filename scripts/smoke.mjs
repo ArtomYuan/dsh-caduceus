@@ -203,17 +203,19 @@ try {
   assert.equal(shouldNotifyTerminal(status.terminalKind), true);
   assert.match(terminalNotice(status.terminalKind, status.errorMessage), /boom/);
 
-  // 9. Cards: update_multi + 30 KB cap under a huge tail.
+  // 9. Cards: process card is status-only (no answer body) and fits the cap.
   const card = progressCard({
     title: '过程',
     stateLabel: '运行中',
     steps: 1,
     tools: 0,
-    tail: '汉😀'.repeat(6000),
+    sessionTitle: '冒烟会话',
+    recentEvent: 'tool/call',
   });
   assert.equal(card.config.update_multi, true);
   assert.ok(cardByteSize(card) <= CARD_BYTE_LIMIT);
-  assert.match(JSON.stringify(card), /已省略 \d+ 字符/);
+  assert.ok(!JSON.stringify(card).includes('汉😀'));
+  assert.match(JSON.stringify(card), /最近：tool\/call/);
 
   // 10. Bridge end to end with inline fakes: a turn ends with a NEW final message.
   const calls = [];

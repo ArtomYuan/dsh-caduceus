@@ -256,6 +256,12 @@ function terminalDetail(snapshot: StatusSnapshot): string {
   return '';
 }
 
+/** Short label for the merged progress card's `最近：` line (≤40 code points). */
+export function recentEventText(snapshot: StatusSnapshot, maxChars = 40): string {
+  const raw = snapshot.lastEventType ?? '（无）';
+  return Array.from(raw).slice(0, maxChars).join('');
+}
+
 /** Status card lines (the same body as `/status`, options included). */
 export function statusCardLines(
   snapshot: StatusSnapshot,

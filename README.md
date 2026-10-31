@@ -1,6 +1,6 @@
 # dsh-caduceus
 
-> 给 dsh 套一层 Hermes Agent 风格的飞书外壳：一个话题一个会话、SOUL 人格块、`/new` `/sessions` `/resume` 等命令、节流过程卡片、终稿新发、状态卡与 `/status`。
+> 给 dsh 套一层 Hermes Agent 风格的飞书外壳：一个话题一个会话、SOUL 人格块、`/new` `/sessions` `/resume` 等命令、节流过程卡片、终稿新发、`/status`。
 > 名字取赫尔墨斯的**双蛇杖**（caduceus）——传令之权，不是神名；设计受 Hermes Agent 的网关思路启发。
 
 **状态：第二刀（v0.1 功能面完成）。** 飞书长连接、消息归一化、agent 桥接、过程/状态卡片、忙时三档、标题与命令接线均已实现；测试全部用注入式假 transport / 假 agents，不需要真飞书凭据，也不读写真实 `~/.dsh`。真机验收（A1–A17）清单与验证方法见 [docs/SLICE2.md](docs/SLICE2.md)；第三刀（真机缺陷修复 + 话题语义）见 [docs/SLICE3.md](docs/SLICE3.md)；设计稿见 [docs/DESIGN.md](docs/DESIGN.md)。
@@ -60,7 +60,7 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 | `defaultCwd` | 进程 cwd | 新建会话的工作目录 |
 | `allowedChats` | 空（全部） | 允许服务的 chat id 白名单 |
 | `allowedUsers` | 空（全部） | 允许服务的用户 open_id 白名单 |
-| `cardThrottleMs` | `400` | 过程卡片 patch 节流（Feishu 5 QPS 的一半） |
+| `cardThrottleMs` | `400` | 过程卡 patch 节流（Feishu 5 QPS 的一半） |
 | `busyMode` | `queue` | 忙时策略：`queue` → followup、`steer` → steer、`interrupt` → cancel+steer |
 | `groupSessionsPerUser` | `true` | 普通群按发送者隔离（Hermes 默认）；`false` 回退整群共享。话题键不受此开关影响；启动日志会打印 `groupSessionsPerUser=<bool>` |
 | `logLevel` | `info` | 文件日志级别：`info`（默认）或 `debug` |
@@ -94,10 +94,10 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 
 ## 状态层与卡片
 
-- **过程卡**：每轮一张，`cardThrottleMs` 节流（默认 400 ms，内容不变不 patch），只放尾部约 8 KB 内容，卡片 ≤ 30 KB。
-- **状态卡**：每话题一张，展示空闲 / 运行中 / 待审批 / 失败 / 完成（含步数、工具数、起止时间），终态定格；从未跑过回合的会话是「空闲」，有回合且结束后才是「完成」。
-- **标题时序**：标题未落盘时状态卡写「标题生成中」；`session/title` 到达后**就地 patch 同一张状态卡**（复用节流），不新发消息；agent create/resume 完成后还会**强制重渲一次**现有状态卡（首渲染可能早于标题服务就绪，只 patch、不新发）。
-- **终稿**：`turn/end` 后**新发**一条消息（绝不编辑过程卡），标题就绪时首行为 `▸ {标题}`、空一行后接正文；标题未就绪则只发正文（不写「未命名」）。本轮后到的 provider 标题不会补发/编辑终稿，下一轮自然带上。
+- **过程卡（唯一卡片）**：每轮一张，`cardThrottleMs` 节流（默认 400 ms，内容不变不 patch）；只含状态行（会话标题 · 状态 · 步数 · 工具 · 已运行）与一行「最近：<工具名或事件>」（≤40 字），**不承载任何助手正文**，卡片 ≤ 30 KB。
+- **状态**：过程卡的状态行即为每话题状态（空闲 / 运行中 / 待审批 / 失败 / 完成）；不再单独发状态卡，`/status` 命令输出保留。从未跑过回合的会话是「空闲」，有回合且结束后才是「完成」。
+- **标题时序**：标题未就绪时过程卡不写标题；`session/title` 到达后**就地 patch 同一张过程卡**（复用节流），不新发消息；agent create/resume 完成后还会**强制重渲一次**现有过程卡（首渲染可能早于标题服务就绪，只 patch、不新发）。
+- **终稿**：`turn/end` 后**新发**一条消息（绝不编辑过程卡），是正文**唯一**出现的地方；标题就绪时首行为 `▸ {标题}`、空一行后接正文，标题未就绪则只发正文（不写「未命名」）。本轮后到的 provider 标题不会补发/编辑终稿，下一轮自然带上；测试保证同一回合内每条助手正文只出现一次（过程卡 + 终稿全集）。
 - `turn/end` 的 `reason.kind ∈ {error, interrupted, blocked}` 时再主动推一条消息，无需用户询问。
 - **回复位置**：入站 `thread_id ?? root_id` 归一为话题 id，出站 `reply_in_thread` 回同一话题；230071 / 230072 / 230019 自动降级为 `chat_id` 直发。
 - **重试幂等**：每次发送带 `uuid`，降级/重试复用同一 uuid（飞书侧 1 小时内至多成功一条）。

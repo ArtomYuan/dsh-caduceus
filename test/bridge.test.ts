@@ -269,7 +269,13 @@ test('回合收尾：过程卡被 patch，终稿是新消息而非编辑过程�
   const cards = recordedCards(h.transport);
   const titles = cardTitles(cards);
   assert.ok(titles.includes('飞书会话 · 过程'), `process card missing: ${titles.join(', ')}`);
-  assert.ok(titles.includes('飞书会话 · 状态'), `status card missing: ${titles.join(', ')}`);
+  assert.ok(
+    !titles.includes('飞书会话 · 状态'),
+    'the standalone status card must not be sent anymore',
+  );
+  const merged = JSON.stringify(cards[0]?.card);
+  assert.match(merged, /步数/);
+  assert.match(merged, /最近：/);
 
   const progressCard = cards.find((entry) => cardTitles([entry])[0] === '飞书会话 · 过程');
   assert.ok(progressCard !== undefined);
@@ -537,19 +543,18 @@ test('@ 门禁：bot open id 未知时，带 mention 的群消息放行（避免
   assert.equal(liveAgent(h).followups.length, 1);
 });
 
-test('状态卡标题时序：session/title 到达后就地重渲染，不新增 message_id', async (t) => {
+test('过程卡标题时序：session/title 到达后就地重渲染，不新增 message_id', async (t) => {
   const h = makeHarness(t);
   await h.bridge.handleInbound(inbound('hi'));
   const session = liveAgent(h).session;
   await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 1_000));
 
   const before = recordedCards(h.transport);
-  const statusCard = before.find(
-    (entry) => entry.card.header?.title.content === '飞书会话 · 状态',
+  const processCard = before.find(
+    (entry) => entry.card.header?.title.content === '飞书会话 · 过程',
   );
-  assert.ok(statusCard !== undefined);
-  assert.match(JSON.stringify(statusCard.card), /标题生成中/);
-  assert.ok(!JSON.stringify(statusCard.card).includes('（无标题）'));
+  assert.ok(processCard !== undefined);
+  assert.ok(!JSON.stringify(processCard.card).includes('会话：'), 'no title yet');
 
   h.clock.advance(400);
   await tick();
@@ -564,19 +569,19 @@ test('状态卡标题时序：session/title 到达后就地重渲染，不新增
   assert.equal(
     recordedCards(h.transport).length,
     before.length,
-    'title arrival must not create a new status card',
+    'title arrival must not create a new process card',
   );
   const patches = patchedCards(h.transport).filter(
-    (patch) => patch.messageId === statusCard.messageId,
+    (patch) => patch.messageId === processCard.messageId,
   );
-  assert.ok(patches.length >= 1, 'status card must be patched in place');
+  assert.ok(patches.length >= 1, 'process card must be patched in place');
   assert.match(JSON.stringify(patches.at(-1)?.card), /真实标题/);
 
   await h.bridge.handleInbound(inbound('/status'));
   assert.match(recordedTexts(h.transport).at(-1) ?? '', /真实标题/);
 });
 
-test('标题先到：状态卡首次渲染即用标题，不写「标题生成中」', async (t) => {
+test('标题先到：过程卡首次渲染即用标题', async (t) => {
   const h = makeHarness(t);
   await h.bridge.handleInbound(inbound('hi'));
   const session = liveAgent(h).session;
@@ -587,15 +592,14 @@ test('标题先到：状态卡首次渲染即用标题，不写「标题生成�
     data: { title: '早到标题' },
     time: 1,
   });
-  assert.equal(h.transport.calls.length, callsBefore, 'no message before the status card exists');
+  assert.equal(h.transport.calls.length, callsBefore, 'no message before the process card exists');
 
   await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 2));
-  const statusCard = recordedCards(h.transport).find(
-    (entry) => entry.card.header?.title.content === '飞书会话 · 状态',
+  const processCard = recordedCards(h.transport).find(
+    (entry) => entry.card.header?.title.content === '飞书会话 · 过程',
   );
-  assert.ok(statusCard !== undefined);
-  assert.match(JSON.stringify(statusCard.card), /早到标题/);
-  assert.ok(!JSON.stringify(statusCard.card).includes('标题生成中'));
+  assert.ok(processCard !== undefined);
+  assert.match(JSON.stringify(processCard.card), /会话：早到标题/);
 });
 
 test('群内话题（已绑定会话）加上 @ 机器人后正常处理', async (t) => {
@@ -611,17 +615,16 @@ test('群内话题（已绑定会话）加上 @ 机器人后正常处理', async
   assert.equal(liveAgent(h).followups.length, 1);
 });
 
-test('agent 就绪后强制重渲状态卡：同一 message_id 且带上标题', async (t) => {
+test('agent 就绪后强制重渲过程卡：同一 message_id 且带上标题', async (t) => {
   const h = makeHarness(t);
   await h.bridge.handleInbound(inbound('hi'));
   const session = liveAgent(h).session;
   await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 1_000));
 
-  const statusCard = recordedCards(h.transport).find(
-    (entry) => entry.card.header?.title.content === '飞书会话 · 状态',
+  const processCard = recordedCards(h.transport).find(
+    (entry) => entry.card.header?.title.content === '飞书会话 · 过程',
   );
-  assert.ok(statusCard !== undefined);
-  assert.match(JSON.stringify(statusCard.card), /标题生成中/);
+  assert.ok(processCard !== undefined);
 
   // The title appears in the service only after the first render (the real
   // failure mode: title events arrived before this bridge bound the session).
@@ -641,12 +644,12 @@ test('agent 就绪后强制重渲状态卡：同一 message_id 且带上标题',
     'agent-ready refresh must reuse the same card, not send a new one',
   );
   const patches = patchedCards(h.transport).filter(
-    (patch) => patch.messageId === statusCard.messageId,
+    (patch) => patch.messageId === processCard.messageId,
   );
-  assert.ok(patches.length >= 1, 'existing status card must be patched');
+  assert.ok(patches.length >= 1, 'existing process card must be patched');
   assert.match(JSON.stringify(patches.at(-1)?.card), /服务端标题/);
-  const firstLine = patches.at(-1)?.card.elements[0]?.text?.content;
-  assert.equal(firstLine, '会话：服务端标题', 'status card keeps `会话：{title}` as its first line');
+  const firstLine = patches.at(-1)?.card.elements[0]?.text?.content ?? '';
+  assert.ok(firstLine.startsWith('会话：服务端标题'), 'merged card starts with the title');
 });
 
 test('/sessions 行格式：▸ 标题 · 相对时间 · sessionId 后 8 位', async (t) => {
@@ -1356,4 +1359,66 @@ test('/adopt：歧义列候选、零命中、已在其他 scope 下都给提示'
   const foreignText = recordedTexts(foreign.transport).at(-1) ?? '';
   assert.match(foreignText, /已在其他 scope 下/);
   assert.notEqual(foreign.store.get(scopeKey('group', 'oc_chat', null, 'ou_me')), foreignTarget);
+});
+
+test('合并后过程卡只发一张，含状态/步数/最近事件（不再有独立状态卡）', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('hi'));
+  const session = liveAgent(h).session;
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 100));
+  await h.bridge.handleSessionEvent(session, event('step/start', { turn: 1, step: 1 }, 110));
+  await h.bridge.handleSessionEvent(session, event('tool/call', { turn: 1, step: 1 }, 120));
+  h.clock.advance(400);
+  await tick();
+
+  const cards = recordedCards(h.transport);
+  assert.deepEqual(cardTitles(cards), ['飞书会话 · 过程'], 'exactly one merged card');
+  const latest = patchedCards(h.transport).at(-1)?.card ?? cards[0]?.card;
+  const text = JSON.stringify(latest);
+  assert.match(text, /\*\*运行中\*\*/);
+  assert.match(text, /步数 1/);
+  assert.match(text, /工具 1/);
+  assert.match(text, /最近：tool\/call/);
+  assert.match(text, /过程消息；收尾会另发一条终稿/);
+});
+
+test('同一回合内助手正文只出现一次（过程卡/补丁 + 终稿）', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('请回答'));
+  const session = liveAgent(h).session;
+  const body = '这是第一句完整回答。这是第二句完整回答。';
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 100));
+  await h.bridge.handleSessionEvent(
+    session,
+    event(
+      'assistant/message',
+      { turn: 1, step: 1, message: { content: [{ type: 'text', text: body }] } },
+      120,
+    ),
+  );
+  await h.bridge.handleSessionEvent(session, event('tool/call', { turn: 1, step: 1 }, 130));
+  h.clock.advance(400);
+  await tick();
+  await h.bridge.handleSessionEvent(
+    session,
+    event('turn/end', { turn: 1, reason: { kind: 'completed' } }, 200),
+  );
+
+  const sentences = ['这是第一句完整回答', '这是第二句完整回答'];
+  const cardHaystacks = [
+    ...recordedCards(h.transport).map((entry) => JSON.stringify(entry.card)),
+    ...patchedCards(h.transport).map((entry) => JSON.stringify(entry.card)),
+  ].join('\n');
+  for (const sentence of sentences) {
+    assert.ok(!cardHaystacks.includes(sentence), `process card leaked body: ${sentence}`);
+  }
+
+  const everything = [
+    cardHaystacks,
+    ...recordedTexts(h.transport),
+  ].join('\n');
+  for (const sentence of sentences) {
+    assert.equal(everything.split(sentence).length - 1, 1, `"${sentence}" must appear exactly once`);
+  }
+  assert.ok(recordedTexts(h.transport).includes(body), 'final message keeps the full body');
 });

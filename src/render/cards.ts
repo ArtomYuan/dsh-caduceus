@@ -68,22 +68,40 @@ export interface ProgressCardInput {
   /** Unix epoch ms when the turn started; used for the elapsed line. */
   readonly startedAt?: number;
   readonly now?: number;
-  /** Latest assistant output tail. */
-  readonly tail?: string;
+  /** Session title shown on the state line when known. */
+  readonly sessionTitle?: string;
+  /** Latest tool/event label (clipped to 40 characters). */
+  readonly recentEvent?: string;
 }
 
-/** The per-turn "process" card: state line plus the tail of the output. */
+/** Clip by Unicode code point so a label never exceeds the budget. */
+export function clipLabel(text: string, maxChars = 40): string {
+  return Array.from(text).slice(0, maxChars).join('');
+}
+
+/**
+ * The single per-turn card: state line (title/state/steps/tools/elapsed) and a
+ * one-line recent event. It deliberately carries NO assistant body — the final
+ * message is the only place an answer is rendered, so a short answer can never
+ * appear twice.
+ */
 export function progressCard(input: ProgressCardInput): FeishuCard {
-  const stateLine = [`**${input.stateLabel}**`, `步数 ${input.steps}`, `工具 ${input.tools}`];
+  const stateLine: string[] = [];
+  const sessionTitle = input.sessionTitle?.trim();
+  if (sessionTitle !== undefined && sessionTitle.length > 0) {
+    stateLine.push(`会话：${clipLabel(sessionTitle)}`);
+  }
+  stateLine.push(`**${input.stateLabel}**`, `步数 ${input.steps}`, `工具 ${input.tools}`);
   if (input.startedAt !== undefined) {
     const now = input.now ?? Date.now();
     const seconds = Math.max(0, Math.floor((now - input.startedAt) / 1000));
     stateLine.push(`已运行 ${seconds}s`);
   }
-  const elements: FeishuCardElement[] = [div(stateLine.join(' · '))];
-  const tail = input.tail === undefined ? '' : tailText(input.tail);
-  if (tail.trim().length > 0) elements.push(div(tail));
-  elements.push(div('_过程消息；收尾会另发一条终稿。_'));
+  const elements: FeishuCardElement[] = [
+    div(stateLine.join(' · ')),
+    div(`最近：${clipLabel(input.recentEvent ?? '（无）')}`),
+    div('_过程消息；收尾会另发一条终稿。_'),
+  ];
   return buildCard({ title: input.title, template: 'blue', elements });
 }
 
@@ -94,7 +112,7 @@ export interface StatusCardInput {
   readonly template?: string;
 }
 
-/** The per-scope "current status" card (design doc §6 L3′). */
+/** Legacy standalone status card (no longer sent; the process card is merged). */
 export function statusCard(input: StatusCardInput): FeishuCard {
   const elements = input.lines.map((line) => div(line));
   return buildCard({

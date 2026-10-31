@@ -29,7 +29,7 @@ import {
   shortSessionId,
 } from '../observability.js';
 import { writeOwnership, type SessionScopeKind } from '../ownership.js';
-import { progressCard, statusCard } from '../render/cards.js';
+import { progressCard } from '../render/cards.js';
 import { CardStream, systemClock } from '../render/stream.js';
 import type { CardChannel, Clock } from '../render/stream.js';
 import { truncateCardContent } from '../render/truncate.js';
@@ -37,7 +37,7 @@ import { mintSessionId, scopeKey, SCOPE_KEY_SEPARATOR, type SessionStore } from 
 import {
   StatusTracker,
   shouldNotifyTerminal,
-  statusCardLines,
+  recentEventText,
   statusLabel,
   statusTemplate,
   statusText,
@@ -67,7 +67,6 @@ interface ScopeState {
   running: boolean;
   readonly status: StatusTracker;
   progress?: CardStream;
-  statusStream?: CardStream;
   lastOutput: string;
   /** Latest session title (from a `session/title` event or `/rename`). */
   title?: string;
@@ -204,9 +203,7 @@ export class Bridge {
         state.lastOutput = '';
         state.progress?.dispose();
         state.progress = this.#makeCardStream(state);
-        if (state.statusStream === undefined) state.statusStream = this.#makeCardStream(state);
         await this.#renderProgress(state);
-        await this.#renderStatus(state);
         break;
       }
       case 'step/start':
@@ -214,7 +211,6 @@ export class Bridge {
       case 'tool/call':
       case 'tool/result': {
         await this.#renderProgress(state);
-        await this.#renderStatus(state);
         break;
       }
       case 'assistant/message': {
@@ -230,9 +226,9 @@ export class Bridge {
       case 'session/title': {
         const title = titleFromEvent(event.data) ?? this.#titleOfSession(state);
         if (title !== undefined) state.title = title;
-        // Re-render the EXISTING status card in place (throttled); never create
-        // a new status message just because the title arrived late.
-        if (state.statusStream?.messageId !== undefined) await this.#renderStatus(state);
+        // Re-render the EXISTING process card in place (throttled); never
+        // create a new message just because the title arrived late.
+        if (state.progress?.messageId !== undefined) await this.#renderProgress(state);
         break;
       }
       default:
@@ -313,8 +309,6 @@ export class Bridge {
           state.status.reset();
           state.progress?.dispose();
           state.progress = undefined;
-          state.statusStream?.dispose();
-          state.statusStream = undefined;
           state.lastOutput = '';
           this.#bindSession(state, fresh);
           this.#bindSession(state, String(agent.session.id));
@@ -425,8 +419,6 @@ export class Bridge {
       state.progress.dispose();
       state.progress = undefined;
     }
-    if (state.statusStream !== undefined) await this.#renderStatus(state, true);
-
     const snapshot = state.status.get();
     const finalText =
       state.lastOutput.trim().length > 0
@@ -655,7 +647,7 @@ export class Bridge {
         | undefined;
       const normalized = snapshot?.title ?? title;
       state.title = normalized;
-      if (state.statusStream?.messageId !== undefined) await this.#renderStatus(state);
+      if (state.progress?.messageId !== undefined) await this.#renderProgress(state);
       await this.#replyText(state, `已重命名：${normalized}`);
     } catch (error) {
       if (error instanceof Error && error.name === 'SessionTitleInvalidError') {
@@ -884,16 +876,16 @@ export class Bridge {
   }
 
   /**
-   * The first status-card render can happen before the agent (and therefore the
-   * title service) is resolvable; title events that arrive earlier are lost.
-   * Once create/resume returns, pull the title from the service and force one
-   * in-place re-render of the EXISTING status card (same message_id, no new
+   * The first process-card render can happen before the agent (and therefore
+   * the title service) is resolvable; title events that arrive earlier are
+   * lost. Once create/resume returns, pull the title from the service and force
+   * one in-place re-render of the EXISTING process card (same message_id, no new
    * message). The session/title subscription still handles later changes.
    */
   async #afterAgentReady(state: ScopeState): Promise<void> {
     const title = this.#titleOfSession(state);
     if (title !== undefined) state.title = title;
-    if (state.statusStream?.messageId !== undefined) await this.#renderStatus(state);
+    if (state.progress?.messageId !== undefined) await this.#renderProgress(state);
   }
 
   async #resolveAgent(
@@ -1016,23 +1008,7 @@ export class Bridge {
   }
 
   #progressCardFor(state: ScopeState, snapshot: StatusSnapshot): FeishuCard {
-    return progressCardForSnapshot(snapshot, state.lastOutput, this.#now());
-  }
-
-  async #renderStatus(state: ScopeState, flush = false): Promise<void> {
-    let stream = state.statusStream;
-    if (stream === undefined) {
-      stream = this.#makeCardStream(state);
-      state.statusStream = stream;
-    }
-    const snapshot = state.status.get();
-    const card = statusCard({
-      title: '飞书会话 · 状态',
-      lines: statusCardLines(snapshot, state.title === undefined ? {} : { title: state.title }),
-      template: statusTemplate(snapshot.state),
-    });
-    await stream.set(card);
-    if (flush) await stream.flush();
+    return progressCardForSnapshot(snapshot, state.title, recentEventText(snapshot), this.#now());
   }
 
   async #replyText(state: ScopeState, text: string): Promise<void> {
@@ -1057,7 +1033,8 @@ export class Bridge {
 /** Build the process card for one snapshot (exported for render tests). */
 export function progressCardForSnapshot(
   snapshot: StatusSnapshot,
-  tail: string,
+  sessionTitle: string | undefined,
+  recentEvent: string,
   now: number,
 ): FeishuCard {
   return progressCard({
@@ -1065,8 +1042,9 @@ export function progressCardForSnapshot(
     stateLabel: statusLabel(snapshot.state),
     steps: snapshot.steps,
     tools: snapshot.tools,
+    ...(sessionTitle === undefined ? {} : { sessionTitle }),
+    recentEvent,
     ...(snapshot.startedAt === undefined ? {} : { startedAt: snapshot.startedAt }),
     now,
-    tail,
   });
 }
