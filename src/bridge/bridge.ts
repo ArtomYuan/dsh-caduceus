@@ -29,10 +29,14 @@ import {
   shortSessionId,
 } from '../observability.js';
 import { writeOwnership, type SessionScopeKind } from '../ownership.js';
-import { progressCard } from '../render/cards.js';
+import {
+  finalCard,
+  finalCardPlainText,
+  progressCard,
+  type FinalCardInput,
+} from '../render/cards.js';
 import { CardStream, systemClock } from '../render/stream.js';
 import type { CardChannel, Clock } from '../render/stream.js';
-import { truncateCardContent } from '../render/truncate.js';
 import { mintSessionId, scopeKey, SCOPE_KEY_SEPARATOR, type SessionStore } from '../session-key.js';
 import {
   StatusTracker,
@@ -50,7 +54,6 @@ import { ScopeQueue } from './scope-queue.js';
 import type { AgentLike, AgentsLike, BridgeConfig, BridgeOptions, SessionTitleLike } from './types.js';
 
 /** Final-answer text cap from the design doc (§6 L3: 150 KB). */
-const FINAL_TEXT_MAX_BYTES = 150 * 1024;
 
 interface ScopeState {
   readonly key: string;
@@ -413,18 +416,35 @@ export class Bridge {
 
   async #settleTurn(state: ScopeState, event: StatusEventLike): Promise<void> {
     state.running = false;
-    if (state.progress !== undefined) {
-      await this.#renderProgress(state);
-      await state.progress.flush();
-      state.progress.dispose();
-      state.progress = undefined;
-    }
     const snapshot = state.status.get();
-    const finalText =
+    const body =
       state.lastOutput.trim().length > 0
         ? state.lastOutput
         : `本轮已结束（${statusLabel(snapshot.state)}）。`;
-    await this.#sendFinal(state, finalText);
+    const finalInput = this.#finalCardInput(state, snapshot, body);
+
+    const stream = state.progress;
+    const messageId = stream?.messageId;
+    if (stream !== undefined) {
+      await stream.flush();
+      stream.dispose();
+      state.progress = undefined;
+    }
+
+    const card = finalCard(finalInput);
+    if (messageId !== undefined) {
+      try {
+        await this.#transport.updateCard(messageId, card);
+      } catch (error) {
+        await this.#finalFallback(state, finalInput, error);
+      }
+    } else {
+      try {
+        await this.#sendNewCard(state, card);
+      } catch (error) {
+        await this.#finalFallback(state, finalInput, error);
+      }
+    }
 
     const kind = turnEndReasonKind(event.data);
     if (shouldNotifyTerminal(kind)) {
@@ -434,29 +454,30 @@ export class Bridge {
     state.lastOutput = '';
   }
 
-  async #sendFinal(state: ScopeState, text: string): Promise<void> {
-    // First line is the current session title when one is known. If the
-    // provider title lands after this final message, no edit/retry happens —
-    // the next turn naturally carries it.
-    const title = this.#titleOf(state)?.trim();
-    const header = title !== undefined && title.length > 0 ? `▸ ${title}\n\n` : '';
-    const budget = Math.max(1, FINAL_TEXT_MAX_BYTES - Buffer.byteLength(header, 'utf8'));
-    const clipped = truncateCardContent(text, { maxBytes: budget }).text;
-    const content = `${header}${clipped}`;
-    try {
-      if (state.lastInboundMessageId !== undefined) {
-        await this.#transport.reply(
-          state.chatId,
-          state.lastInboundMessageId,
-          { kind: 'text', text: content },
-          { threadId: state.threadId },
-        );
-      } else {
-        await this.#transport.sendText(state.chatId, content);
-      }
-    } catch (error) {
-      this.#logger.warn(`final message failed: ${errorMessage(error)}`);
-    }
+  #finalCardInput(
+    state: ScopeState,
+    snapshot: StatusSnapshot,
+    body: string,
+  ): FinalCardInput {
+    const sessionTitle = this.#titleOf(state)?.trim() ?? state.title;
+    return {
+      title: '飞书会话 · 过程',
+      stateLabel: statusLabel(snapshot.state),
+      steps: snapshot.steps,
+      tools: snapshot.tools,
+      ...(sessionTitle === undefined ? {} : { sessionTitle }),
+      recentEvent: recentEventText(snapshot),
+      ...(snapshot.startedAt === undefined ? {} : { startedAt: snapshot.startedAt }),
+      ...(snapshot.endedAt === undefined ? {} : { endedAt: snapshot.endedAt }),
+      body,
+      template: statusTemplate(snapshot.state),
+    };
+  }
+
+  /** The ONLY fallback path: card edit failed, so send the same content as text once. */
+  async #finalFallback(state: ScopeState, input: FinalCardInput, error: unknown): Promise<void> {
+    this.#logger.warn(`final fallback to text: ${errorMessage(error)}`);
+    await this.#replyText(state, finalCardPlainText(input));
   }
 
   /**
@@ -1008,7 +1029,13 @@ export class Bridge {
   }
 
   #progressCardFor(state: ScopeState, snapshot: StatusSnapshot): FeishuCard {
-    return progressCardForSnapshot(snapshot, state.title, recentEventText(snapshot), this.#now());
+    return progressCardForSnapshot(
+      snapshot,
+      state.title,
+      recentEventText(snapshot),
+      state.lastOutput,
+      this.#now(),
+    );
   }
 
   async #replyText(state: ScopeState, text: string): Promise<void> {
@@ -1035,6 +1062,7 @@ export function progressCardForSnapshot(
   snapshot: StatusSnapshot,
   sessionTitle: string | undefined,
   recentEvent: string,
+  tail: string,
   now: number,
 ): FeishuCard {
   return progressCard({
@@ -1044,6 +1072,7 @@ export function progressCardForSnapshot(
     tools: snapshot.tools,
     ...(sessionTitle === undefined ? {} : { sessionTitle }),
     recentEvent,
+    ...(tail.length === 0 ? {} : { tail }),
     ...(snapshot.startedAt === undefined ? {} : { startedAt: snapshot.startedAt }),
     now,
   });

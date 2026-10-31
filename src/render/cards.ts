@@ -72,6 +72,8 @@ export interface ProgressCardInput {
   readonly sessionTitle?: string;
   /** Latest tool/event label (clipped to 40 characters). */
   readonly recentEvent?: string;
+  /** Assistant output tail shown while the turn runs (≤8 KB). */
+  readonly tail?: string;
 }
 
 /** Clip by Unicode code point so a label never exceeds the budget. */
@@ -100,9 +102,78 @@ export function progressCard(input: ProgressCardInput): FeishuCard {
   const elements: FeishuCardElement[] = [
     div(stateLine.join(' · ')),
     div(`最近：${clipLabel(input.recentEvent ?? '（无）')}`),
-    div('_过程消息；收尾会另发一条终稿。_'),
   ];
+  const tail = input.tail === undefined ? '' : tailText(input.tail);
+  if (tail.trim().length > 0) elements.push(div(tail));
+  elements.push(div('_过程消息；收尾会把终稿更新到本卡。_'));
   return buildCard({ title: input.title, template: 'blue', elements });
+}
+
+export interface FinalCardInput {
+  readonly title: string;
+  readonly stateLabel: string;
+  readonly steps: number;
+  readonly tools: number;
+  readonly startedAt?: number;
+  readonly endedAt?: number;
+  readonly sessionTitle?: string;
+  readonly recentEvent?: string;
+  /** Complete assistant output; clipped to the card budget with a head note. */
+  readonly body: string;
+  readonly template?: string;
+}
+
+/** State-line parts shared by the card markdown and the text fallback. */
+function finalStateLine(input: FinalCardInput, markdown: boolean): string {
+  const parts: string[] = [];
+  const sessionTitle = input.sessionTitle?.trim();
+  if (sessionTitle !== undefined && sessionTitle.length > 0) {
+    parts.push(`会话：${clipLabel(sessionTitle)}`);
+  }
+  parts.push(markdown ? `**${input.stateLabel}**` : input.stateLabel);
+  parts.push(`步数 ${input.steps}`, `工具 ${input.tools}`);
+  const end = input.endedAt ?? Date.now();
+  if (input.startedAt !== undefined) {
+    const seconds = Math.max(0, Math.floor((end - input.startedAt) / 1000));
+    parts.push(`已运行 ${seconds}s`);
+  }
+  return parts.join(' · ');
+}
+
+/**
+ * Final state of the one card: terminal state line plus the complete answer.
+ * The answer is kept within Feishu's 30 KB payload; when clipped, the kept tail
+ * is prefixed with `…已省略 N 字符` (UTF-8 safe).
+ */
+export function finalCard(input: FinalCardInput): FeishuCard {
+  const stateElement = div(finalStateLine(input, true));
+  const template = input.template ?? 'grey';
+  const base = buildCard({ title: input.title, template, elements: [stateElement] });
+  const note = (omittedChars: number): string => `…已省略 ${omittedChars} 字符\n\n`;
+  // Reserve the state line + JSON envelope; retry smaller if the payload is
+  // still too large (cardByteSize includes escaping, which varies by content).
+  let budget = Math.max(1, CARD_CONTENT_LIMIT_BYTES - cardByteSize(base) - 1024);
+  let body = truncateCardContent(input.body, { maxBytes: budget, note });
+  let card = buildCard({
+    title: input.title,
+    template,
+    elements: [stateElement, div(body.text)],
+  });
+  while (cardByteSize(card) > CARD_CONTENT_LIMIT_BYTES && budget > 1) {
+    budget = Math.max(1, Math.floor(budget * 0.75));
+    body = truncateCardContent(input.body, { maxBytes: budget, note });
+    card = buildCard({
+      title: input.title,
+      template,
+      elements: [stateElement, div(body.text)],
+    });
+  }
+  return card;
+}
+
+/** Plain-text equivalent of the final card, used only for the fallback path. */
+export function finalCardPlainText(input: FinalCardInput): string {
+  return `${finalStateLine(input, false)}\n\n${input.body}`;
 }
 
 export interface StatusCardInput {

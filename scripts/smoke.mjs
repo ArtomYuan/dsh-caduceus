@@ -307,10 +307,15 @@ try {
     data: { turn: 1, reason: { kind: 'completed' } },
     time: 30,
   });
-  const final = calls.find(
-    (call) => call.op === 'reply' && call.payload.kind === 'text' && call.payload.text === 'smoke 输出',
+  const finalCard = calls.filter((call) => call.op === 'updateCard').at(-1)?.card;
+  assert.ok(finalCard, 'final answer must be an in-place card update');
+  assert.ok(JSON.stringify(finalCard).includes('smoke 输出'), 'answer must live in the card');
+  assert.ok(
+    !calls.some(
+      (call) => call.op === 'reply' && call.payload.kind === 'text' && call.payload.text === 'smoke 输出',
+    ),
+    'no separate final text message',
   );
-  assert.ok(final, 'final answer must be a new message');
   assert.ok(calls.some((call) => call.op === 'sendCard' || (call.op === 'reply' && call.payload.kind === 'card')));
 
   // 11. Group gate: a group message without a bot mention is dropped even when

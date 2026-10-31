@@ -66,6 +66,8 @@ export class FakeTransport implements Transport {
   readonly calls: TransportCall[] = [];
   startCount = 0;
   stopCount = 0;
+  /** When set, the next `updateCard` throws once (final-edit fallback tests). */
+  failUpdateCardWith: Error | undefined;
   readonly #botOpenId: string | undefined;
   private handler: ((message: InboundMessage) => void) | undefined;
   private seq = 0;
@@ -123,6 +125,11 @@ export class FakeTransport implements Transport {
   }
 
   async updateCard(messageId: string, card: FeishuCard): Promise<void> {
+    if (this.failUpdateCardWith !== undefined) {
+      const error = this.failUpdateCardWith;
+      this.failUpdateCardWith = undefined;
+      throw error;
+    }
     this.calls.push({ op: 'updateCard', messageId, card });
   }
 

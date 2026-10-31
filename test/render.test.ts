@@ -8,6 +8,8 @@ import test from 'node:test';
 import {
   CARD_BYTE_LIMIT,
   cardByteSize,
+  finalCard,
+  finalCardPlainText,
   markdownCard,
   progressCard,
   tailText,
@@ -45,7 +47,7 @@ test('卡片必须带 config.update_multi=true', () => {
   }
 });
 
-test('过程卡不承载正文：只含状态行/最近事件/收尾提示，且 ≤30KB', () => {
+test('过程卡运行中承载正文尾部 + 状态行，且 ≤30KB', () => {
   const body = '第一句完整回答。第二句完整回答。';
   const card = progressCard({
     title: '过程',
@@ -54,30 +56,63 @@ test('过程卡不承载正文：只含状态行/最近事件/收尾提示，且
     tools: 1,
     sessionTitle: '会话标题',
     recentEvent: 'tool/call',
+    tail: body,
     startedAt: 0,
     now: 5_000,
   });
   const serialized = JSON.stringify(card);
-  for (const sentence of ['第一句完整回答', '第二句完整回答', body]) {
-    assert.ok(!serialized.includes(sentence), 'process card must never carry the answer body');
-  }
+  assert.match(serialized, /第一句完整回答/);
   assert.match(serialized, /会话：会话标题/);
   assert.match(serialized, /步数 2/);
   assert.match(serialized, /工具 1/);
   assert.match(serialized, /已运行 5s/);
   assert.match(serialized, /最近：tool\/call/);
-  assert.match(serialized, /收尾会另发一条终稿/);
+  assert.match(serialized, /收尾会把终稿更新到本卡/);
 
   const long = progressCard({
     title: '过程',
     stateLabel: '运行中',
     steps: 2,
     tools: 1,
-    sessionTitle: '长'.repeat(5_000),
-    recentEvent: 'x'.repeat(5_000),
+    tail: '汉😀'.repeat(6_000),
   });
   assert.ok(cardByteSize(long) <= CARD_BYTE_LIMIT, `card is ${cardByteSize(long)} bytes`);
+  assert.match(JSON.stringify(long), /已省略 \d+ 字符/);
   assert.ok(!JSON.stringify(long).includes('\uFFFD'));
+});
+
+test('终态卡：完整正文入卡；超 30KB 保留尾部并写「…已省略 N 字符」', () => {
+  const input = {
+    title: '飞书会话 · 过程',
+    stateLabel: '完成',
+    steps: 3,
+    tools: 2,
+    startedAt: 0,
+    endedAt: 5_000,
+    sessionTitle: '会话标题',
+    body: '完整正文第一段。完整正文第二段。',
+  };
+  const card = finalCard(input);
+  const serialized = JSON.stringify(card);
+  assert.match(serialized, /完整正文第一段/);
+  assert.match(serialized, /完整正文第二段/);
+  assert.match(serialized, /会话：会话标题/);
+  assert.match(serialized, /完成/);
+  assert.ok(!serialized.includes('…已省略'));
+  assert.equal(finalCardPlainText(input), '会话：会话标题 · 完成 · 步数 3 · 工具 2 · 已运行 5s\n\n完整正文第一段。完整正文第二段。');
+
+  const long = finalCard({ ...input, body: `开头标记${'汉'.repeat(20_000)}结尾标记` });
+  assert.ok(cardByteSize(long) <= CARD_BYTE_LIMIT, `card is ${cardByteSize(long)} bytes`);
+  const longText = JSON.stringify(long);
+  assert.match(longText, /…已省略 \d+ 字符/);
+  assert.ok(longText.includes('结尾标记'));
+  assert.ok(!longText.includes('开头标记'));
+  assert.ok(!longText.includes('\uFFFD'));
+
+  const tinyInput = { ...input, body: '汉😀'.repeat(3) };
+  const tiny = finalCard(tinyInput);
+  assert.ok(cardByteSize(tiny) <= CARD_BYTE_LIMIT);
+  assert.match(JSON.stringify(tiny), /汉😀/);
 });
 
 test('tailText: 短文本原样、长文本 UTF-8 安全截尾', () => {
