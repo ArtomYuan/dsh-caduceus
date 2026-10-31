@@ -1,8 +1,8 @@
 /**
  * Slash-command parsing for the Feishu surface. Pure: no I/O, no side effects.
  *
- * Eight commands are owned by dsh-caduceus: `/new`, `/sessions`, `/rename`,
- * `/resume`, `/stop`, `/status`, `/persona`, `/help`. Everything else — unknown slash
+ * Nine commands are owned by dsh-caduceus: `/new`, `/sessions`, `/rename`,
+ * `/resume`, `/adopt`, `/stop`, `/status`, `/persona`, `/help`. Everything else — unknown slash
  * commands such as `/compact` and all ordinary user text — comes back as
  * `{ kind: 'passthrough', raw }` so the caller can forward it unchanged to the
  * dsh command registry or the agent (design doc §6 L3).
@@ -11,7 +11,7 @@
  */
 
 /** Commands dsh-caduceus owns. Keep in sync with README's command table. */
-export const COMMAND_NAMES = ['new', 'sessions', 'rename', 'resume', 'stop', 'status', 'persona', 'help'] as const;
+export const COMMAND_NAMES = ['new', 'sessions', 'rename', 'resume', 'adopt', 'stop', 'status', 'persona', 'help'] as const;
 
 export type CommandName = (typeof COMMAND_NAMES)[number];
 
@@ -28,6 +28,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   { name: 'sessions', usage: '/sessions [--all]', description: '列出本会话；--all 列出同聊天下所有 scope 的会话' },
   { name: 'rename', usage: '/rename <标题>', description: '重命名当前会话的标题' },
   { name: 'resume', usage: '/resume [id|前缀]', description: '恢复上一条或按完整 id / 前缀（≥8 位）恢复会话' },
+  { name: 'adopt', usage: '/adopt <id|尾号>', description: '把一条无归属的会话显式收养到当前 scope' },
   { name: 'stop', usage: '/stop', description: '中断当前正在运行的一轮' },
   { name: 'status', usage: '/status', description: '显示本会话的运行状态、步数与起止时间' },
   { name: 'persona', usage: '/persona [show|sync]', description: '查看或同步 SOUL 人格块' },
@@ -41,6 +42,7 @@ export type ParsedCommand =
   | { readonly kind: 'sessions'; readonly all?: boolean }
   | { readonly kind: 'rename'; readonly title: string }
   | { readonly kind: 'resume'; readonly sessionId?: string }
+  | { readonly kind: 'adopt'; readonly sessionId: string }
   | { readonly kind: 'stop' }
   | { readonly kind: 'status' }
   | { readonly kind: 'persona'; readonly action: PersonaAction }
@@ -91,6 +93,12 @@ export function parseCommand(raw: string): ParsedCommand {
       const parts = rest.split(/\s+/);
       if (parts.length > 1) return usageResult('resume', '用法：/resume [id]');
       return { kind: 'resume', sessionId: parts[0] as string };
+    }
+    case 'adopt': {
+      if (rest === '') return usageResult('adopt', '用法：/adopt <id|尾号>');
+      const parts = rest.split(/\s+/);
+      if (parts.length > 1) return usageResult('adopt', '用法：/adopt <id|尾号>');
+      return { kind: 'adopt', sessionId: parts[0] as string };
     }
     case 'persona': {
       if (rest === '') return { kind: 'persona', action: 'show' };

@@ -8,6 +8,7 @@ import type { UserMessage } from '@deepseek-ai/dsh-llm';
 
 import type { AgentLike, AgentsLike, SessionLike, SessionTitleLike } from '../../src/bridge/types.js';
 import type { LoggerLike } from '../../src/logger.js';
+import type { SessionOwnershipMeta } from '../../src/ownership.js';
 import type { Clock, TimerHandle } from '../../src/render/stream.js';
 import type {
   CreateMessageInput,
@@ -258,7 +259,7 @@ export class FakeAgents implements AgentsLike {
   readonly created: string[] = [];
   readonly createCalls: {
     readonly sessionId: string;
-    readonly meta: { readonly cwd: string };
+    readonly meta: { readonly cwd: string; readonly caduceus: SessionOwnershipMeta };
   }[] = [];
   readonly resumed: string[] = [];
   readonly failResume = new Set<string>();
@@ -269,7 +270,7 @@ export class FakeAgents implements AgentsLike {
 
   async create(options: {
     readonly sessionId: string;
-    readonly meta: { readonly cwd: string };
+    readonly meta: { readonly cwd: string; readonly caduceus: SessionOwnershipMeta };
   }): Promise<{ readonly agent: FakeAgent }> {
     this.createCalls.push({ sessionId: options.sessionId, meta: options.meta });
     if (this.failCreateWith !== undefined) {

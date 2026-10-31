@@ -117,6 +117,16 @@ test('denylist 至少包含 /export，且大小写不敏感', () => {
   assert.equal(isWebOnlyCommand('compact'), false);
 });
 
+test('/adopt 是自有命令，参数非法返回 usage', () => {
+  assert.deepEqual(parseCommand('/adopt feishu-1793463503786'), {
+    kind: 'adopt',
+    sessionId: 'feishu-1793463503786',
+  });
+  assert.equal(parseCommand('/adopt').kind, 'usage');
+  assert.equal(parseCommand('/adopt a b').kind, 'usage');
+  assert.ok(COMMAND_NAMES.includes('adopt'));
+});
+
 test('/sessions 支持 --all；带其他参数仍返回 usage', () => {
   assert.deepEqual(parseCommand('/sessions'), { kind: 'sessions' });
   assert.deepEqual(parseCommand('/sessions --all'), { kind: 'sessions', all: true });

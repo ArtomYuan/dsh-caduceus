@@ -50,9 +50,13 @@ try {
   assert.equal(topicA, scopeKey('group', 'oc_smoke', 'omt_a', 'ou_b'));
   assert.equal(scopeKey('group', 'oc_smoke', null, 'ou_a', false), 'oc_smoke');
 
-  // 2. Command classification: eight owned commands, everything else passes
+  // 2. Command classification: nine owned commands, everything else passes
   //    through with the original bytes.
-  assert.deepEqual([...COMMAND_NAMES], ['new', 'sessions', 'rename', 'resume', 'stop', 'status', 'persona', 'help']);
+  assert.deepEqual([...COMMAND_NAMES], ['new', 'sessions', 'rename', 'resume', 'adopt', 'stop', 'status', 'persona', 'help']);
+  assert.deepEqual(parseCommand('/adopt feishu-1793463503786'), {
+    kind: 'adopt',
+    sessionId: 'feishu-1793463503786',
+  });
   assert.deepEqual(parseCommand('/new'), { kind: 'new' });
   assert.deepEqual(parseCommand('/status'), { kind: 'status' });
   assert.deepEqual(parseCommand('/compact'), { kind: 'passthrough', raw: '/compact' });
@@ -278,6 +282,8 @@ try {
       busyMode: 'queue',
     },
     logger: { info() {}, warn() {}, error() {}, debug() {} },
+    ownershipDir: join(dir, 'owners-smoke'),
+    sessionIdsProvider: () => [],
   });
   await bridge.handleInbound({
     messageId: 'om_bridge',

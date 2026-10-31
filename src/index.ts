@@ -15,6 +15,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { SessionEvent } from '@deepseek-ai/dsh-session';
 import type { CommandRuntime } from '@deepseek-ai/dsh-commands';
 
+import { backfillSessionOwnership, scanSessionDirs } from './backfill.js';
 import { Bridge } from './bridge/bridge.js';
 import type { AgentLike, AgentsLike, SessionTitleLike } from './bridge/types.js';
 import { runHarnessCommand } from './commands/harness.js';
@@ -120,15 +121,18 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
       busyMode: resolved.bridge.busyMode,
     }),
   );
+  const sessionMap = new SessionStore();
+  sessionMap.load();
+  // Ownership backfill is read-only for dsh sessions (session-map writes only),
+  // and must run even in idle/no-credential mode so old sessions stay reachable.
+  backfillSessionOwnership(sessionMap, { logger });
+
   if (resolved.credentials === undefined) {
     logger.warn(
       'feishu credentials missing (appId/appSecret or FEISHU_APP_ID/FEISHU_APP_SECRET); long connection not started',
     );
     return;
   }
-
-  const sessionMap = new SessionStore();
-  sessionMap.load();
   const api = createLarkFeishuApi({
     appId: resolved.credentials.appId,
     appSecret: resolved.credentials.appSecret,
@@ -143,6 +147,7 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
     config: resolved.bridge,
     logger,
     sessionExists: (sessionId) => hasSessionLog(sessionId),
+    sessionIdsProvider: () => scanSessionDirs().map((entry) => entry.sessionId),
     // Lazy per use: the service can register AFTER this plugin mounts.
     sessionTitleProvider: () => ctx.get('sessionTitle') as SessionTitleLike | undefined,
     persona: (action) => runPersonaCommand(action, { logger }),

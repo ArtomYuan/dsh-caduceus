@@ -38,7 +38,15 @@ export interface AgentsLike {
   get(sessionId: string): AgentLike | undefined;
   create(options: {
     readonly sessionId: string;
-    readonly meta: { readonly cwd: string };
+    /** dsh's own fields (cwd) plus caduceus ownership metadata. */
+    readonly meta: {
+      readonly cwd: string;
+      readonly caduceus: {
+        readonly chatId: string;
+        readonly scopeKey: string;
+        readonly kind: 'p2p' | 'topic' | 'group-user';
+      };
+    };
   }): Promise<{ readonly agent: AgentLike }>;
   resume(options: { readonly resumeSessionId: string }): Promise<{ readonly agent: AgentLike }>;
 }
@@ -93,6 +101,10 @@ export interface BridgeOptions {
   readonly persona?: (action: 'show' | 'sync') => Promise<PersonaCommandResult>;
   /** Time source for elapsed rendering; defaults to the clock. */
   readonly now?: () => number;
+  /** Owners sidecar directory (tests); defaults to `<DSH_HOME>/caduceus/owners`. */
+  readonly ownershipDir?: string;
+  /** Discover caduceus session ids on disk for `/adopt` (tests inject; default []). */
+  readonly sessionIdsProvider?: () => readonly string[];
   /**
    * True when a session id has a durable log on disk. Used by `/sessions` to
    * mark ghost entries `（未落地）`. Defaults to `() => true` (unknown = assume

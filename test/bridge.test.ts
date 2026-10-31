@@ -7,7 +7,7 @@
  * a `mkdtemp` directory and is deleted afterwards.
  */
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
@@ -62,6 +62,8 @@ interface HarnessOptions {
   readonly titleProvider?: () => SessionTitleLike | undefined;
   /** Disk-existence predicate for /sessions ghost markers (default: true). */
   readonly sessionExists?: (sessionId: string) => boolean;
+  /** Caduceus session ids discoverable on disk for /adopt (default: none). */
+  readonly sessionIdsProvider?: () => readonly string[];
 }
 
 interface Harness {
@@ -123,6 +125,9 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
     busyMode: options.busyMode ?? 'queue',
     groupSessionsPerUser: options.groupSessionsPerUser ?? true,
   };
+  // Ownership sidecars must never escape into the real ~/.dsh during tests.
+  const ownershipDir = join(dir, 'owners');
+  const sessionIdsProvider = options.sessionIdsProvider ?? (() => []);
   if (options.prebindTopic === true) {
     store.set(scopeKey('group', 'oc_chat', 'omt_t', 'ou_user'), 'feishu-prebound-1');
   }
@@ -146,6 +151,8 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
       : { runHarnessCommand: options.commandRunner }),
     ...(options.persona === undefined ? {} : { persona: options.persona }),
     ...(options.sessionExists === undefined ? {} : { sessionExists: options.sessionExists }),
+    ownershipDir,
+    sessionIdsProvider,
   });
   return { dir, store, transport, agents, clock, logger, titles, bridge };
 }
@@ -1248,4 +1255,105 @@ test('/resume 歧义：历史中两条同尾号给出候选且不切换', async 
   const text = recordedTexts(h.transport).at(-1) ?? '';
   assert.match(text, /命中 2 条会话/);
   assert.equal(h.store.get(key), currentId);
+});
+
+test('create 带 meta.caduceus 归属（p2p / topic / group-user），并写 ownership sidecar', async (t) => {
+  const h = makeHarness(t, { botOpenId: 'ou_bot' });
+  await h.bridge.handleInbound(
+    inbound('p2p', { chatType: 'p2p', chatId: 'oc_dm', senderOpenId: 'ou_x' }),
+  );
+  await h.bridge.handleInbound(
+    inbound('topic', {
+      chatType: 'group',
+      chatId: 'oc_g',
+      threadId: 'omt_t',
+      senderOpenId: 'ou_x',
+      mentions: ['ou_bot'],
+    }),
+  );
+  await h.bridge.handleInbound(
+    inbound('group', {
+      chatType: 'group',
+      chatId: 'oc_g2',
+      senderOpenId: 'ou_y',
+      mentions: ['ou_bot'],
+    }),
+  );
+
+  const metas = h.agents.createCalls.map((call) => ({ ...call.meta.caduceus }));
+  assert.deepEqual(metas[0], { chatId: 'oc_dm', scopeKey: 'oc_dm', kind: 'p2p' });
+  assert.deepEqual(metas[1], {
+    chatId: 'oc_g',
+    scopeKey: 'oc_g\u0000omt_t',
+    kind: 'topic',
+  });
+  assert.deepEqual(metas[2], {
+    chatId: 'oc_g2',
+    scopeKey: 'oc_g2\u0000ou_y',
+    kind: 'group-user',
+  });
+  for (const call of h.agents.createCalls) {
+    assert.ok(
+      existsSync(join(h.dir, 'owners', `${call.sessionId}.json`)),
+      `ownership sidecar missing for ${call.sessionId}`,
+    );
+  }
+});
+
+test('/adopt：磁盘孤儿命中 → 加入 history 并设为当前', async (t) => {
+  const target = 'feishu-1793463503786';
+  const h = makeHarness(t, { sessionIdsProvider: () => [target] });
+  await h.bridge.handleInbound(inbound('hi'));
+  const key = scopeKey('p2p', 'oc_chat', null, 'ou_user');
+  const previous = h.store.get(key);
+  assert.notEqual(previous, target);
+
+  await h.bridge.handleInbound(inbound(`/adopt ${target.slice(-8)}`));
+  assert.equal(h.store.get(key), target);
+  assert.equal(h.store.history(key)[0], target);
+  assert.ok(h.store.history(key).includes(previous as string));
+  assert.ok(h.agents.resumed.includes(target));
+  assert.match(recordedTexts(h.transport).at(-1) ?? '', /已收养会话/);
+});
+
+test('/adopt：歧义列候选、零命中、已在其他 scope 下都给提示', async (t) => {
+  // Ambiguity: two disk ids sharing the same tail.
+  const ambiguous = makeHarness(t, {
+    sessionIdsProvider: () => ['feishu-ambig-11111111', 'feishu-other-11111111'],
+  });
+  await ambiguous.bridge.handleInbound(inbound('hi'));
+  const ambiguousKey = scopeKey('p2p', 'oc_chat', null, 'ou_user');
+  const ambiguousBefore = ambiguous.store.get(ambiguousKey);
+  await ambiguous.bridge.handleInbound(inbound('/adopt 11111111'));
+  const ambiguousText = recordedTexts(ambiguous.transport).at(-1) ?? '';
+  assert.match(ambiguousText, /命中 2 条会话/);
+  assert.equal(ambiguous.store.get(ambiguousKey), ambiguousBefore);
+
+  // Zero hit.
+  const none = makeHarness(t);
+  await none.bridge.handleInbound(inbound('hi'));
+  await none.bridge.handleInbound(inbound('/adopt 99999999'));
+  assert.match(recordedTexts(none.transport).at(-1) ?? '', /没找到可收养的会话/);
+
+  // Already owned by another scope of this chat: refuse with its label.
+  const foreignTarget = 'feishu-1793463503786';
+  const foreignKey = 'oc_chat\u0000omt_foreign';
+  const foreign = makeHarness(t, {
+    botOpenId: 'ou_bot',
+    seedMap: { [foreignKey]: foreignTarget },
+    sessionIdsProvider: () => [],
+  });
+  await foreign.bridge.handleInbound(
+    inbound('hi', { chatType: 'group', senderOpenId: 'ou_me', mentions: ['ou_bot'] }),
+  );
+  await foreign.bridge.handleInbound(
+    inbound(`/adopt ${foreignTarget.slice(-8)}`, {
+      chatType: 'group',
+      senderOpenId: 'ou_me',
+      mentions: ['ou_bot'],
+    }),
+  );
+  const foreignText = recordedTexts(foreign.transport).at(-1) ?? '';
+  assert.match(foreignText, /已在其他 scope 下/);
+  assert.notEqual(foreign.store.get(scopeKey('group', 'oc_chat', null, 'ou_me')), foreignTarget);
 });

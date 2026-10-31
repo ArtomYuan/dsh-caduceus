@@ -28,6 +28,7 @@ import {
   sessionTimeLabel,
   shortSessionId,
 } from '../observability.js';
+import { writeOwnership, type SessionScopeKind } from '../ownership.js';
 import { progressCard, statusCard } from '../render/cards.js';
 import { CardStream, systemClock } from '../render/stream.js';
 import type { CardChannel, Clock } from '../render/stream.js';
@@ -116,6 +117,8 @@ export class Bridge {
   readonly #now: () => number;
   readonly #mint: () => string;
   readonly #sessionExists: (sessionId: string) => boolean;
+  readonly #ownershipDir: string | undefined;
+  readonly #sessionIdsProvider: () => readonly string[];
   readonly #sessionTitleProvider: () => SessionTitleLike | undefined;
   readonly #queue = new ScopeQueue();
   readonly #states = new Map<string, ScopeState>();
@@ -132,6 +135,8 @@ export class Bridge {
     this.#now = options.now ?? (() => this.#clock.now());
     this.#mint = options.mintSessionId ?? mintSessionId;
     this.#sessionExists = options.sessionExists ?? (() => true);
+    this.#ownershipDir = options.ownershipDir;
+    this.#sessionIdsProvider = options.sessionIdsProvider ?? (() => []);
     const provider =
       options.sessionTitleProvider ??
       (options.sessionTitle === undefined ? undefined : () => options.sessionTitle);
@@ -291,7 +296,7 @@ export class Bridge {
         const cwd = this.#sessionMap.getCwd(state.key) ?? this.#config.defaultCwd;
         const fresh = this.#mint();
         try {
-          const { agent } = await this.#agents.create({ sessionId: fresh, meta: { cwd } });
+          const { agent } = await this.#createAgent(state, fresh, cwd);
           // Commit only after create succeeded; on failure nothing is written.
           if (current !== undefined) {
             state.previousSessionId = current;
@@ -350,6 +355,10 @@ export class Bridge {
       }
       case 'resume': {
         await this.#resume(state, command.sessionId);
+        return;
+      }
+      case 'adopt': {
+        await this.#adopt(state, command.sessionId);
         return;
       }
       case 'persona': {
@@ -704,7 +713,7 @@ export class Bridge {
    * (no new session, no re-mint). Used by /resume for both the no-arg previous
    * case and the id/prefix case.
    */
-  async #switchSession(state: ScopeState, target: string): Promise<void> {
+  async #switchSession(state: ScopeState, target: string, verb = '已恢复会话'): Promise<void> {
     const current = state.sessionId ?? this.#sessionMap.get(state.key);
     try {
       const { agent } = await this.#agents.resume({ resumeSessionId: target });
@@ -721,7 +730,7 @@ export class Bridge {
       this.#bindSession(state, target);
       this.#bindSession(state, String(agent.session.id));
       await this.#afterAgentReady(state);
-      await this.#replyText(state, `已恢复会话 ${target}。`);
+      await this.#replyText(state, `${verb} ${target}。`);
     } catch (error) {
       await this.#replyText(state, `恢复会话失败：${errorMessage(error)}`);
     }
@@ -764,6 +773,93 @@ export class Bridge {
     if (suffix.startsWith('omt_')) return `话题 ${suffix.slice(0, 8)}`;
     if (suffix.startsWith('ou_')) return `用户 ${suffix.slice(0, 8)}`;
     return '旧会话';
+  }
+
+  #scopeKind(state: ScopeState): SessionScopeKind {
+    if (state.chatType === 'p2p') return 'p2p';
+    if (state.threadId !== undefined) return 'topic';
+    return 'group-user';
+  }
+
+  /**
+   * Create an agent with dsh's own meta fields PLUS caduceus ownership, then
+   * persist the ownership sidecar. The sidecar is the durable part because dsh
+   * 0.2.1-rc.2 rebuilds its header from known fields and drops unknown meta.
+   */
+  async #createAgent(
+    state: ScopeState,
+    sessionId: string,
+    cwd: string,
+  ): Promise<{ readonly agent: AgentLike }> {
+    const caduceus = { chatId: state.chatId, scopeKey: state.key, kind: this.#scopeKind(state) };
+    const { agent } = await this.#agents.create({ sessionId, meta: { cwd, caduceus } });
+    try {
+      await writeOwnership(
+        sessionId,
+        caduceus,
+        this.#ownershipDir === undefined ? {} : { dir: this.#ownershipDir },
+      );
+    } catch (error) {
+      this.#logger.warn(`ownership write failed for ${sessionId}: ${errorMessage(error)}`);
+    }
+    return { agent };
+  }
+
+  /**
+   * `/adopt <id|尾号>`: bind an unowned session to the CURRENT scope key.
+   * - found in another scope of this chat → refuse (tell the user where it is);
+   * - found in this scope's current/history → promote it to current;
+   * - found only on disk (orphan) → resume it, then append+switch;
+   * - ambiguous → list candidates; none → "没找到".
+   */
+  async #adopt(state: ScopeState, query: string): Promise<void> {
+    const exactQuery = query.trim();
+    const known = this.#matchSessionsByChat(state, exactQuery);
+    const keysById = new Map<string, string[]>();
+    for (const match of known) keysById.set(match.sessionId, [...match.keys]);
+    for (const sessionId of this.#sessionIdsProvider()) {
+      if (!keysById.has(sessionId)) keysById.set(sessionId, []);
+    }
+    const matched = [...keysById.keys()].filter(
+      (sessionId) =>
+        sessionId === exactQuery ||
+        (exactQuery.length >= 8 && sessionId.endsWith(exactQuery)),
+    );
+    const exact = matched.find((sessionId) => sessionId === exactQuery);
+    const selected = exact === undefined ? matched : [exact];
+
+    if (selected.length === 0) {
+      if (exactQuery.length < 8) {
+        await this.#replyText(state, '尾号至少 8 位（或输入完整 sessionId）。');
+      } else {
+        await this.#replyText(state, `没找到可收养的会话：${exactQuery}`);
+      }
+      return;
+    }
+    if (selected.length > 1) {
+      const lines = selected.slice(0, 5).map((sessionId) => {
+        const keys = keysById.get(sessionId) ?? [];
+        const label = keys.length === 0 ? '未归属' : this.#scopeLabel(state, keys[0] as string);
+        return `· ${shortSessionId(sessionId)} · ${label}`;
+      });
+      await this.#replyText(
+        state,
+        `尾号 ${exactQuery} 命中 ${selected.length} 条会话，请输入更多字符：\n${lines.join('\n')}`,
+      );
+      return;
+    }
+
+    const target = selected[0] as string;
+    const keys = keysById.get(target) ?? [];
+    const foreign = keys.find((key) => key !== state.key);
+    if (foreign !== undefined) {
+      await this.#replyText(
+        state,
+        `该会话已在其他 scope 下（${this.#scopeLabel(state, foreign)}），不重复收养。`,
+      );
+      return;
+    }
+    await this.#switchSession(state, target, '已收养会话');
   }
 
   async #tryResolve(
@@ -811,7 +907,7 @@ export class Bridge {
       this.#sessionMap.set(state.key, sessionId);
       this.#sessionMap.setCwd(state.key, cwd);
       this.#bindSession(state, sessionId);
-      const { agent } = await this.#agents.create({ sessionId, meta: { cwd } });
+      const { agent } = await this.#createAgent(state, sessionId, cwd);
       this.#bindSession(state, String(agent.session.id));
       state.pendingCreate = false;
       return { agent, sessionId, cwd };
@@ -823,7 +919,7 @@ export class Bridge {
     if (live !== undefined) return { agent: live, sessionId, cwd };
 
     if (state.pendingCreate) {
-      const { agent } = await this.#agents.create({ sessionId, meta: { cwd } });
+      const { agent } = await this.#createAgent(state, sessionId, cwd);
       this.#bindSession(state, String(agent.session.id));
       state.pendingCreate = false;
       return { agent, sessionId, cwd };
@@ -845,7 +941,7 @@ export class Bridge {
       state.sessionId = fresh;
       this.#sessionMap.set(state.key, fresh);
       this.#bindSession(state, fresh);
-      const { agent } = await this.#agents.create({ sessionId: fresh, meta: { cwd } });
+      const { agent } = await this.#createAgent(state, fresh, cwd);
       this.#bindSession(state, String(agent.session.id));
       state.pendingCreate = false;
       return { agent, sessionId: fresh, cwd };

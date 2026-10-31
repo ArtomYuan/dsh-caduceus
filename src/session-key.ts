@@ -251,6 +251,35 @@ export class SessionStore {
     return [...(this.entries.get(key)?.history ?? [])];
   }
 
+  /**
+   * Record an existing session id in a key's history WITHOUT changing the
+   * current session. Used by startup backfill and `/adopt` when the id should
+   * become reachable but not silently replace the scope's current session.
+   * If the key has no entry yet, the id becomes both current and history[0].
+   * @returns true when the stored map changed (and was persisted).
+   */
+  appendHistory(key: string, sessionId: string): boolean {
+    this.requireLoaded();
+    if (key.length === 0) throw new TypeError('session map: key must be a non-empty string');
+    if (sessionId.length === 0) throw new TypeError('session map: sessionId must be a non-empty string');
+    const entry = this.entries.get(key);
+    if (entry === undefined) {
+      this.entries.set(key, { sessionId, history: [sessionId] });
+      this.persist();
+      return true;
+    }
+    if (entry.sessionId === sessionId || entry.history.includes(sessionId)) return false;
+    // Keep the current id at history[0]; the adopted/historical id goes next.
+    const history = [
+      entry.sessionId,
+      sessionId,
+      ...entry.history.filter((id) => id !== entry.sessionId && id !== sessionId),
+    ].slice(0, SESSION_HISTORY_LIMIT);
+    this.entries.set(key, { sessionId: entry.sessionId, history });
+    this.persist();
+    return true;
+  }
+
   /** @throws when called before `load()`. */
   has(key: string): boolean {
     this.requireLoaded();

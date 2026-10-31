@@ -75,6 +75,7 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 | `/sessions [--all]` | 默认只列当前 scopeKey：`▸ 标题 · 时间 · sessionId 后 8 位`（当前行 `* `，无标题「（未命名）」，末尾提示 `/rename`）。时间优先从 `feishu-<epoch_ms>` 解析（刚刚 / N 分钟前 / N 小时前 / MM-DD HH:mm），解析不出才 `—`。`--all` 列出同一 chatId 下所有 scope 的**当前 + history**（旧键/话题/用户/历史会话），行尾加 scope 标签与必要时 `（未落地）`，末尾提示用 `/resume <id 后 8 位>` |
 | `/rename <标题>` | 重命名当前会话的标题（标题非法时回一句人话） |
 | `/resume [id\|尾号]` | 无参恢复本 scope 上一条；带参可按完整 sessionId 或 ≥8 位不歧义**尾号**在本 chat 所有 scope 的**当前 + 全量 history** 中恢复；命中后该 id 成为当前并置于 history 首位（命中多条给歧义提示） |
+| `/adopt <id\|尾号>` | 把一条无归属的会话显式收养到**当前 scopeKey**（加入 history 并设为当前）；已在其他 scope 下会提示位置、歧义列候选、零命中给提示 |
 | `/stop` | 中断当前正在运行的一轮（`cancel({kind:'user'})`） |
 | `/status` | 显示本会话状态、步数、工具数、起止时间与最近事件 |
 | `/persona [show\|sync]` | 查看或同步 SOUL 人格块 |
@@ -112,6 +113,7 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 - 启动行：`ready appId=cli_xxx…abcd defaultCwd=… groupSessionsPerUser=… throttle=… busyMode=…`（appId 只露前 7 + 后 4 位，**appSecret 任何片段都不打印**）；
 - 门禁每条判定一行：`gate accept: p2p|mentioned …` / `gate drop: no-mention|bot-sender|not-allowed-chat|not-allowed-user|empty-text …`，附 `chat=`/`thread=`/`sender=` 前 12 位；
 - 命令分发：`command: /status`、`command: unknown passthrough /xxx`、`command: parse-fail <原文前 40>`；
+- 归属补录：启动一行 `backfill: scanned=N adopted=M skipped=K`；
 - 会话键：`scope: kind=p2p|topic|group-user|group-shared key=<前 16 位> session=<后 8 位>`。
 
 ## 存储
@@ -139,6 +141,9 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 - 旧格式可读：v5 为当前格式；v4/v3 是 `entries` 对象（老键**原样保留**为旧共享会话，**不批量改写**，history 初始为空）；v2 是扁平 `{ "<scope key>": "feishu-<ts>" }`；v1 把这些字符串放在 `sessions` 下。下一次落盘写成 v5。
 - 因此进程重启后 `/sessions --all` 仍能列出旧 id，`/resume <尾号>` 仍能找回历史会话。
 - `/new` 会先调用 `agents.create` 再写 map；create 失败则不写，避免「幽灵 id」。`/sessions` 对 map 中存在、但磁盘无会话文件且无 live agent 的条目标注 `（未落地）`。
+- 会话归属：`agents.create` 的 `meta` 带 `{ cwd, caduceus: { chatId, scopeKey, kind } }`，并在 `<DSH_HOME>/caduceus/owners/<sessionId>.json` 写归属 sidecar（dsh 0.2.1-rc.2 重建 header 时会丢弃未知字段，sidecar 是实际持久来源）。
+- 启动补录：扫描 `$DSH_HOME/sessions/*/feishu-*/`，从 sidecar 或明文 JSONL 头部读回 `meta.caduceus`，把该 id 追加进对应 scope 的 history（不改当前、幂等、≤50），启动日志打一行 `backfill: scanned=N adopted=M skipped=K`。
+- `/adopt <id|尾号>`：把无归属会话显式收养到当前 scope（加入 history 并设为当前）；已在其他 scope、歧义、零命中都有提示，用于抢回存量孤儿。
 - 写入是原子的：先写同目录 `.tmp`，再 `rename` 覆盖；权限 `0600`。
 - 标题不落此表：唯一来源是 dsh 的 `sessionTitle.get(session)`。
 
