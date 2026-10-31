@@ -95,6 +95,7 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 ## 状态层与卡片
 
 - **状态卡（常驻）**：每个 scopeKey 首次活动时创建**一条**，之后所有更新都 patch 同一 `message_id`（不重发）；内容为 `会话：标题 · 状态 · 步数（工具） · 最近事件 · 更新于 <相对时间> · 会话 ID 尾 8 位`，**不含助手正文**。状态卡创建/更新失败只记 `status card degraded: <reason>`，不影响回合，下个事件重试；配置 `statusCard: false` 可关闭。
+- **状态卡置顶（尽力）**：状态卡首次创建成功后 `pin` 一次（内存+`pins.json` 记录 id，不重复）；重启后新卡创建时先 `unpin` 旧 id 再 pin 新 id。`230046` 群策略拒绝 → 记 `pin denied by chat policy; disabled for <chat 前12>` 并在本进程禁用该 chat；`230047` 限流只记一行、下个会话再试；其他码记 `pin failed: code=<code>`。`pinStatusCard: false` 时零调用。
 - **过程卡（每回合）**：每回合一张，与状态卡共用同一套 400 ms patch 预算（不会双倍打 API）；运行中显示状态行、`最近：<工具名或事件>`（≤40 字）与**助手正文尾部（≤8 KB 预算）**；`turn/end` 时**编辑同一张卡**到终态并渲染完整正文（卡体 ≤30 KB，超出保留尾部并加「…已省略 N 字符」）。
 - **状态**：过程卡的状态行即为每话题状态（空闲 / 运行中 / 待审批 / 失败 / 完成）；不再单独发状态卡，`/status` 命令输出保留。从未跑过回合的会话是「空闲」，有回合且结束后才是「完成」。
 - **标题时序**：标题未就绪时过程卡不写标题；`session/title` 到达后**就地 patch 同一张过程卡**（复用节流），不新发消息；agent create/resume 完成后还会**强制重渲一次**现有过程卡（首渲染可能早于标题服务就绪，只 patch、不新发）。
@@ -117,6 +118,7 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 - 命令分发：`command: /status`、`command: unknown passthrough /xxx`、`command: parse-fail <原文前 40>`；
 - 归属补录：启动一行 `backfill: scanned=N adopted=M skipped=K`；
 - 状态卡降级：`status card degraded: <reason>`（回合继续，下个事件重试）；
+- Pin 降级：`pin denied by chat policy; disabled for <chat 前12>` / `pin rate limited: code=230047; will retry next session` / `pin failed: code=<code>`（均不影响主流程）；
 - 会话键：`scope: kind=p2p|topic|group-user|group-shared key=<前 16 位> session=<后 8 位>`。
 
 ## 存储

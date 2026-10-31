@@ -92,6 +92,16 @@ export class ReliableTransport implements Transport {
     await this.api.patchCard(messageId, card);
   }
 
+  async pinMessage(messageId: string): Promise<void> {
+    // Pin failures are policy decisions (230046/230047/230054) handled by the
+    // bridge; the reliable layer deliberately does not retry them.
+    await this.api.pinMessage(messageId);
+  }
+
+  async unpinMessage(messageId: string): Promise<void> {
+    await this.api.unpinMessage(messageId);
+  }
+
   async reply(
     chatId: string,
     messageId: string,

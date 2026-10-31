@@ -236,6 +236,12 @@ try {
     async updateCard(messageId, card) {
       calls.push({ op: 'updateCard', messageId, card });
     },
+    async pinMessage(messageId) {
+      calls.push({ op: 'pinMessage', messageId });
+    },
+    async unpinMessage(messageId) {
+      calls.push({ op: 'unpinMessage', messageId });
+    },
     async reply(chatId, messageId, payload) {
       calls.push({ op: 'reply', messageId: `m-${calls.length + 1}`, chatId, replyTo: messageId, payload });
       return { messageId: `m-${calls.length}` };
@@ -307,14 +313,23 @@ try {
     data: { turn: 1, reason: { kind: 'completed' } },
     time: 30,
   });
-  const createdCards = calls.flatMap((call) => {
-    if (call.op === 'sendCard') return [call.card];
-    if (call.op === 'reply' && call.payload.kind === 'card') return [call.payload.card];
+  const createdCardEntries = calls.flatMap((call) => {
+    if (call.op === 'sendCard') return [{ messageId: call.messageId, card: call.card }];
+    if (call.op === 'reply' && call.payload.kind === 'card') {
+      return [{ messageId: call.messageId, card: call.payload.card }];
+    }
     return [];
   });
-  const createdTitles = createdCards.map((card) => card.header?.title?.content);
+  const createdTitles = createdCardEntries.map((entry) => entry.card.header?.title?.content);
   assert.ok(createdTitles.includes('飞书会话 · 状态'), 'persistent status card must exist');
   assert.ok(createdTitles.includes('飞书会话 · 过程'), 'process card must exist');
+  const statusCreated = createdCardEntries.find(
+    (entry) => entry.card.header?.title?.content === '飞书会话 · 状态',
+  );
+  assert.ok(
+    calls.some((call) => call.op === 'pinMessage' && call.messageId === statusCreated?.messageId),
+    'status card is pinned once',
+  );
   const finalCard = calls
     .filter(
       (call) =>

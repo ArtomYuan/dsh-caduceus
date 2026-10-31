@@ -15,9 +15,11 @@ import test, { type TestContext } from 'node:test';
 import { Bridge } from '../src/bridge/bridge.js';
 import type { AgentLike, BridgeConfig, BusyMode, SessionTitleLike } from '../src/bridge/types.js';
 import type { HarnessCommandResult } from '../src/commands/harness.js';
+import { PinStore } from '../src/pin-store.js';
 import { scopeKey, SESSION_MAP_VERSION, SessionStore } from '../src/session-key.js';
 import type { StatusEventLike } from '../src/status.js';
 import { CARD_BYTE_LIMIT, cardByteSize } from '../src/render/cards.js';
+import { FeishuApiError } from '../src/transport/types.js';
 import type { FeishuCard, InboundMessage } from '../src/transport/types.js';
 import {
   FakeAgent,
@@ -67,6 +69,10 @@ interface HarnessOptions {
   readonly sessionIdsProvider?: () => readonly string[];
   /** Standalone per-scope status card (default true). */
   readonly statusCard?: boolean;
+  /** Best-effort pin of the status card (default true). */
+  readonly pinStatusCard?: boolean;
+  /** Seed `<dir>/pins.json` to simulate a status card pinned before restart. */
+  readonly seedPins?: Readonly<Record<string, { readonly messageId: string; readonly chatId: string }>>;
 }
 
 interface Harness {
@@ -128,10 +134,17 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
     busyMode: options.busyMode ?? 'queue',
     groupSessionsPerUser: options.groupSessionsPerUser ?? true,
     statusCard: options.statusCard ?? true,
+    pinStatusCard: options.pinStatusCard ?? true,
   };
   // Ownership sidecars must never escape into the real ~/.dsh during tests.
   const ownershipDir = join(dir, 'owners');
   const sessionIdsProvider = options.sessionIdsProvider ?? (() => []);
+  const pinPath = join(dir, 'pins.json');
+  if (options.seedPins !== undefined) {
+    writeFileSync(pinPath, JSON.stringify({ version: 1, pins: options.seedPins }), 'utf8');
+  }
+  const pinStore = new PinStore({ filePath: pinPath });
+  pinStore.load();
   if (options.prebindTopic === true) {
     store.set(scopeKey('group', 'oc_chat', 'omt_t', 'ou_user'), 'feishu-prebound-1');
   }
@@ -157,6 +170,7 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
     ...(options.sessionExists === undefined ? {} : { sessionExists: options.sessionExists }),
     ownershipDir,
     sessionIdsProvider,
+    pinStore,
   });
   return { dir, store, transport, agents, clock, logger, titles, bridge };
 }
@@ -1610,5 +1624,93 @@ test('状态卡创建失败：回合仍完成，日志含 status card degraded �
   const processCard = cardOfTitle(recordedCards(h.transport), PROCESS_CARD_TITLE);
   assert.ok(processCard !== undefined, 'turn still renders its process card');
   assert.ok(finalPatchOfCard(h.transport, processCard.messageId) !== undefined, 'turn still completes');
+  assert.equal(recordedTexts(h.transport).length, 0);
+});
+
+test('pin：状态卡创建后 pin 一次；同 scope 第二回合不再 pin', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('第一轮'));
+  const session = liveAgent(h).session;
+  const statusCard = cardOfTitle(recordedCards(h.transport), STATUS_CARD_TITLE);
+  assert.ok(statusCard !== undefined);
+  assert.deepEqual(h.transport.pinCalls, [statusCard.messageId]);
+
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 100));
+  await h.bridge.handleSessionEvent(session, {
+    type: 'turn/end',
+    data: { turn: 1, reason: { kind: 'completed' } },
+    time: 200,
+  });
+  await h.bridge.handleInbound(inbound('第二轮'));
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 2 }, 300));
+  await h.bridge.handleSessionEvent(session, {
+    type: 'turn/end',
+    data: { turn: 2, reason: { kind: 'completed' } },
+    time: 400,
+  });
+
+  assert.deepEqual(h.transport.pinCalls, [statusCard.messageId], 'pin only once per card');
+  assert.equal(recordedCards(h.transport).filter((entry) => cardTitles([entry])[0] === STATUS_CARD_TITLE).length, 1);
+});
+
+test('pin：重启后新状态卡先 unpin 旧 id，再 pin 新 id', async (t) => {
+  const key = scopeKey('p2p', 'oc_chat', null, 'ou_user');
+  const h = makeHarness(t, {
+    seedPins: { [key]: { messageId: 'old-status-msg', chatId: 'oc_chat' } },
+  });
+  await h.bridge.handleInbound(inbound('重启后第一轮'));
+  const statusCard = cardOfTitle(recordedCards(h.transport), STATUS_CARD_TITLE);
+  assert.ok(statusCard !== undefined);
+  assert.deepEqual(h.transport.unpinCalls, ['old-status-msg']);
+  assert.deepEqual(h.transport.pinCalls, [statusCard.messageId]);
+});
+
+test('pin：230046 群策略拒绝 → 本进程禁用该 chat，回合仍完成', async (t) => {
+  const h = makeHarness(t);
+  h.transport.pinError = new FeishuApiError('pin denied', 230046);
+  await h.bridge.handleInbound(inbound('第一轮'));
+  assert.ok(
+    h.logger.entries.some((entry) =>
+      entry.message.startsWith('pin denied by chat policy; disabled for '),
+    ),
+    h.logger.entries.map((entry) => entry.message).join(' | '),
+  );
+
+  const session = liveAgent(h).session;
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 100));
+  await h.bridge.handleSessionEvent(session, {
+    type: 'turn/end',
+    data: { turn: 1, reason: { kind: 'completed' } },
+    time: 200,
+  });
+  await h.bridge.handleInbound(inbound('第二轮'));
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 2 }, 300));
+  await h.bridge.handleSessionEvent(session, {
+    type: 'turn/end',
+    data: { turn: 2, reason: { kind: 'completed' } },
+    time: 400,
+  });
+
+  assert.equal(h.transport.pinCalls.length, 1, 'chat pin disabled after 230046');
+  const processCard = cardOfTitle(recordedCards(h.transport), PROCESS_CARD_TITLE);
+  assert.ok(processCard !== undefined);
+  assert.ok(finalPatchOfCard(h.transport, processCard.messageId) !== undefined, 'turn still completes');
+});
+
+test('pinStatusCard=false：零 pin/unpin 调用，状态卡与过程卡正常', async (t) => {
+  const h = makeHarness(t, { pinStatusCard: false });
+  await h.bridge.handleInbound(inbound('hi'));
+  const session = liveAgent(h).session;
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 100));
+  await h.bridge.handleSessionEvent(session, {
+    type: 'turn/end',
+    data: { turn: 1, reason: { kind: 'completed' } },
+    time: 200,
+  });
+
+  assert.equal(h.transport.pinCalls.length, 0);
+  assert.equal(h.transport.unpinCalls.length, 0);
+  assert.ok(cardOfTitle(recordedCards(h.transport), STATUS_CARD_TITLE) !== undefined);
+  assert.ok(cardOfTitle(recordedCards(h.transport), PROCESS_CARD_TITLE) !== undefined);
   assert.equal(recordedTexts(h.transport).length, 0);
 });

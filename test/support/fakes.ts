@@ -70,6 +70,12 @@ export class FakeTransport implements Transport {
   failUpdateCardWith: Error | undefined;
   /** When set, the next card create (sendCard or card reply) throws once. */
   failCardCreateWith: Error | undefined;
+  /** When set, every pin call throws this error (policy/limit tests). */
+  pinError: FeishuApiError | undefined;
+  /** When set, every unpin call throws this error. */
+  unpinError: FeishuApiError | undefined;
+  readonly pinCalls: string[] = [];
+  readonly unpinCalls: string[] = [];
   readonly #botOpenId: string | undefined;
   private handler: ((message: InboundMessage) => void) | undefined;
   private seq = 0;
@@ -164,6 +170,16 @@ export class FakeTransport implements Transport {
     return { messageId: created };
   }
 
+  async pinMessage(messageId: string): Promise<void> {
+    this.pinCalls.push(messageId);
+    if (this.pinError !== undefined) throw this.pinError;
+  }
+
+  async unpinMessage(messageId: string): Promise<void> {
+    this.unpinCalls.push(messageId);
+    if (this.unpinError !== undefined) throw this.unpinError;
+  }
+
   /** Deliver one inbound message through the registered handler (test seam). */
   deliver(message: InboundMessage): void {
     this.handler?.(message);
@@ -213,6 +229,8 @@ export class FakeFeishuApi implements FeishuApi {
   readonly created: CreateMessageInput[] = [];
   readonly replied: ReplyMessageInput[] = [];
   readonly patched: { readonly messageId: string; readonly card: FeishuCard }[] = [];
+  readonly pinned: string[] = [];
+  readonly unpinned: string[] = [];
   readonly failReplyCodes: number[] = [];
   private handler: ((message: InboundMessage) => void) | undefined;
   started = false;
@@ -243,6 +261,14 @@ export class FakeFeishuApi implements FeishuApi {
 
   async patchCard(messageId: string, card: FeishuCard): Promise<void> {
     this.patched.push({ messageId, card });
+  }
+
+  async pinMessage(messageId: string): Promise<void> {
+    this.pinned.push(messageId);
+  }
+
+  async unpinMessage(messageId: string): Promise<void> {
+    this.unpinned.push(messageId);
   }
 }
 

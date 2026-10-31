@@ -160,6 +160,20 @@ export class LarkFeishuApi implements FeishuApi {
     this.assertOk(response, 'im.v1.message.patch');
   }
 
+  async pinMessage(messageId: string): Promise<void> {
+    const response = (await this.client.im.v1.pin.create({
+      data: { message_id: messageId },
+    })) as MessageResponse;
+    this.assertOk(response, 'im.v1.pin.create');
+  }
+
+  async unpinMessage(messageId: string): Promise<void> {
+    const response = (await this.client.im.v1.pin.delete({
+      path: { message_id: messageId },
+    })) as MessageResponse;
+    this.assertOk(response, 'im.v1.pin.delete');
+  }
+
   private messageIdOf(response: MessageResponse, operation: string): string {
     this.assertOk(response, operation);
     const messageId = response.data?.message_id;

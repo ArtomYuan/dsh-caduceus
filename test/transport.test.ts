@@ -226,3 +226,12 @@ test('normalize: bot 消息即使 @ 了机器人也不进入会话', () => {
   );
   assert.equal(message, undefined);
 });
+
+test('ReliableTransport: pinMessage/unpinMessage 透传给 FeishuApi', async () => {
+  const api = new FakeFeishuApi();
+  const transport = reliable(api);
+  await transport.pinMessage('om_status');
+  await transport.unpinMessage('om_old');
+  assert.deepEqual(api.pinned, ['om_status']);
+  assert.deepEqual(api.unpinned, ['om_old']);
+});

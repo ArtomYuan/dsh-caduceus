@@ -29,6 +29,7 @@ import {
   shortSessionId,
 } from '../observability.js';
 import { writeOwnership, type SessionScopeKind } from '../ownership.js';
+import type { PinStore } from '../pin-store.js';
 import {
   finalCard,
   finalCardPlainText,
@@ -50,6 +51,7 @@ import {
   type StatusEventLike,
   type StatusSnapshot,
 } from '../status.js';
+import { FeishuApiError } from '../transport/types.js';
 import type { ChatType, FeishuCard, InboundMessage, Transport } from '../transport/types.js';
 import { ScopeQueue } from './scope-queue.js';
 import type { AgentLike, AgentsLike, BridgeConfig, BridgeOptions, SessionTitleLike } from './types.js';
@@ -77,6 +79,10 @@ interface ScopeState {
   patchBudget?: CardPatchBudget;
   /** Set after a status-card failure; the next event retries. */
   statusDegraded?: boolean;
+  /** Message id of the status card successfully pinned for this scope. */
+  pinnedMessageId?: string;
+  /** Last status-card message id whose pin was attempted (no retry spam). */
+  pinAttemptedFor?: string;
   lastOutput: string;
   /** Latest session title (from a `session/title` event or `/rename`). */
   title?: string;
@@ -128,6 +134,8 @@ export class Bridge {
   readonly #sessionExists: (sessionId: string) => boolean;
   readonly #ownershipDir: string | undefined;
   readonly #sessionIdsProvider: () => readonly string[];
+  readonly #pinStore: PinStore | undefined;
+  readonly #pinDisabledChats = new Set<string>();
   readonly #sessionTitleProvider: () => SessionTitleLike | undefined;
   readonly #queue = new ScopeQueue();
   readonly #states = new Map<string, ScopeState>();
@@ -146,6 +154,7 @@ export class Bridge {
     this.#sessionExists = options.sessionExists ?? (() => true);
     this.#ownershipDir = options.ownershipDir;
     this.#sessionIdsProvider = options.sessionIdsProvider ?? (() => []);
+    this.#pinStore = options.pinStore;
     const provider =
       options.sessionTitleProvider ??
       (options.sessionTitle === undefined ? undefined : () => options.sessionTitle);
@@ -1058,6 +1067,56 @@ export class Bridge {
     });
     await state.statusStream.set(card);
     if (flush) await state.statusStream.flush();
+    await this.#maybePinStatusCard(state);
+  }
+
+  /**
+   * Best-effort pin of the persistent status card. Runs once per created card:
+   * a restart creates a new card, so the previous pinned id is unpinned first.
+   * 230046 disables pin attempts for the chat for the rest of the process;
+   * 230047/230054/other only log (no retry spam) and never affect the turn.
+   */
+  async #maybePinStatusCard(state: ScopeState): Promise<void> {
+    if (this.#config.pinStatusCard === false) return;
+    const messageId = state.statusStream?.messageId;
+    if (messageId === undefined) return;
+    if (state.pinnedMessageId === messageId || state.pinAttemptedFor === messageId) return;
+    if (this.#pinDisabledChats.has(state.chatId)) return;
+    state.pinAttemptedFor = messageId;
+
+    const previous = this.#pinStore?.get(state.key);
+    if (previous !== undefined && previous.messageId !== messageId) {
+      try {
+        await this.#transport.unpinMessage(previous.messageId);
+        this.#pinStore?.delete(state.key);
+      } catch (error) {
+        this.#logger.warn(`unpin failed: ${errorMessage(error)}`);
+      }
+    }
+
+    try {
+      await this.#transport.pinMessage(messageId);
+      state.pinnedMessageId = messageId;
+      this.#pinStore?.set(state.key, { messageId, chatId: state.chatId });
+    } catch (error) {
+      if (!(error instanceof FeishuApiError)) {
+        this.#logger.warn('pin failed: code=unknown');
+        return;
+      }
+      switch (error.code) {
+        case 230046:
+          this.#pinDisabledChats.add(state.chatId);
+          this.#logger.warn(
+            `pin denied by chat policy; disabled for ${state.chatId.slice(0, 12)}`,
+          );
+          return;
+        case 230047:
+          this.#logger.warn('pin rate limited: code=230047; will retry next session');
+          return;
+        default:
+          this.#logger.warn(`pin failed: code=${error.code}`);
+      }
+    }
   }
 
   async #sendNewCard(state: ScopeState, card: FeishuCard): Promise<{ messageId: string }> {
