@@ -14,6 +14,7 @@ import type { LoggerLike } from '../logger.js';
 import { silentLogger } from '../logger.js';
 import type { CreateMessageInput, FeishuApi, ReplyMessageInput } from './feishu-api.js';
 import { normalizeMessageEvent, type RawMessageEventLike } from './normalize.js';
+import { formatGateLine } from '../gate.js';
 import { FeishuApiError } from './types.js';
 import type { FeishuCard, InboundMessage } from './types.js';
 
@@ -52,9 +53,20 @@ export class LarkFeishuApi implements FeishuApi {
         if (senderType !== 'user') {
           // Priority #1: a bot/app event must never enter a session (real
           // incident: an app self-improvement notice became the first prompt
-          // and the fallback title).
-          this.logger.debug(
-            `ignoring non-human Feishu message (sender_type=${senderType ?? 'missing'})`,
+          // and the fallback title). Log the gate decision at info so the drop
+          // is diagnosable from the file log.
+          this.logger.info(
+            formatGateLine(
+              { accept: false, reason: 'bot-sender' },
+              {
+                chatId: raw.message.chat_id,
+                ...(raw.message.thread_id === undefined && raw.message.root_id === undefined
+                  ? {}
+                  : { threadId: raw.message.thread_id ?? raw.message.root_id }),
+                senderOpenId: raw.sender?.sender_id?.open_id ?? '',
+                senderType: senderType ?? 'missing',
+              },
+            ),
           );
           return;
         }

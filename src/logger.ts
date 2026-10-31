@@ -35,3 +35,26 @@ export function adaptLogger(logger: {
     debug: (message, ...args) => logger.debug(message, ...args),
   };
 }
+
+/** Fan a line out to several loggers; one failing sink never blocks the others. */
+export function teeLoggers(...loggers: readonly LoggerLike[]): LoggerLike {
+  const call = (
+    level: 'info' | 'warn' | 'error' | 'debug',
+  ): ((message: string, ...args: readonly unknown[]) => void) => {
+    return (message, ...args) => {
+      for (const logger of loggers) {
+        try {
+          logger[level](message, ...args);
+        } catch {
+          // A broken sink (e.g. disk full) must not break the surface.
+        }
+      }
+    };
+  };
+  return {
+    info: call('info'),
+    warn: call('warn'),
+    error: call('error'),
+    debug: call('debug'),
+  };
+}

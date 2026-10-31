@@ -24,6 +24,8 @@ const { FeishuApiError, normalizeMessageEvent, ReliableTransport } = await load(
 const { StatusTracker, shouldNotifyTerminal, terminalNotice } = await load('status.js');
 const { CARD_BYTE_LIMIT, cardByteSize, progressCard } = await load('render/index.js');
 const { Bridge } = await load('bridge/index.js');
+const { FileLogger } = await load('file-logger.js');
+const { formatScopeLine, formatStartupLine } = await load('observability.js');
 
 const dir = await mkdtemp(join(tmpdir(), 'dsh-caduceus-smoke-'));
 try {
@@ -312,8 +314,38 @@ try {
     'group message without mention must be dropped',
   );
 
+  // 12. Visible file log + startup/scope lines (no secret leakage).
+  const logFile = join(dir, 'log', 'caduceus.log');
+  const fileLogger = new FileLogger({
+    filePath: logFile,
+    now: () => Date.parse('2026-10-31T21:07:35.123Z'),
+  });
+  fileLogger.info('smoke file log');
+  assert.equal(
+    await readFile(logFile, 'utf8'),
+    '2026-10-31T21:07:35.123Z INFO  [caduceus] smoke file log\n',
+  );
+  const startup = formatStartupLine({
+    appId: 'cli_smokeapp1234',
+    appSecret: 'super-secret-smoke',
+    defaultCwd: dir,
+    groupSessionsPerUser: true,
+    cardThrottleMs: 400,
+    busyMode: 'queue',
+  });
+  assert.ok(startup.startsWith('ready appId='));
+  assert.ok(!startup.includes('super-secret-smoke'));
+  assert.ok(startup.includes('groupSessionsPerUser=true'));
+  const scopeLine = formatScopeLine(
+    'group',
+    `oc_smoke${SCOPE_KEY_SEPARATOR}omt_a`,
+    'feishu-12345678',
+    true,
+  );
+  assert.equal(scopeLine, 'scope: kind=topic key=oc_smoke\\0omt_a session=feishu-1');
+
   console.log(
-    'smoke ok: scopeKey / parseCommand / truncate / SessionStore v4 / persona / transport(thread+fallback) / status / cards / bridge-final',
+    'smoke ok: scopeKey / parseCommand / truncate / SessionStore v4 / persona / transport(thread+fallback) / status / cards / bridge-final / file-log',
   );
 } finally {
   await rm(dir, { recursive: true, force: true });

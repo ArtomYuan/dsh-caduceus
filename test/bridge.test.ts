@@ -476,7 +476,7 @@ test('群内话题（已绑定会话）仍需 @：无 @ 丢弃，不再免 @', a
   assert.equal(h.agents.created.length, 0);
   assert.equal(h.transport.calls.length, 0);
   assert.ok(
-    h.logger.entries.some((entry) => entry.message.includes('group message without mention')),
+    h.logger.entries.some((entry) => entry.message.startsWith('gate drop: no-mention ')),
     'a debug line must record the dropped group message',
   );
 });
@@ -963,4 +963,61 @@ test('/sessions --all：p2p 当前会话的 scope 标签为「私聊」', async 
   assert.ok(currentLine !== undefined, text);
   assert.match(currentLine, / · 私聊$/);
   assert.equal(text.split('\n').at(-1), '用 /resume <id 前 8 位> 继续某条会话');
+});
+
+test('命令分发日志：owned / unknown passthrough / parse-fail', async (t) => {
+  const h = makeHarness(t, { commandRunner: async () => undefined });
+  await h.bridge.handleInbound(inbound('/status'));
+  await h.bridge.handleInbound(inbound('/compact'));
+  await h.bridge.handleInbound(inbound('/'));
+
+  const messages = h.logger.entries.map((entry) => entry.message);
+  assert.ok(messages.includes('command: /status'), messages.join(' | '));
+  assert.ok(
+    messages.some((message) => message.startsWith('command: unknown passthrough /compact')),
+    messages.join(' | '),
+  );
+  assert.ok(
+    messages.some((message) => message.startsWith('command: parse-fail /')),
+    messages.join(' | '),
+  );
+});
+
+test('scope 日志：p2p/群话题/群用户三种 kind 各一行', async (t) => {
+  const h = makeHarness(t, { botOpenId: 'ou_bot' });
+  await h.bridge.handleInbound(inbound('hi', { chatType: 'p2p', senderOpenId: 'ou_dm' }));
+  await h.bridge.handleInbound(
+    inbound('topic', {
+      chatType: 'group',
+      threadId: 'omt_topic123456',
+      senderOpenId: 'ou_a',
+      mentions: ['ou_bot'],
+    }),
+  );
+  await h.bridge.handleInbound(
+    inbound('group', { chatType: 'group', senderOpenId: 'ou_b', mentions: ['ou_bot'] }),
+  );
+
+  const scopeLines = h.logger.entries
+    .map((entry) => entry.message)
+    .filter((message) => message.startsWith('scope: '));
+  assert.ok(scopeLines.some((line) => /^scope: kind=p2p key=oc_chat session=[a-z0-9-]{8}$/.test(line)), scopeLines.join(' | '));
+  assert.ok(scopeLines.some((line) => line.startsWith('scope: kind=topic key=oc_chat\\0omt_to')));
+  assert.ok(scopeLines.some((line) => line.startsWith('scope: kind=group-user key=oc_chat\\0ou_b')));
+});
+
+test('门禁日志：p2p 接受 / 群无 @ 丢弃都带 chat/thread/sender 前缀', async (t) => {
+  const h = makeHarness(t, { botOpenId: 'ou_bot' });
+  await h.bridge.handleInbound(inbound('hi', { chatType: 'p2p', senderOpenId: 'ou_dm' }));
+  await h.bridge.handleInbound(
+    inbound('群消息', { chatType: 'group', threadId: 'omt_t', senderOpenId: 'ou_x' }),
+  );
+  const gateLines = h.logger.entries
+    .map((entry) => entry.message)
+    .filter((message) => message.startsWith('gate '));
+  assert.ok(gateLines.some((line) => line.startsWith('gate accept: p2p ')));
+  assert.ok(gateLines.some((line) => line.startsWith('gate drop: no-mention ')));
+  for (const line of gateLines) {
+    assert.match(line, /chat=oc_chat thread=(omt_t|-)?.*sender=ou_/);
+  }
 });

@@ -45,3 +45,8 @@ test('resolveGatewayConfig: 凭据先取配置、再取 FEISHU_APP_ID/SECRET，�
   assert.deepEqual(explicit.bridge.allowedChats, ['oc_x']);
   assert.deepEqual(explicit.bridge.allowedUsers, ['ou_y']);
 });
+
+test('resolveGatewayConfig: logLevel 默认 info，可配 debug', () => {
+  assert.equal(resolveGatewayConfig({}, {}, '/tmp/work').logLevel, 'info');
+  assert.equal(resolveGatewayConfig({ logLevel: 'debug' }, {}, '/tmp/work').logLevel, 'debug');
+});

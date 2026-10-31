@@ -25,6 +25,8 @@ export interface GatewayConfig {
   readonly busyMode?: BusyMode;
   /** Ordinary groups isolated per sender (Hermes default true); topics exempt. */
   readonly groupSessionsPerUser?: boolean;
+  /** File-log verbosity: `info` (default) or `debug`. */
+  readonly logLevel?: 'info' | 'debug';
 }
 
 /** Schemastery schema for the `caduceus-gateway` entry. */
@@ -37,6 +39,7 @@ export const Config = z.object({
   cardThrottleMs: z.natural().min(1).required(false),
   busyMode: z.union([z.const('queue'), z.const('steer'), z.const('interrupt')]).required(false),
   groupSessionsPerUser: z.boolean().required(false),
+  logLevel: z.union([z.const('info'), z.const('debug')]).required(false),
 });
 
 /** Default card patch throttle: half of Feishu's 5 QPS budget. */
@@ -48,12 +51,16 @@ export const DEFAULT_BUSY_MODE: BusyMode = 'queue';
 /** Default ordinary-group isolation: per sender (Hermes default). */
 export const DEFAULT_GROUP_SESSIONS_PER_USER = true;
 
+/** Default file-log verbosity. */
+export const DEFAULT_LOG_LEVEL: 'info' | 'debug' = 'info';
+
 export interface ResolvedGatewayConfig {
   readonly credentials?: {
     readonly appId: string;
     readonly appSecret: string;
   };
   readonly bridge: BridgeConfig;
+  readonly logLevel: 'info' | 'debug';
 }
 
 export interface ConfigEnv {
@@ -95,5 +102,6 @@ export function resolveGatewayConfig(
   return {
     ...(appId === undefined || appSecret === undefined ? {} : { credentials: { appId, appSecret } }),
     bridge,
+    logLevel: config.logLevel ?? DEFAULT_LOG_LEVEL,
   };
 }

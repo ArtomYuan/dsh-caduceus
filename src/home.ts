@@ -72,3 +72,8 @@ export function defaultSoulCandidatePaths(env?: HomeEnv): readonly string[] {
 export function defaultAgentsFile(env?: HomeEnv): string {
   return join(agentsHome(env), 'AGENTS.md');
 }
+
+/** Default durable log file: `<DSH_HOME>/caduceus/caduceus.log`. */
+export function defaultLogPath(env?: HomeEnv): string {
+  return join(dshHome(env), 'caduceus', 'caduceus.log');
+}

@@ -20,7 +20,9 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm';
 
 import { planSlashLine, type OwnedCommand } from '../commands/dispatch.js';
 import { helpText } from '../commands/parse.js';
+import { evaluateGate, logGate } from '../gate.js';
 import { silentLogger, type LoggerLike } from '../logger.js';
+import { formatScopeLine } from '../observability.js';
 import { progressCard, statusCard } from '../render/cards.js';
 import { CardStream, systemClock } from '../render/stream.js';
 import type { CardChannel, Clock } from '../render/stream.js';
@@ -158,12 +160,25 @@ export class Bridge {
 
   /** Process one inbound message (serialized per scope). */
   async handleInbound(message: InboundMessage): Promise<void> {
-    if (!this.#allowed(message)) {
-      this.#logger.debug(`ignoring message from non-allowed chat/user (${message.chatId})`);
-      return;
-    }
-    if (!this.#accepts(message)) return;
-    if (message.text.trim().length === 0) return;
+    const decision = evaluateGate({
+      chatType: message.chatType,
+      chatId: message.chatId,
+      ...(message.threadId === undefined ? {} : { threadId: message.threadId }),
+      senderOpenId: message.senderOpenId,
+      text: message.text,
+      ...(message.mentions === undefined ? {} : { mentions: message.mentions }),
+      ...(this.#transport.getBotOpenId?.() === undefined
+        ? {}
+        : { botOpenId: this.#transport.getBotOpenId?.() }),
+      allowedChats: this.#config.allowedChats,
+      allowedUsers: this.#config.allowedUsers,
+    });
+    logGate(this.#logger, decision, {
+      chatId: message.chatId,
+      ...(message.threadId === undefined ? {} : { threadId: message.threadId }),
+      senderOpenId: message.senderOpenId,
+    });
+    if (!decision.accept) return;
     await this.#queue.run(
       scopeKey(
         message.chatType,
@@ -244,13 +259,21 @@ export class Bridge {
 
   async #handleSlash(state: ScopeState, raw: string): Promise<void> {
     const plan = planSlashLine(raw);
+    const trimmed = raw.trim();
     if (plan.kind === 'denied') {
+      this.#logger.info(`command: deny ${trimmed.slice(0, 40)}`);
       await this.#replyText(state, `/${plan.name} 仅 Web 可执行，飞书里不转发。`);
       return;
     }
     if (plan.kind === 'owned') {
+      this.#logger.info(`command: ${trimmed.slice(0, 40)}`);
       await this.#runOwned(state, plan.command);
       return;
+    }
+    if (plan.name.length === 0) {
+      this.#logger.info(`command: parse-fail ${trimmed.slice(0, 40)}`);
+    } else {
+      this.#logger.info(`command: unknown passthrough ${trimmed.slice(0, 40)}`);
     }
 
     const resolved = await this.#tryResolve(state);
@@ -712,6 +735,14 @@ export class Bridge {
   ): Promise<{ agent: AgentLike; sessionId: string; cwd: string } | undefined> {
     try {
       const resolved = await this.#resolveAgent(state);
+      this.#logger.info(
+        formatScopeLine(
+          state.chatType,
+          state.key,
+          resolved.sessionId,
+          this.#config.groupSessionsPerUser,
+        ),
+      );
       await this.#afterAgentReady(state);
       return resolved;
     } catch (error) {
@@ -813,44 +844,6 @@ export class Bridge {
     };
     this.#states.set(key, created);
     return created;
-  }
-
-  /**
-   * Trigger gate (user decision after real-device feedback):
-   * - p2p: no mention needed;
-   * - group chat: ALWAYS requires an @-mention of this bot — including group
-   *   topics, whether or not the scope already has a session.
-   *
-   * The previous "bound topic is exempt" shortcut was removed because two bots
-   * sharing a topic both answered an unmentioned message. A single-person-group
-   * exemption is also intentionally not implemented (chat-membership API cost).
-   */
-  #accepts(message: InboundMessage): boolean {
-    if (message.chatType === 'p2p') return true;
-
-    const mentions = message.mentions ?? [];
-    const botOpenId = this.#transport.getBotOpenId?.();
-    if (typeof botOpenId === 'string' && botOpenId.length > 0) {
-      if (mentions.includes(botOpenId)) return true;
-    } else if (mentions.length > 0) {
-      // bot/v3/info failed: accept any mention rather than dropping every group
-      // message; logged once per message at debug level for diagnosis.
-      this.#logger.debug('bot open id unavailable; accepting group message carrying a mention');
-      return true;
-    }
-
-    this.#logger.debug(
-      `group message without mention ignored (chat ${message.chatId}, thread ${message.threadId ?? '-'})`,
-    );
-    return false;
-  }
-
-  #allowed(message: InboundMessage): boolean {
-    const chats = this.#config.allowedChats;
-    if (chats.length > 0 && !chats.includes(message.chatId)) return false;
-    const users = this.#config.allowedUsers;
-    if (users.length > 0 && !users.includes(message.senderOpenId)) return false;
-    return true;
   }
 
   #makeCardStream(state: ScopeState): CardStream {

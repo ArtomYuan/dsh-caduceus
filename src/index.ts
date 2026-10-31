@@ -19,7 +19,10 @@ import { Bridge } from './bridge/bridge.js';
 import type { AgentLike, AgentsLike, SessionTitleLike } from './bridge/types.js';
 import { runHarnessCommand } from './commands/harness.js';
 import { Config, resolveGatewayConfig, type GatewayConfig } from './config.js';
-import { adaptLogger, type LoggerLike } from './logger.js';
+import { FileLogger } from './file-logger.js';
+import { defaultLogPath } from './home.js';
+import { adaptLogger, teeLoggers, type LoggerLike } from './logger.js';
+import { formatStartupLine } from './observability.js';
 import { runPersonaCommand } from './persona/command.js';
 import { SessionStore } from './session-key.js';
 import { createLarkFeishuApi } from './transport/lark.js';
@@ -93,11 +96,29 @@ function errorText(error: unknown): string {
 
 /** Mount the gateway entry. */
 export function apply(ctx: Context, config: GatewayConfig = {}): void {
-  const logger: LoggerLike = adaptLogger(ctx.logger('caduceus'));
-  logger.info('caduceus-gateway ready');
-
   const resolved = resolveGatewayConfig(config);
-  logger.info(`groupSessionsPerUser=${resolved.bridge.groupSessionsPerUser}`);
+
+  // Visible diagnostics: the file log is written unconditionally (ctx.logger
+  // lines did not reach the journal on the real deployment).
+  const consoleLogger: LoggerLike = adaptLogger(ctx.logger('caduceus'));
+  const fileLogger = new FileLogger({
+    filePath: defaultLogPath(),
+    level: resolved.logLevel,
+  });
+  const logger: LoggerLike = teeLoggers(consoleLogger, fileLogger);
+  logger.info(
+    formatStartupLine({
+      ...(resolved.credentials === undefined ? {} : { appId: resolved.credentials.appId }),
+      // Passed only so the formatter can be tested to never print it.
+      ...(resolved.credentials === undefined
+        ? {}
+        : { appSecret: resolved.credentials.appSecret }),
+      defaultCwd: resolved.bridge.defaultCwd,
+      groupSessionsPerUser: resolved.bridge.groupSessionsPerUser,
+      cardThrottleMs: resolved.bridge.cardThrottleMs,
+      busyMode: resolved.bridge.busyMode,
+    }),
+  );
   if (resolved.credentials === undefined) {
     logger.warn(
       'feishu credentials missing (appId/appSecret or FEISHU_APP_ID/FEISHU_APP_SECRET); long connection not started',

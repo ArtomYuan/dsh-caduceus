@@ -63,6 +63,7 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 | `cardThrottleMs` | `400` | 过程卡片 patch 节流（Feishu 5 QPS 的一半） |
 | `busyMode` | `queue` | 忙时策略：`queue` → followup、`steer` → steer、`interrupt` → cancel+steer |
 | `groupSessionsPerUser` | `true` | 普通群按发送者隔离（Hermes 默认）；`false` 回退整群共享。话题键不受此开关影响；启动日志会打印 `groupSessionsPerUser=<bool>` |
+| `logLevel` | `info` | 文件日志级别：`info`（默认）或 `debug` |
 
 缺凭据时 entry 仍然加载（`caduceus-gateway ready`），但**不会启动长连接**，profile 因此保持可引导。
 
@@ -99,6 +100,19 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 - `turn/end` 的 `reason.kind ∈ {error, interrupted, blocked}` 时再主动推一条消息，无需用户询问。
 - **回复位置**：入站 `thread_id ?? root_id` 归一为话题 id，出站 `reply_in_thread` 回同一话题；230071 / 230072 / 230019 自动降级为 `chat_id` 直发。
 - **重试幂等**：每次发送带 `uuid`，降级/重试复用同一 uuid（飞书侧 1 小时内至多成功一条）。
+
+## 日志（可见诊断）
+
+插件自己的 `ctx.logger` 行在真机上进不了 journal，因此本包**另写一份文件日志**（控制台日志保留）：
+
+- 路径：`$DSH_HOME/caduceus/caduceus.log`（目录自动创建，文件 `0600`）；
+- 行格式：`2026-10-31T21:07:35.123Z INFO  [caduceus] message`；
+- 级别：`info`/`warn`/`error` 默认写出；`debug` 由 `logLevel: 'debug'` 打开；
+- 轮转：单文件超过 5 MB → 重命名为 `.1`，旧文件顺移，最多保留 `.1/.2/.3`；
+- 启动行：`ready appId=cli_xxx…abcd defaultCwd=… groupSessionsPerUser=… throttle=… busyMode=…`（appId 只露前 7 + 后 4 位，**appSecret 任何片段都不打印**）；
+- 门禁每条判定一行：`gate accept: p2p|mentioned …` / `gate drop: no-mention|bot-sender|not-allowed-chat|not-allowed-user|empty-text …`，附 `chat=`/`thread=`/`sender=` 前 12 位；
+- 命令分发：`command: /status`、`command: unknown passthrough /xxx`、`command: parse-fail <原文前 40>`；
+- 会话键：`scope: kind=p2p|topic|group-user|group-shared key=<前 16 位> session=<前 8 位>`。
 
 ## 存储
 
