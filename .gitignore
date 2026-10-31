@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.test-dist/
+*.tsbuildinfo
+coverage/
+*.log
+.DS_Store
+.env
+.env.*
+.pnpm-store/

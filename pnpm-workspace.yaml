@@ -1,0 +1,8 @@
+# The dsh runtime supplies the @deepseek-ai/* peers (it resolves plugins against
+# its own installation), so never auto-install them here: doing so would fetch a
+# second copy of dsh into this package's node_modules.
+packages:
+  - .
+
+autoInstallPeers: false
+strictPeerDependencies: false
