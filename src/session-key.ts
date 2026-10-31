@@ -1,46 +1,76 @@
 /**
  * Chat/topic ↔ session mapping for the Feishu surface (design doc §8).
  *
- * One Feishu topic is one dsh session: the scope key is
- * `chatId + "\u0000" + threadId`, with a plain `chatId` for chats without a
- * topic. The mapping persists as `<DSH_HOME>/caduceus/session-map.json` in
- * format **v3**:
+ * The scope key follows Hermes' `build_session_key` three-way rule
+ * (`gateway/session.py`), so ordinary group chats are isolated per user:
+ *
+ * | chat kind | scope key |
+ * |:--|:--|
+ * | p2p (DM) | `chatId` (chat_id; falls back to the sender when absent) |
+ * | group topic (thread) | `chatId + "\u0000" + threadId` — shared by everyone |
+ * | ordinary group (no thread) | `chatId + "\u0000" + senderOpenId` — per user |
+ *
+ * The mapping persists as `<DSH_HOME>/caduceus/session-map.json` in format
+ * **v4** (same `{version, entries, cwd}` shape as v3):
  *
  * ```json
  * {
- *   "version": 3,
- *   "entries": { "oc_x\u0000omt_y": { "sessionId": "feishu-1793313252045" } },
- *   "cwd": { "oc_x\u0000omt_y": "/home/artom/.dsh/workspace" }
+ *   "version": 4,
+ *   "entries": { "oc_x\u0000ou_user": { "sessionId": "feishu-1793313252045" } },
+ *   "cwd": { "oc_x\u0000ou_user": "/home/artom/.dsh/workspace" }
  * }
  * ```
  *
- * Older maps still load: v2 is a flat `{ "<scope key>": "feishu-<ts>" }` object
- * and v1 nests those strings under `sessions`. Migrated keys are preserved
- * verbatim as-is (no key rewriting, no bulk re-key); the next persist writes v3.
- * Loading never writes: a read must not rewrite the user's file.
+ * Older maps still load: v3 (`entries` object; its keys are preserved verbatim
+ * as legacy shared sessions and are NOT bulk re-keyed), v2 is a flat
+ * `{ "<scope key>": "feishu-<ts>" }` object, and v1 nests those strings under
+ * `sessions`. Loading never writes; the next persist writes v4.
  *
  * @module @artomyuan/dsh-caduceus/session-key
  */
 import { readFileSync } from 'node:fs';
 import { writeFileAtomicSync } from './atomic-write.js';
 import { defaultSessionMapPath, type HomeEnv } from './home.js';
+import type { ChatType } from './transport/types.js';
 
 /** Current on-disk format. */
-export const SESSION_MAP_VERSION = 3;
+export const SESSION_MAP_VERSION = 4;
 
-/** Separator between chat id and thread id inside a scope key (NUL byte). */
+/** Separator between the chat id and the disambiguator inside a scope key (NUL). */
 export const SCOPE_KEY_SEPARATOR = '\u0000';
 
 /**
- * The scope key for a chat, optionally disambiguated by a topic/thread.
+ * The Hermes-compatible scope key.
+ *
+ * @param chatType - `p2p` (DM) or `group`.
  * @param chatId - Feishu chat id (`oc_…`).
- * @param threadId - Feishu thread id (`omt_…`); empty/null means "no topic".
- * @returns `chatId` alone, or `chatId + "\u0000" + threadId`.
+ * @param threadId - Feishu thread id (`omt_…`) for group topics; empty/null
+ *   means "no topic".
+ * @param senderOpenId - the sender's app-scoped open id (`ou_…`), needed to
+ *   isolate ordinary group chats per user.
+ * @returns the scope key (see the module table).
  */
-export function scopeKey(chatId: string, threadId?: string | null): string {
+export function scopeKey(
+  chatType: ChatType,
+  chatId: string,
+  threadId: string | null | undefined,
+  senderOpenId: string,
+): string {
+  if (chatType === 'p2p') {
+    // Hermes DMs are keyed by chat_id; fall back to the sender when absent.
+    const id = chatId.length > 0 ? chatId : senderOpenId;
+    if (id.length === 0) throw new TypeError('scopeKey: p2p needs chatId or senderOpenId');
+    return id;
+  }
   if (chatId.length === 0) throw new TypeError('scopeKey: chatId must be a non-empty string');
-  return threadId !== undefined && threadId !== null && threadId.length > 0
-    ? `${chatId}${SCOPE_KEY_SEPARATOR}${threadId}`
+  if (threadId !== undefined && threadId !== null && threadId.length > 0) {
+    // Topic sessions are shared by everyone in the thread (Hermes default).
+    return `${chatId}${SCOPE_KEY_SEPARATOR}${threadId}`;
+  }
+  // Ordinary group chats are per-user (Hermes group_sessions_per_user default).
+  // An empty sender degrades to a shared session instead of an odd trailing NUL.
+  return senderOpenId.length > 0
+    ? `${chatId}${SCOPE_KEY_SEPARATOR}${senderOpenId}`
     : chatId;
 }
 
@@ -59,13 +89,13 @@ export function mintSessionId(): string {
   return `feishu-${lastMintedAt}`;
 }
 
-/** One mapping entry in v3. */
+/** One mapping entry. */
 export interface SessionEntry {
   readonly sessionId: string;
 }
 
-/** The v3 on-disk document. */
-export interface SessionMapV3 {
+/** The v4 on-disk document (same shape as v3). */
+export interface SessionMapV4 {
   readonly version: typeof SESSION_MAP_VERSION;
   readonly entries: Record<string, SessionEntry>;
   readonly cwd: Record<string, string>;
@@ -169,7 +199,11 @@ export class SessionStore {
 
     const version = parsed['version'];
     if (version === SESSION_MAP_VERSION) {
-      this.loadV3(parsed);
+      this.loadV4(parsed);
+    } else if (version === 3) {
+      // Legacy v3 map: keys are old shared-session scopes. Preserve them
+      // verbatim (no bulk re-key); the next persist writes v4.
+      this.loadV4(parsed);
     } else if (version === 1) {
       this.loadV1(parsed);
     } else if (version === 2) {
@@ -264,8 +298,8 @@ export class SessionStore {
     return deleted;
   }
 
-  /** A plain v3 snapshot, suitable for JSON serialization in tests and logs. */
-  snapshot(): SessionMapV3 {
+  /** A plain v4 snapshot, suitable for JSON serialization in tests and logs. */
+  snapshot(): SessionMapV4 {
     this.requireLoaded();
     const entries: Record<string, SessionEntry> = {};
     for (const [key, sessionId] of this.entries) entries[key] = { sessionId };
@@ -274,7 +308,7 @@ export class SessionStore {
     return { version: SESSION_MAP_VERSION, entries, cwd };
   }
 
-  /** Atomically write the current map as v3 (temp file beside the target, then rename). */
+  /** Atomically write the current map as v4 (temp file beside the target, then rename). */
   persist(): void {
     this.requireLoaded();
     writeFileAtomicSync(this.filePath, `${JSON.stringify(this.snapshot(), null, 2)}\n`);
@@ -305,16 +339,16 @@ export class SessionStore {
     this.loadCwdTable(document, ['cwd', 'cwds']);
   }
 
-  private loadV3(document: Record<string, unknown>): void {
+  private loadV4(document: Record<string, unknown>): void {
     const entries = document['entries'];
     if (isRecord(entries)) {
       for (const [key, value] of Object.entries(entries)) {
         const sessionId = sessionIdOf(value);
-        if (sessionId === undefined) this.warn(`session map ${this.filePath}: v3 entry ${JSON.stringify(key)} has no sessionId; skipped`);
+        if (sessionId === undefined) this.warn(`session map ${this.filePath}: v3/v4 entry ${JSON.stringify(key)} has no sessionId; skipped`);
         else this.entries.set(key, sessionId);
       }
     } else {
-      this.warn(`session map ${this.filePath}: v3 document has no entries object; starting with an empty map`);
+      this.warn(`session map ${this.filePath}: v3/v4 document has no entries object; starting with an empty map`);
     }
     this.loadCwdTable(document, ['cwd']);
   }

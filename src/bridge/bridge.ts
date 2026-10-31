@@ -163,8 +163,9 @@ export class Bridge {
     }
     if (!this.#accepts(message)) return;
     if (message.text.trim().length === 0) return;
-    await this.#queue.run(scopeKey(message.chatId, message.threadId), () =>
-      this.#processInbound(message),
+    await this.#queue.run(
+      scopeKey(message.chatType, message.chatId, message.threadId, message.senderOpenId),
+      () => this.#processInbound(message),
     );
   }
 
@@ -661,7 +662,7 @@ export class Bridge {
   }
 
   #stateFor(message: InboundMessage): ScopeState {
-    const key = scopeKey(message.chatId, message.threadId);
+    const key = scopeKey(message.chatType, message.chatId, message.threadId, message.senderOpenId);
     const existing = this.#states.get(key);
     if (existing !== undefined) return existing;
     const created: ScopeState = {

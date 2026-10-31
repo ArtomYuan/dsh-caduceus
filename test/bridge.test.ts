@@ -7,7 +7,7 @@
  * a `mkdtemp` directory and is deleted afterwards.
  */
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
@@ -15,7 +15,7 @@ import test, { type TestContext } from 'node:test';
 import { Bridge } from '../src/bridge/bridge.js';
 import type { AgentLike, BridgeConfig, BusyMode } from '../src/bridge/types.js';
 import type { HarnessCommandResult } from '../src/commands/harness.js';
-import { scopeKey, SessionStore } from '../src/session-key.js';
+import { scopeKey, SESSION_MAP_VERSION, SessionStore } from '../src/session-key.js';
 import type { StatusEventLike } from '../src/status.js';
 import type { FeishuCard, InboundMessage } from '../src/transport/types.js';
 import {
@@ -50,6 +50,8 @@ interface HarnessOptions {
   readonly botOpenId?: string;
   /** Pre-bind the group topic `omt_t` so the topic @-exemption applies. */
   readonly prebindTopic?: boolean;
+  /** Seed a legacy v3 session-map before the bridge loads it. */
+  readonly seedMap?: Readonly<Record<string, string>>;
 }
 
 interface Harness {
@@ -67,8 +69,22 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-caduceus-bridge-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   let storeSeq = 0;
+  const mapPath = join(dir, 'session-map.json');
+  if (options.seedMap !== undefined) {
+    writeFileSync(
+      mapPath,
+      JSON.stringify({
+        version: 3,
+        entries: Object.fromEntries(
+          Object.entries(options.seedMap).map(([key, sessionId]) => [key, { sessionId }]),
+        ),
+        cwd: {},
+      }),
+      'utf8',
+    );
+  }
   const store = new SessionStore({
-    filePath: join(dir, 'session-map.json'),
+    filePath: mapPath,
     mint: () => {
       storeSeq += 1;
       return `feishu-store-${storeSeq}`;
@@ -91,7 +107,7 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
     busyMode: options.busyMode ?? 'queue',
   };
   if (options.prebindTopic === true) {
-    store.set(scopeKey('oc_chat', 'omt_t'), 'feishu-prebound-1');
+    store.set(scopeKey('group', 'oc_chat', 'omt_t', 'ou_user'), 'feishu-prebound-1');
   }
   let bridgeSeq = 0;
   const bridge = new Bridge({
@@ -148,14 +164,18 @@ test('同键串行：第一条未完成前，第二条不会进入 agent', async
 });
 
 test('异键并行：不同话题并行创建会话，互不等待', async (t) => {
-  const h = makeHarness(t);
+  const h = makeHarness(t, { botOpenId: 'ou_bot' });
   let release!: () => void;
   h.agents.createGate = new Promise<void>((resolve) => {
     release = resolve;
   });
 
-  const first = h.bridge.handleInbound(inbound('A', { threadId: 'omt_a' }));
-  const second = h.bridge.handleInbound(inbound('B', { threadId: 'omt_b' }));
+  const first = h.bridge.handleInbound(
+    inbound('A', { chatType: 'group', threadId: 'omt_a', mentions: ['ou_bot'] }),
+  );
+  const second = h.bridge.handleInbound(
+    inbound('B', { chatType: 'group', threadId: 'omt_b', mentions: ['ou_bot'] }),
+  );
   await tick();
   assert.equal(h.agents.created.length, 2, 'both scopes must start in parallel');
   release();
@@ -307,7 +327,7 @@ test('/stop 调 agent.cancel({kind:user})', async (t) => {
 test('/new 铸新会话，/resume 恢复上一会话', async (t) => {
   const h = makeHarness(t);
   await h.bridge.handleInbound(inbound('第一轮'));
-  const key = scopeKey('oc_chat');
+  const key = scopeKey('p2p', 'oc_chat', null, 'ou_user');
   const firstSession = h.store.get(key);
   assert.ok(firstSession !== undefined);
 
@@ -392,7 +412,7 @@ test('允许列表：不在允许 chat 的消息被忽略', async (t) => {
 test('resume 失败时重铸新 session，不让聊天永久卡死', async (t) => {
   const h = makeHarness(t);
   await h.bridge.handleInbound(inbound('第一轮'));
-  const key = scopeKey('oc_chat');
+  const key = scopeKey('p2p', 'oc_chat', null, 'ou_user');
   const firstSession = h.store.get(key) as string;
 
   // Force the mapped session to look stale: drop the live agent and fail resume.
@@ -674,7 +694,7 @@ test('终稿无标题：没有 `▸` 首行，也不出现「未命名」', asyn
 });
 
 test('/sessions 多会话：当前行标记、相对时间排序、只列本 scopeKey', async (t) => {
-  const h = makeHarness(t);
+  const h = makeHarness(t, { botOpenId: 'ou_bot' });
   await h.bridge.handleInbound(inbound('A'));
   const agentA = liveAgent(h);
   await h.bridge.handleSessionEvent(agentA.session, event('turn/start', { turn: 1 }, 0));
@@ -682,16 +702,18 @@ test('/sessions 多会话：当前行标记、相对时间排序、只列本 sco
   h.clock.advance(5 * 60 * 1000);
 
   // A session in another scope must never leak into this list.
-  await h.bridge.handleInbound(inbound('别的话题', { threadId: 'omt_other' }));
+  await h.bridge.handleInbound(
+    inbound('别的话题', { chatType: 'group', threadId: 'omt_other', mentions: ['ou_bot'] }),
+  );
   const otherAgent = [...h.agents.live.values()].find(
-    (agent) => agent !== agentA && String(agent.session.id) !== String(h.store.get(scopeKey('oc_chat'))),
+    (agent) => String(agent.session.id) !== String(agentA.session.id),
   );
   assert.ok(otherAgent !== undefined);
   h.titles.titles.set(String(otherAgent.session.id), '别的话题标题');
 
   await h.bridge.handleInbound(inbound('/new'));
   await h.bridge.handleInbound(inbound('B'));
-  const currentSessionId = h.store.get(scopeKey('oc_chat')) as string;
+  const currentSessionId = h.store.get(scopeKey('p2p', 'oc_chat', null, 'ou_user')) as string;
   const agentB = h.agents.live.get(currentSessionId);
   assert.ok(agentB !== undefined);
   await h.bridge.handleSessionEvent(
@@ -715,4 +737,85 @@ test('/sessions 多会话：当前行标记、相对时间排序、只列本 sco
   assert.match(previousLine, /^▸ 标题一 · 5 分钟前 · [a-z0-9-]{8}$/);
   assert.ok(!text.includes('别的话题标题'), 'cross-scope session must not be listed');
   assert.equal(lines.at(-1), '用 /rename <标题> 改当前会话名');
+});
+
+test('Hermes 键：私聊同 chat 两个 sender → 同键、同一会话', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('A 用户', { chatType: 'p2p', senderOpenId: 'ou_a' }));
+  await h.bridge.handleInbound(inbound('B 用户', { chatType: 'p2p', senderOpenId: 'ou_b' }));
+  assert.equal(h.store.keys().length, 1);
+  assert.equal(h.agents.created.length, 1);
+  assert.equal(liveAgent(h).followups.length, 2);
+});
+
+test('Hermes 键：普通群两个 sender → 不同键、不同 sessionId（按人隔离）', async (t) => {
+  const h = makeHarness(t, { botOpenId: 'ou_bot' });
+  await h.bridge.handleInbound(
+    inbound('A 说', { chatType: 'group', senderOpenId: 'ou_a', mentions: ['ou_bot'] }),
+  );
+  await h.bridge.handleInbound(
+    inbound('B 说', { chatType: 'group', senderOpenId: 'ou_b', mentions: ['ou_bot'] }),
+  );
+  const keyA = scopeKey('group', 'oc_chat', null, 'ou_a');
+  const keyB = scopeKey('group', 'oc_chat', null, 'ou_b');
+  assert.notEqual(keyA, keyB);
+  assert.deepEqual(h.store.keys().sort(), [keyA, keyB].sort());
+  const sessionA = h.store.get(keyA);
+  const sessionB = h.store.get(keyB);
+  assert.ok(sessionA !== undefined && sessionB !== undefined);
+  assert.notEqual(sessionA, sessionB);
+  assert.equal(h.agents.created.length, 2);
+  assert.equal(h.agents.live.get(sessionA)?.followups.length, 1);
+  assert.equal(h.agents.live.get(sessionB)?.followups.length, 1);
+});
+
+test('Hermes 键：群内话题两个 sender → 同键、共享同一会话', async (t) => {
+  const h = makeHarness(t, { botOpenId: 'ou_bot' });
+  await h.bridge.handleInbound(
+    inbound('A 在话题里说', {
+      chatType: 'group',
+      threadId: 'omt_t',
+      senderOpenId: 'ou_a',
+      mentions: ['ou_bot'],
+    }),
+  );
+  await h.bridge.handleInbound(
+    inbound('B 在话题里说', {
+      chatType: 'group',
+      threadId: 'omt_t',
+      senderOpenId: 'ou_b',
+      mentions: ['ou_bot'],
+    }),
+  );
+  const topicKey = scopeKey('group', 'oc_chat', 'omt_t', 'ou_a');
+  assert.equal(topicKey, scopeKey('group', 'oc_chat', 'omt_t', 'ou_b'));
+  assert.deepEqual(h.store.keys(), [topicKey]);
+  assert.equal(h.agents.created.length, 1);
+  assert.equal(liveAgent(h).followups.length, 2);
+});
+
+test('v3 旧共享条目原样保留，新消息落 per-user 新键（v4）', async (t) => {
+  const legacyKey = 'oc_chat\u0000omt_legacy';
+  const h = makeHarness(t, {
+    botOpenId: 'ou_bot',
+    seedMap: { [legacyKey]: 'feishu-legacy-shared' },
+  });
+  assert.equal(h.store.get(legacyKey), 'feishu-legacy-shared');
+
+  await h.bridge.handleInbound(
+    inbound('群里说话', { chatType: 'group', senderOpenId: 'ou_a', mentions: ['ou_bot'] }),
+  );
+  const newKey = scopeKey('group', 'oc_chat', null, 'ou_a');
+  const newSession = h.store.get(newKey);
+  assert.ok(newSession !== undefined);
+  assert.notEqual(newSession, 'feishu-legacy-shared');
+  assert.equal(h.store.get(legacyKey), 'feishu-legacy-shared', 'legacy key must not be rewritten');
+
+  const persisted = JSON.parse(readFileSync(join(h.dir, 'session-map.json'), 'utf8')) as {
+    version: number;
+    entries: Record<string, { sessionId: string }>;
+  };
+  assert.equal(persisted.version, SESSION_MAP_VERSION);
+  assert.deepEqual(persisted.entries[legacyKey], { sessionId: 'feishu-legacy-shared' });
+  assert.deepEqual(persisted.entries[newKey], { sessionId: newSession });
 });

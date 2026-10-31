@@ -29,11 +29,17 @@ const dir = await mkdtemp(join(tmpdir(), 'dsh-caduceus-smoke-'));
 try {
   // 1. Scope keys: two topics of one chat are two distinct keys; a chat without
   //    a topic falls back to the plain chat id.
-  const topicA = scopeKey('oc_smoke', 'omt_a');
-  const topicB = scopeKey('oc_smoke', 'omt_b');
+  // Hermes three-way key: p2p by chat, ordinary group per sender, topic shared.
+  const groupKeyA = scopeKey('group', 'oc_smoke', null, 'ou_a');
+  const groupKeyB = scopeKey('group', 'oc_smoke', null, 'ou_b');
+  const topicA = scopeKey('group', 'oc_smoke', 'omt_a', 'ou_a');
+  const topicB = scopeKey('group', 'oc_smoke', 'omt_b', 'ou_a');
+  assert.equal(scopeKey('p2p', 'oc_smoke', null, 'ou_a'), 'oc_smoke');
+  assert.equal(groupKeyA, `oc_smoke${SCOPE_KEY_SEPARATOR}ou_a`);
+  assert.notEqual(groupKeyA, groupKeyB);
   assert.equal(topicA, `oc_smoke${SCOPE_KEY_SEPARATOR}omt_a`);
   assert.notEqual(topicA, topicB);
-  assert.equal(scopeKey('oc_smoke'), 'oc_smoke');
+  assert.equal(topicA, scopeKey('group', 'oc_smoke', 'omt_a', 'ou_b'));
 
   // 2. Command classification: eight owned commands, everything else passes
   //    through with the original bytes.
@@ -306,7 +312,7 @@ try {
   );
 
   console.log(
-    'smoke ok: scopeKey / parseCommand / truncate / SessionStore v3 / persona / transport(thread+fallback) / status / cards / bridge-final',
+    'smoke ok: scopeKey / parseCommand / truncate / SessionStore v4 / persona / transport(thread+fallback) / status / cards / bridge-final',
   );
 } finally {
   await rm(dir, { recursive: true, force: true });

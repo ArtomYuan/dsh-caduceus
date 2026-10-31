@@ -101,18 +101,21 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 
 ## 存储
 
-`$DSH_HOME/caduceus/session-map.json`，当前 **version 3**：
+`$DSH_HOME/caduceus/session-map.json`，当前 **version 4**：
 
 ```json
 {
-  "version": 3,
-  "entries": { "oc_xxx\u0000omt_yyy": { "sessionId": "feishu-1793313252045" } },
-  "cwd": { "oc_xxx\u0000omt_yyy": "/home/artom/agent-workspace" }
+  "version": 4,
+  "entries": { "oc_xxx\u0000ou_user": { "sessionId": "feishu-1793313252045" } },
+  "cwd": { "oc_xxx\u0000ou_user": "/home/artom/agent-workspace" }
 }
 ```
 
-- 键：`scopeKey = chatId + "\u0000" + threadId`；无话题时回落为 `chatId`。
-- 旧格式可读：v2 是扁平 `{ "<scope key>": "feishu-<ts>" }`，v1 把这些字符串放在 `sessions` 下。**旧键原样保留、不批量改写**，下一次落盘才写成 v3。
+- 键：与 Hermes `build_session_key` 一致的三分规则：
+  - p2p：`chatId`（无 chatId 回落 sender）；
+  - 普通群（无话题）：`chatId + "\u0000" + sender_open_id`（**按人隔离**，与 Hermes `group_sessions_per_user` 默认一致）；
+  - 群内话题：`chatId + "\u0000" + threadId`（多人共享，与 Hermes `thread_sessions_per_user` 默认一致）。
+- 旧格式可读：v4 为当前格式；v3 是 `entries` 对象（老键**原样保留**为旧共享会话，**不批量改写**）；v2 是扁平 `{ "<scope key>": "feishu-<ts>" }`；v1 把这些字符串放在 `sessions` 下。下一次落盘写成 v4。
 - 写入是原子的：先写同目录 `.tmp`，再 `rename` 覆盖；权限 `0600`。
 - 标题不落此表：唯一来源是 dsh 的 `sessionTitle.get(session)`。
 

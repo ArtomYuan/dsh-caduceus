@@ -34,24 +34,34 @@ function readJson(filePath: string): Record<string, unknown> {
   return JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
 }
 
-test('scopeKey: 同群两个话题 → 两个不同的键，含 NUL 分隔符', () => {
-  const topicA = scopeKey('oc_x', 'omt_a');
-  const topicB = scopeKey('oc_x', 'omt_b');
-  assert.equal(topicA, `oc_x${SCOPE_KEY_SEPARATOR}omt_a`);
-  assert.equal(topicB, `oc_x${SCOPE_KEY_SEPARATOR}omt_b`);
-  assert.notEqual(topicA, topicB);
-  assert.equal(topicA.split(SCOPE_KEY_SEPARATOR).length, 2);
+test('scopeKey: p2p 按 chatId（无 chatId 回落 sender）', () => {
+  assert.equal(scopeKey('p2p', 'oc_dm', null, 'ou_a'), 'oc_dm');
+  assert.equal(scopeKey('p2p', 'oc_dm', null, 'ou_b'), 'oc_dm');
+  assert.equal(scopeKey('p2p', '', null, 'ou_a'), 'ou_a');
+  assert.throws(() => scopeKey('p2p', '', null, ''), TypeError);
 });
 
-test('scopeKey: 无话题回落到 chatId；空/ null/ undefined thread 同样回落', () => {
-  assert.equal(scopeKey('oc_x'), 'oc_x');
-  assert.equal(scopeKey('oc_x', null), 'oc_x');
-  assert.equal(scopeKey('oc_x', undefined), 'oc_x');
-  assert.equal(scopeKey('oc_x', ''), 'oc_x');
+test('scopeKey: 普通群按 chatId + sender_open_id 隔离（同群两人不同键）', () => {
+  const userA = scopeKey('group', 'oc_g', null, 'ou_a');
+  const userB = scopeKey('group', 'oc_g', null, 'ou_b');
+  assert.equal(userA, `oc_g${SCOPE_KEY_SEPARATOR}ou_a`);
+  assert.equal(userB, `oc_g${SCOPE_KEY_SEPARATOR}ou_b`);
+  assert.notEqual(userA, userB);
+  assert.equal(scopeKey('group', 'oc_g', undefined, 'ou_a'), userA);
+  assert.equal(scopeKey('group', 'oc_g', '', 'ou_a'), userA);
 });
 
-test('scopeKey: 空 chatId 直接抛错', () => {
-  assert.throws(() => scopeKey(''), TypeError);
+test('scopeKey: 群内话题按 chatId + threadId，多人共享（忽略 sender）', () => {
+  const userA = scopeKey('group', 'oc_g', 'omt_t', 'ou_a');
+  const userB = scopeKey('group', 'oc_g', 'omt_t', 'ou_b');
+  assert.equal(userA, `oc_g${SCOPE_KEY_SEPARATOR}omt_t`);
+  assert.equal(userA, userB);
+  assert.notEqual(userA, scopeKey('group', 'oc_g', null, 'ou_a'));
+});
+
+test('scopeKey: 普通群空 sender 退化为 chatId；空 chatId 抛错', () => {
+  assert.equal(scopeKey('group', 'oc_g', null, ''), 'oc_g');
+  assert.throws(() => scopeKey('group', '', null, 'ou_a'), TypeError);
 });
 
 test('默认路径只依赖注入的 env，不读真实 ~/.dsh', () => {
@@ -73,7 +83,7 @@ test('mintSessionId: 形如 feishu-<epoch-ms> 且进程内单调不重复', () =
 test('SessionStore: 同话题两次 ensure 同一 sessionId，重启后仍然一致', (t) => {
   const dir = makeDir(t);
   const filePath = join(dir, 'caduceus', 'session-map.json');
-  const key = scopeKey('oc_x', 'omt_a');
+  const key = scopeKey('group', 'oc_x', 'omt_a', 'ou_a');
 
   const first = new SessionStore({ filePath, mint: counterMinter() });
   first.load();
@@ -91,12 +101,15 @@ test('SessionStore: 同群两话题 → 两个 sessionId', (t) => {
   const filePath = join(dir, 'session-map.json');
   const store = new SessionStore({ filePath, mint: counterMinter() });
   store.load();
-  const topicA = store.ensure(scopeKey('oc_x', 'omt_a'));
-  const topicB = store.ensure(scopeKey('oc_x', 'omt_b'));
-  const plain = store.ensure('oc_x');
+  const userA = store.ensure(scopeKey('group', 'oc_x', null, 'ou_a'));
+  const userB = store.ensure(scopeKey('group', 'oc_x', null, 'ou_b'));
+  const topicA = store.ensure(scopeKey('group', 'oc_x', 'omt_a', 'ou_a'));
+  const topicB = store.ensure(scopeKey('group', 'oc_x', 'omt_b', 'ou_a'));
+  assert.notEqual(userA, userB);
   assert.notEqual(topicA, topicB);
-  assert.notEqual(topicA, plain);
-  assert.equal(new Set([topicA, topicB, plain]).size, 3);
+  assert.equal(new Set([userA, userB, topicA, topicB]).size, 4);
+  // Topic keys are shared by everyone (sender ignored).
+  assert.equal(store.ensure(scopeKey('group', 'oc_x', 'omt_a', 'ou_b')), topicA);
 });
 
 test('SessionStore: 原子写 —— 先写 .tmp 再 rename，落盘后无残留且权限 0600', (t) => {
@@ -140,6 +153,42 @@ test('SessionStore: v2 扁平映射 → 原样保留旧键，load 不改写，pe
   assert.deepEqual(entries['oc_plain'], { sessionId: 'feishu-1793313252000' });
   assert.deepEqual(entries['oc_new'], { sessionId: 'feishu-3' });
   assert.deepEqual(upgraded['cwd'], {});
+});
+
+test('SessionStore: v3 旧条目原样保留，load 不改写，新键落 v4 且不批量改写', (t) => {
+  const dir = makeDir(t);
+  const filePath = join(dir, 'session-map.json');
+  const legacyTopicKey = `oc_x${SCOPE_KEY_SEPARATOR}omt_y`;
+  const legacy = {
+    version: 3,
+    entries: {
+      [legacyTopicKey]: { sessionId: 'feishu-old-topic' },
+      oc_legacy_shared: { sessionId: 'feishu-old-shared' },
+    },
+    cwd: { oc_legacy_shared: '/home/artom/agent-workspace' },
+  };
+  writeFileSync(filePath, JSON.stringify(legacy), 'utf8');
+
+  const store = new SessionStore({ filePath, mint: counterMinter() });
+  store.load();
+  assert.deepEqual(store.warnings, []);
+  assert.equal(store.get(legacyTopicKey), 'feishu-old-topic');
+  assert.equal(store.get('oc_legacy_shared'), 'feishu-old-shared');
+
+  // load() must not rewrite the legacy v3 file.
+  assert.deepEqual(readJson(filePath), legacy);
+
+  // A new (per-user ordinary group) key is added and persisted without touching
+  // the legacy keys; the document is upgraded to v4.
+  const newKey = scopeKey('group', 'oc_x', null, 'ou_new');
+  store.set(newKey, 'feishu-new');
+  const persisted = readJson(filePath);
+  assert.equal(persisted['version'], SESSION_MAP_VERSION);
+  const entries = persisted['entries'] as Record<string, { sessionId: string }>;
+  assert.deepEqual(entries[legacyTopicKey], { sessionId: 'feishu-old-topic' });
+  assert.deepEqual(entries['oc_legacy_shared'], { sessionId: 'feishu-old-shared' });
+  assert.deepEqual(entries[newKey], { sessionId: 'feishu-new' });
+  assert.deepEqual(persisted['cwd'], { oc_legacy_shared: '/home/artom/agent-workspace' });
 });
 
 test('SessionStore: 带 version:2 的旧文件同样迁移', (t) => {
@@ -194,8 +243,8 @@ test('SessionStore: 文件缺失 → 空表启动，ensure 铸出默认格式 id
   store.load();
   assert.equal(store.size, 0);
   assert.deepEqual(store.warnings, []);
-  const first = store.ensure(scopeKey('oc_x', 'omt_a'));
-  const second = store.ensure(scopeKey('oc_x', 'omt_b'));
+  const first = store.ensure(scopeKey('group', 'oc_x', 'omt_a', 'ou_a'));
+  const second = store.ensure(scopeKey('group', 'oc_x', 'omt_b', 'ou_a'));
   assert.match(first, /^feishu-\d+$/);
   assert.notEqual(first, second);
   assert.equal(readJson(filePath)['version'], SESSION_MAP_VERSION);
@@ -204,7 +253,7 @@ test('SessionStore: 文件缺失 → 空表启动，ensure 铸出默认格式 id
 test('SessionStore: cwd 独立成表，与 entries 互不影响', (t) => {
   const dir = makeDir(t);
   const filePath = join(dir, 'session-map.json');
-  const key = scopeKey('oc_x', 'omt_a');
+  const key = scopeKey('group', 'oc_x', 'omt_a', 'ou_a');
   const store = new SessionStore({ filePath, mint: counterMinter() });
   store.load();
   store.setCwd(key, '/home/artom/agent-workspace');
