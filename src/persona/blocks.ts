@@ -15,13 +15,17 @@
  *   it never throws (a broken persona must not take the service down).
  *
  * The default target is `$DSH_AGENTS_HOME/AGENTS.md` (`~/.agents/AGENTS.md` by
- * default) and the default source is `$DSH_HOME/SOUL.md`.
+ * default). The default source is tried in order: `$DSH_HOME/SOUL.md`, then
+ * `$DSH_AGENTS_HOME/SOUL.md` (normally `~/.agents/SOUL.md`). When no candidate
+ * exists the sync is a no-op: status `missing`, one info log line
+ * `persona source missing`, and neither file is created or modified.
  *
  * @module @artomyuan/dsh-caduceus/persona/blocks
  */
 import { readFile } from 'node:fs/promises';
 import { writeFileAtomic } from '../atomic-write.js';
-import { defaultAgentsFile, defaultSoulPath, type HomeEnv } from '../home.js';
+import { defaultAgentsFile, defaultSoulCandidatePaths, type HomeEnv } from '../home.js';
+import { silentLogger, type LoggerLike } from '../logger.js';
 
 /** Opening marker, matched literally. */
 export const SOUL_START_MARKER = '<!-- dsh-caduceus:soul:start -->';
@@ -52,12 +56,17 @@ export type SoulUpsertResult =
   | { readonly status: 'invalid-soul'; readonly reason: string };
 
 export interface SoulPaths {
-  /** SOUL source file; defaults to `<DSH_HOME>/SOUL.md`. */
+  /**
+   * Explicit SOUL source file. When omitted, the default candidates are tried
+   * in order: `<DSH_HOME>/SOUL.md` then `<DSH_AGENTS_HOME>/SOUL.md`.
+   */
   readonly soulFile?: string;
   /** AGENTS.md target file; defaults to `<DSH_AGENTS_HOME>/AGENTS.md`. */
   readonly agentsFile?: string;
   /** Environment used only to resolve default paths. */
   readonly env?: HomeEnv;
+  /** Optional logger for the one-line "persona source missing" info record. */
+  readonly logger?: LoggerLike;
 }
 
 /** Sync outcome, as reported to `/persona sync` and by tests. */
@@ -74,6 +83,8 @@ export interface SoulSyncResult {
   readonly warnings: readonly string[];
   /** Human-readable detail for `missing` / `malformed` / `invalid`. */
   readonly reason?: string;
+  /** Candidate source paths that were tried, in order (diagnostics/tests). */
+  readonly tried?: readonly string[];
 }
 
 /** Read outcome for `/persona show`. */
@@ -193,21 +204,53 @@ export function upsertSoulBlock(existing: string, soul: string): SoulUpsertResul
  * maps to `invalid`. A missing target file is created.
  */
 export async function syncSoul(paths: SoulPaths = {}): Promise<SoulSyncResult> {
-  const soulFile = paths.soulFile ?? defaultSoulPath(paths.env);
   const agentsFile = paths.agentsFile ?? defaultAgentsFile(paths.env);
-  const base = { soulFile, agentsFile, soulBytes: 0, agentsBytes: 0 } as const;
+  const candidates =
+    paths.soulFile === undefined ? defaultSoulCandidatePaths(paths.env) : [paths.soulFile];
+  const tried: string[] = [];
+  let soulFile: string = candidates[0] as string;
+  let soulText: string | undefined;
 
-  let soulText: string;
-  try {
-    soulText = await readFile(soulFile, 'utf8');
-  } catch (error) {
+  for (const candidate of candidates) {
+    tried.push(candidate);
+    try {
+      soulText = await readFile(candidate, 'utf8');
+      soulFile = candidate;
+      break;
+    } catch (error) {
+      if (!isNotFound(error)) {
+        return {
+          status: 'missing',
+          soulFile: candidate,
+          agentsFile,
+          soulBytes: 0,
+          agentsBytes: 0,
+          warnings: [],
+          reason: `soul source unavailable (${candidate}): ${errorMessage(error)}`,
+          tried,
+        };
+      }
+      // Not found: fall through to the next candidate.
+    }
+  }
+
+  if (soulText === undefined) {
+    (paths.logger ?? silentLogger()).info(
+      `persona source missing (tried ${tried.join(', ')})`,
+    );
     return {
-      ...base,
       status: 'missing',
+      soulFile,
+      agentsFile,
+      soulBytes: 0,
+      agentsBytes: 0,
       warnings: [],
-      reason: `soul source unavailable (${soulFile}): ${errorMessage(error)}`,
+      reason: `soul source unavailable; tried ${tried.join(', ')}`,
+      tried,
     };
   }
+
+  const base = { soulFile, agentsFile, soulBytes: 0, agentsBytes: 0, tried } as const;
 
   let exists = true;
   let existing = '';
@@ -269,16 +312,25 @@ export async function syncSoul(paths: SoulPaths = {}): Promise<SoulSyncResult> {
  * a missing AGENTS.md reports `missing`, an absent block reports `absent`.
  */
 export async function readSoul(paths: SoulPaths = {}): Promise<SoulReadResult> {
-  const soulFile = paths.soulFile ?? defaultSoulPath(paths.env);
   const agentsFile = paths.agentsFile ?? defaultAgentsFile(paths.env);
+  const candidates =
+    paths.soulFile === undefined ? defaultSoulCandidatePaths(paths.env) : [paths.soulFile];
   const warnings: string[] = [];
 
+  let soulFile: string = candidates[0] as string;
   let soulBytes: number | undefined;
-  try {
-    const soulText = await readFile(soulFile, 'utf8');
-    soulBytes = Buffer.byteLength(soulText.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').trim(), 'utf8');
-  } catch {
-    // A missing SOUL source is reported by sync; show only needs AGENTS.md.
+  for (const candidate of candidates) {
+    try {
+      const soulText = await readFile(candidate, 'utf8');
+      soulFile = candidate;
+      soulBytes = Buffer.byteLength(
+        soulText.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').trim(),
+        'utf8',
+      );
+      break;
+    } catch {
+      // A missing SOUL source is reported by sync; show only needs AGENTS.md.
+    }
   }
 
   let text: string;

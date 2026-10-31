@@ -3,7 +3,7 @@
 > 给 dsh 套一层 Hermes Agent 风格的飞书外壳：一个话题一个会话、SOUL 人格块、`/new` `/sessions` `/resume` 等命令、节流过程卡片、终稿新发、状态卡与 `/status`。
 > 名字取赫尔墨斯的**双蛇杖**（caduceus）——传令之权，不是神名；设计受 Hermes Agent 的网关思路启发。
 
-**状态：第二刀（v0.1 功能面完成）。** 飞书长连接、消息归一化、agent 桥接、过程/状态卡片、忙时三档、标题与命令接线均已实现；测试全部用注入式假 transport / 假 agents，不需要真飞书凭据，也不读写真实 `~/.dsh`。真机验收（A1–A17）清单与验证方法见 [docs/SLICE2.md](docs/SLICE2.md)；设计稿见 [docs/DESIGN.md](docs/DESIGN.md)。
+**状态：第二刀（v0.1 功能面完成）。** 飞书长连接、消息归一化、agent 桥接、过程/状态卡片、忙时三档、标题与命令接线均已实现；测试全部用注入式假 transport / 假 agents，不需要真飞书凭据，也不读写真实 `~/.dsh`。真机验收（A1–A17）清单与验证方法见 [docs/SLICE2.md](docs/SLICE2.md)；第三刀（真机缺陷修复 + 话题语义）见 [docs/SLICE3.md](docs/SLICE3.md)；设计稿见 [docs/DESIGN.md](docs/DESIGN.md)。
 
 ## 目录结构
 
@@ -80,10 +80,20 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 
 其他 `/命令`（例如 `/compact`）会**原样转发**给 dsh 命令注册表（`ctx.get('commands').execute`）；Web-only denylist（至少 `/export`）直接在飞书侧拒绝，不转发。普通消息交给 agent。
 
+## 群聊门禁与话题语义
+
+- **非人类消息一律丢弃**：`sender.sender_type !== 'user'`（应用 / 机器人 / 缺失）在归一化层就被过滤，绝不会成为 prompt 或 fallback 标题（真机事故：应用自改进通知被当成首条用户消息）。
+- **p2p**：不需要 @。
+- **群普通消息**：需要 @ 机器人。
+- **群内话题**：该 `scopeKey` 已有会话时**免 @**（继续对话）；新话题的**首条仍需 @**。
+- 单人群豁免暂未实现（需要 chat 成员 API 与缓存，成本大于收益）；未实现前统一按 @ 规则，行为可预测。
+- @ 判定依据：事件里的 mention open_id 与 `bot/v3/info` 解析出的机器人 open_id 比对；解析失败时退化为「有任一 mention 就放行」，并在 debug 日志里标注。
+
 ## 状态层与卡片
 
 - **过程卡**：每轮一张，`cardThrottleMs` 节流（默认 400 ms，内容不变不 patch），只放尾部约 8 KB 内容，卡片 ≤ 30 KB。
 - **状态卡**：每话题一张，展示进行中 / 等待输入 / 待审批 / 失败 / 完成（含步数、工具数、起止时间），终态定格。
+- **标题时序**：标题未落盘时状态卡写「标题生成中」；`session/title` 到达后**就地 patch 同一张状态卡**（复用节流），不新发消息。
 - **终稿**：`turn/end` 后**新发**一条消息（绝不编辑过程卡）；`turn/end` 的 `reason.kind ∈ {error, interrupted, blocked}` 时再主动推一条消息，无需用户询问。
 - **回复位置**：入站 `thread_id ?? root_id` 归一为话题 id，出站 `reply_in_thread` 回同一话题；230071 / 230072 / 230019 自动降级为 `chat_id` 直发。
 - **重试幂等**：每次发送带 `uuid`，降级/重试复用同一 uuid（飞书侧 1 小时内至多成功一条）。
@@ -109,7 +119,7 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 
 ## 人格块
 
-SOUL 源默认 `$DSH_HOME/SOUL.md`，同步到 `$DSH_AGENTS_HOME/AGENTS.md` 的标记块：
+SOUL 源按顺序尝试：`$DSH_HOME/SOUL.md` → `$DSH_AGENTS_HOME/SOUL.md`（通常是 `~/.agents/SOUL.md`），同步到 `$DSH_AGENTS_HOME/AGENTS.md` 的标记块：
 
 ```md
 <!-- dsh-caduceus:soul:start -->
@@ -119,7 +129,8 @@ SOUL 源默认 `$DSH_HOME/SOUL.md`，同步到 `$DSH_AGENTS_HOME/AGENTS.md` 的�
 
 - **只替换两个标记之间的内容**，标记外一个字节不动；
 - 幂等：内容相同不写盘；
-- SOUL 源缺失 / 目标文件损坏时返回状态（`missing` / `malformed`），不抛错，不破坏原文件；
+- 两个 SOUL 源都不存在时**不建文件、不报错**，只记一行 info `persona source missing`；
+- 目标文件损坏时返回状态（`malformed`），不抛错，不破坏原文件；
 - 建议正文 ≤ 2 KB（设计稿 §4 的指令预算），超限只告警。
 
 ## 与 dsh 的版本关系

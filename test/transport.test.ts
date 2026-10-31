@@ -12,9 +12,13 @@ import { FakeFeishuApi } from './support/fakes.js';
 
 function raw(
   message: Partial<RawMessageEventLike['message']> = {},
+  senderType: string | null = 'user',
 ): RawMessageEventLike {
   return {
-    sender: { sender_id: { open_id: 'ou_sender' } },
+    sender: {
+      sender_id: { open_id: 'ou_sender' },
+      ...(senderType === null ? {} : { sender_type: senderType }),
+    },
     message: {
       message_id: 'om_1',
       chat_id: 'oc_chat',
@@ -168,4 +172,43 @@ test('reliable: sendText/sendCard 都带 uuid', async () => {
   assert.equal(api.created[0]?.uuid, 'uuid-1');
   assert.equal(api.created[1]?.uuid, 'uuid-2');
   assert.equal(api.created[1]?.msgType, 'interactive');
+});
+
+test('normalize: 非人类发送者一律丢弃（app / bot / 缺失 sender_type）', () => {
+  for (const senderType of ['app', 'bot', 'system', null]) {
+    assert.equal(
+      normalizeMessageEvent(raw({}, senderType)),
+      undefined,
+      `sender_type=${String(senderType)} must be dropped`,
+    );
+  }
+});
+
+test('normalize: 人类消息通过，并保留 mentions 的 open id（@ 门禁用）', () => {
+  const message = normalizeMessageEvent(
+    raw({
+      mentions: [
+        { id: { open_id: 'ou_bot' } },
+        { id: { open_id: 'ou_other' } },
+        { id: {} },
+      ],
+    }),
+  );
+  assert.ok(message !== undefined);
+  assert.equal(message.senderOpenId, 'ou_sender');
+  assert.deepEqual(message.mentions, ['ou_bot', 'ou_other']);
+});
+
+test('normalize: 应用消息即使 @ 了机器人也不进入会话（sender_type 优先）', () => {
+  const message = normalizeMessageEvent(
+    raw(
+      {
+        mentions: [{ id: { open_id: 'ou_bot' } }],
+        thread_id: 'omt_thread',
+        content: JSON.stringify({ text: '<at user_id="ou_bot">@机器人</at> 自我改进通知' }),
+      },
+      'app',
+    ),
+  );
+  assert.equal(message, undefined);
 });

@@ -63,6 +63,11 @@ export class ReliableTransport implements Transport {
     this.api.onMessage(handler);
   }
 
+  /** Forward the bot open id when the underlying API resolved one. */
+  getBotOpenId(): string | undefined {
+    return this.api.getBotOpenId?.();
+  }
+
   async sendText(chatId: string, text: string, options: SendOptions = {}): Promise<SentMessage> {
     return this.api.createMessage({
       chatId,

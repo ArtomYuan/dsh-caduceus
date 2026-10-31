@@ -81,9 +81,48 @@ try {
   assert.equal(shown.status, 'present');
   assert.equal(shown.content, '你是 Hermes。');
 
-  // 6. Normalization keeps the topic: thread_id wins over root_id.
+  // 5b. SOUL source fallback: ~/.agents/SOUL.md is used when DSH_HOME/SOUL.md
+  //     is absent; with neither source present the sync is a no-op and logs one
+  //     info line (no file created).
+  const fallbackHome = join(dir, 'fallback-dsh');
+  const fallbackAgents = join(dir, 'fallback-agents');
+  await mkdir(fallbackHome, { recursive: true });
+  await mkdir(fallbackAgents, { recursive: true });
+  await writeFile(join(fallbackAgents, 'SOUL.md'), '回退人格。\n', 'utf8');
+  const fallbackLogs = [];
+  const fallbackSync = await syncSoul({
+    env: { DSH_HOME: fallbackHome, DSH_AGENTS_HOME: fallbackAgents },
+    logger: { info: (m) => fallbackLogs.push(m), warn() {}, error() {}, debug() {} },
+  });
+  assert.equal(fallbackSync.status, 'created');
+  assert.equal(fallbackSync.soulFile, join(fallbackAgents, 'SOUL.md'));
+  const missingHome = join(dir, 'missing-dsh');
+  const missingAgents = join(dir, 'missing-agents');
+  await mkdir(missingHome, { recursive: true });
+  await mkdir(missingAgents, { recursive: true });
+  const missingLogs = [];
+  const missingSync = await syncSoul({
+    env: { DSH_HOME: missingHome, DSH_AGENTS_HOME: missingAgents },
+    logger: { info: (m) => missingLogs.push(m), warn() {}, error() {}, debug() {} },
+  });
+  assert.equal(missingSync.status, 'missing');
+  assert.ok(missingLogs.some((line) => line.startsWith('persona source missing')));
+
+  // 6. Normalization keeps the topic (thread_id wins over root_id) and drops
+  //    non-human senders before anything else.
+  const botEvent = normalizeMessageEvent({
+    sender: { sender_id: { open_id: 'ou_bot' }, sender_type: 'app' },
+    message: {
+      message_id: 'om_bot',
+      chat_id: 'oc_smoke',
+      chat_type: 'group',
+      message_type: 'text',
+      content: JSON.stringify({ text: '自我改进通知' }),
+    },
+  });
+  assert.equal(botEvent, undefined);
   const normalized = normalizeMessageEvent({
-    sender: { sender_id: { open_id: 'ou_smoke' } },
+    sender: { sender_id: { open_id: 'ou_smoke' }, sender_type: 'user' },
     message: {
       message_id: 'om_smoke',
       chat_id: 'oc_smoke',
@@ -225,7 +264,7 @@ try {
   await bridge.handleInbound({
     messageId: 'om_bridge',
     chatId: 'oc_bridge',
-    chatType: 'group',
+    chatType: 'p2p',
     senderOpenId: 'ou_bridge',
     text: '跑一轮',
     createdAt: 0,

@@ -12,6 +12,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { CommandDefinition, CommandRuntime } from '@deepseek-ai/dsh-commands';
 import z from '@deepseek-ai/schemastery';
 
+import { adaptLogger } from '../logger.js';
 import { runPersonaCommand } from './command.js';
 
 /** Stable cordis plugin name; must match the bundle row id. */
@@ -52,7 +53,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       const raw = invocation.rawInput.trim().toLowerCase();
       const action = raw === 'sync' ? 'sync' : raw === '' || raw === 'show' ? 'show' : undefined;
       if (action === undefined) return { kind: 'error', text: '用法：/persona [show|sync]' };
-      return runPersonaCommand(action, options);
+      return runPersonaCommand(action, { ...options, logger: adaptLogger(logger) });
     },
   };
   commands.register(definition);

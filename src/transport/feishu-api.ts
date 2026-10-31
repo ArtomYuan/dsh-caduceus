@@ -34,4 +34,6 @@ export interface FeishuApi {
   createMessage(input: CreateMessageInput): Promise<{ messageId: string }>;
   replyMessage(input: ReplyMessageInput): Promise<{ messageId: string }>;
   patchCard(messageId: string, card: FeishuCard): Promise<void>;
+  /** The bot's own open id, when resolved (group @ gate). */
+  getBotOpenId?(): string | undefined;
 }

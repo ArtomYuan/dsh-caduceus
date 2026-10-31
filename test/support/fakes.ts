@@ -55,13 +55,27 @@ export type TransportCall =
       readonly uuid?: string;
     };
 
+export interface FakeTransportOptions {
+  /** The bot's own open id the bridge uses for the group @ gate. */
+  readonly botOpenId?: string;
+}
+
 /** Recording transport double. */
 export class FakeTransport implements Transport {
   readonly calls: TransportCall[] = [];
   startCount = 0;
   stopCount = 0;
+  readonly #botOpenId: string | undefined;
   private handler: ((message: InboundMessage) => void) | undefined;
   private seq = 0;
+
+  constructor(options: FakeTransportOptions = {}) {
+    this.#botOpenId = options.botOpenId;
+  }
+
+  getBotOpenId(): string | undefined {
+    return this.#botOpenId;
+  }
 
   async start(): Promise<void> {
     this.startCount += 1;
@@ -369,8 +383,10 @@ export function inbound(
   return {
     messageId: `om_${inboundSeq}`,
     chatId: 'oc_chat',
-    chatType: 'group',
+    // Default to p2p so tests unrelated to the group @ gate need no mention.
+    chatType: 'p2p',
     senderOpenId: 'ou_user',
+    mentions: [],
     text,
     createdAt: 0,
     ...overrides,

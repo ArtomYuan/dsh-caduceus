@@ -120,7 +120,7 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
     config: resolved.bridge,
     logger,
     sessionTitle: ctx.get('sessionTitle') as SessionTitleLike | undefined,
-    persona: (action) => runPersonaCommand(action),
+    persona: (action) => runPersonaCommand(action, { logger }),
     runHarnessCommand: async (agent, line) => {
       const commands = ctx.get('commands') as CommandRuntime | undefined;
       return runHarnessCommand(commands, agent as unknown as Agent, line);

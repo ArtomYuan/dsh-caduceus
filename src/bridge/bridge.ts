@@ -58,6 +58,8 @@ interface ScopeState {
   progress?: CardStream;
   statusStream?: CardStream;
   lastOutput: string;
+  /** Latest session title (from a `session/title` event or `/rename`). */
+  title?: string;
 }
 
 function errorMessage(error: unknown): string {
@@ -82,6 +84,14 @@ export function assistantTextFromEvent(data: unknown): string {
 export function turnEndReasonKind(data: unknown): string | undefined {
   const record = data as { reason?: { kind?: unknown } } | undefined;
   return typeof record?.reason?.kind === 'string' ? record.reason.kind : undefined;
+}
+
+/** Extract the accepted title from a `session/title` event payload. */
+export function titleFromEvent(data: unknown): string | undefined {
+  const record = data as { title?: unknown } | undefined;
+  return typeof record?.title === 'string' && record.title.trim().length > 0
+    ? record.title
+    : undefined;
 }
 
 /** The bridge. Construct one per gateway entry. */
@@ -129,6 +139,7 @@ export class Bridge {
       this.#logger.debug(`ignoring message from non-allowed chat/user (${message.chatId})`);
       return;
     }
+    if (!this.#accepts(message)) return;
     if (message.text.trim().length === 0) return;
     await this.#queue.run(scopeKey(message.chatId, message.threadId), () =>
       this.#processInbound(message),
@@ -176,8 +187,16 @@ export class Bridge {
         await this.#settleTurn(state, event);
         break;
       }
+      case 'session/title': {
+        const title = titleFromEvent(event.data) ?? this.#titleOfSession(state);
+        if (title !== undefined) state.title = title;
+        // Re-render the EXISTING status card in place (throttled); never create
+        // a new status message just because the title arrived late.
+        if (state.statusStream?.messageId !== undefined) await this.#renderStatus(state);
+        break;
+      }
       default:
-        // session/title and other informational events only refresh the tracker.
+        // Informational events only refresh the tracker.
         break;
     }
   }
@@ -388,6 +407,7 @@ export class Bridge {
   }
 
   #titleOf(state: ScopeState): string | undefined {
+    if (state.title !== undefined) return state.title;
     return this.#titleOfSession(state);
   }
 
@@ -436,6 +456,8 @@ export class Bridge {
         | { readonly title?: string }
         | undefined;
       const normalized = snapshot?.title ?? title;
+      state.title = normalized;
+      if (state.statusStream?.messageId !== undefined) await this.#renderStatus(state);
       await this.#replyText(state, `已重命名：${normalized}`);
     } catch (error) {
       if (error instanceof Error && error.name === 'SessionTitleInvalidError') {
@@ -554,6 +576,41 @@ export class Bridge {
     return created;
   }
 
+  /**
+   * Group @ gate (design doc is silent; real-device requirement):
+   * - p2p needs no mention;
+   * - a group message needs an @-mention of the bot;
+   * - a group TOPIC message is exempt when this scope already has a session
+   *   (continuing the conversation); a new topic's first message still needs @.
+   * A single-person-group exemption is intentionally NOT implemented: it needs
+   * the chat-membership API, which costs a per-chat call and a cache; the @
+   * requirement stays predictable instead.
+   */
+  #accepts(message: InboundMessage): boolean {
+    if (message.chatType === 'p2p') return true;
+
+    const mentions = message.mentions ?? [];
+    const botOpenId = this.#transport.getBotOpenId?.();
+    if (typeof botOpenId === 'string' && botOpenId.length > 0) {
+      if (mentions.includes(botOpenId)) return true;
+    } else if (mentions.length > 0) {
+      // bot/v3/info failed: accept any mention rather than dropping every group
+      // message; logged once per message at debug level for diagnosis.
+      this.#logger.debug('bot open id unavailable; accepting group message carrying a mention');
+      return true;
+    }
+
+    if (message.threadId !== undefined && message.threadId.length > 0) {
+      const key = scopeKey(message.chatId, message.threadId);
+      if (this.#sessionMap.has(key)) return true;
+    }
+
+    this.#logger.debug(
+      `group message without @bot ignored (chat ${message.chatId}, thread ${message.threadId ?? '-'})`,
+    );
+    return false;
+  }
+
   #allowed(message: InboundMessage): boolean {
     const chats = this.#config.allowedChats;
     if (chats.length > 0 && !chats.includes(message.chatId)) return false;
@@ -610,7 +667,7 @@ export class Bridge {
     const snapshot = state.status.get();
     const card = statusCard({
       title: '飞书会话 · 状态',
-      lines: statusCardLines(snapshot),
+      lines: statusCardLines(snapshot, state.title === undefined ? {} : { title: state.title }),
       template: statusTemplate(snapshot.state),
     });
     await stream.set(card);

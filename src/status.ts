@@ -230,7 +230,7 @@ export interface StatusTextOptions {
 export function statusText(snapshot: StatusSnapshot, options: StatusTextOptions = {}): string {
   const running = snapshot.state === 'running';
   const lines = [
-    `会话：${options.title ?? '（无标题）'}`,
+    `会话：${options.title ?? '标题生成中'}`,
     `状态：${statusLabel(snapshot.state)}${terminalDetail(snapshot)}`,
     `是否在跑：${running ? '是' : '否'}`,
     `步数：${snapshot.steps}（工具 ${snapshot.tools}）`,
@@ -251,9 +251,12 @@ function terminalDetail(snapshot: StatusSnapshot): string {
   return '';
 }
 
-/** Status card lines (without the `/status` title/session prefix). */
-export function statusCardLines(snapshot: StatusSnapshot): string[] {
-  return statusText(snapshot).split('\n');
+/** Status card lines (the same body as `/status`, options included). */
+export function statusCardLines(
+  snapshot: StatusSnapshot,
+  options: StatusTextOptions = {},
+): string[] {
+  return statusText(snapshot, options).split('\n');
 }
 
 /** Reasons that must proactively notify the user without being asked. */

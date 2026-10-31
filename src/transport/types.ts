@@ -41,6 +41,12 @@ export interface InboundMessage {
   readonly chatId: string;
   readonly chatType: ChatType;
   readonly senderOpenId: string;
+  /**
+   * Open ids mentioned in the message (the bot's own open id included when it
+   * is mentioned). Empty/absent when there is no mention. The bridge's group
+   * @ gate reads this.
+   */
+  readonly mentions?: readonly string[];
   readonly text: string;
   /**
    * Topic/thread id, normalized as `thread_id ?? root_id`. Present when the
@@ -120,6 +126,11 @@ export interface Transport {
   sendText(chatId: string, text: string, options?: SendOptions): Promise<SentMessage>;
   sendCard(chatId: string, card: FeishuCard, options?: SendOptions): Promise<SentMessage>;
   updateCard(messageId: string, card: FeishuCard): Promise<void>;
+  /**
+   * The bot's own open id when known (needed for the group @ gate). Optional:
+   * fake transports may omit it, and the real one resolves it lazily.
+   */
+  getBotOpenId?(): string | undefined;
   /** Reply to an existing message; `threadId` enables `reply_in_thread`. */
   reply(
     chatId: string,

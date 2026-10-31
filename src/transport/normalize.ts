@@ -8,6 +8,14 @@
  *
  *     threadId = message.thread_id ?? message.root_id
  *
+ * Non-human senders (`sender.sender_type !== 'user'`) are dropped FIRST, before
+ * any other judgement: a bot/app event (e.g. an app self-improvement notice)
+ * must never become a session prompt or a fallback title. Feishu events from
+ * humans carry `sender_type: 'user'`; a missing sender_type is treated as
+ * non-human on purpose (fail closed).
+ *
+ * Mention open ids are preserved so the bridge can enforce the group @ gate.
+ *
  * @module @artomyuan/dsh-caduceus/transport/normalize
  */
 import type { InboundMessage } from './types.js';
@@ -49,6 +57,10 @@ const SUPPORTED_MESSAGE_TYPES = new Set(['text']);
  *   payloads or empty text.
  */
 export function normalizeMessageEvent(raw: RawMessageEventLike): InboundMessage | undefined {
+  // Priority #1: only human messages may enter a session.
+  const senderType = raw.sender?.sender_type;
+  if (senderType !== 'user') return undefined;
+
   const message = raw.message;
   if (!SUPPORTED_MESSAGE_TYPES.has(message.message_type)) return undefined;
 
@@ -66,11 +78,15 @@ export function normalizeMessageEvent(raw: RawMessageEventLike): InboundMessage 
 
   const threadId = firstNonEmpty(message.thread_id, message.root_id);
   const rootId = firstNonEmpty(message.root_id);
+  const mentions = (message.mentions ?? [])
+    .map((mention) => mention.id?.open_id)
+    .filter((openId): openId is string => typeof openId === 'string' && openId.length > 0);
   return {
     messageId: message.message_id,
     chatId: message.chat_id,
     chatType: message.chat_type === 'group' ? 'group' : 'p2p',
     senderOpenId: raw.sender?.sender_id?.open_id ?? '',
+    ...(mentions.length === 0 ? {} : { mentions }),
     text,
     ...(threadId === undefined ? {} : { threadId }),
     ...(rootId === undefined ? {} : { rootId }),

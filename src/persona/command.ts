@@ -9,12 +9,14 @@
  */
 import type { PersonaCommandResult } from '../bridge/types.js';
 import type { HomeEnv } from '../home.js';
+import type { LoggerLike } from '../logger.js';
 import { readSoul, syncSoul, type SoulPaths } from './blocks.js';
 
 export interface PersonaCommandOptions {
   readonly soulFile?: string;
   readonly agentsFile?: string;
   readonly env?: HomeEnv;
+  readonly logger?: LoggerLike;
 }
 
 function pathsOf(options: PersonaCommandOptions): SoulPaths {
@@ -22,6 +24,7 @@ function pathsOf(options: PersonaCommandOptions): SoulPaths {
     ...(options.soulFile === undefined ? {} : { soulFile: options.soulFile }),
     ...(options.agentsFile === undefined ? {} : { agentsFile: options.agentsFile }),
     ...(options.env === undefined ? {} : { env: options.env }),
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
   };
 }
 
@@ -55,8 +58,16 @@ export async function runPersonaCommand(
           kind: 'success',
           text: `人格块已是最新，未写盘。\n${where}${warningSuffix(result.warnings)}`,
         };
-      case 'missing':
-        return { kind: 'error', text: `同步失败：${result.reason ?? '源或目标文件不可用'}` };
+      case 'missing': {
+        // Missing SOUL sources are a no-op by design (design doc §4): report it
+        // plainly without creating any file and without an error status.
+        const tried = result.tried === undefined ? '' : `（已尝试：${result.tried.join('、')}）`;
+        return {
+          kind: 'success',
+          text: `未找到 SOUL 源${tried}，未改动 AGENTS.md。
+${result.reason ?? ''}`,
+        };
+      }
       case 'malformed':
         return { kind: 'error', text: `同步失败：目标文件中的人格标记不完整，未做改动。\n${result.reason ?? ''}` };
       case 'invalid':

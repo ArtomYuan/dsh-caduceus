@@ -50,9 +50,22 @@ export function defaultSessionMapPath(env?: HomeEnv): string {
   return join(dshHome(env), 'caduceus', 'session-map.json');
 }
 
-/** Default SOUL source: `<DSH_HOME>/SOUL.md`. */
+/** Default SOUL source: `<DSH_HOME>/SOUL.md` (first candidate). */
 export function defaultSoulPath(env?: HomeEnv): string {
   return join(dshHome(env), 'SOUL.md');
+}
+
+/**
+ * SOUL source candidates, in priority order:
+ * 1. `<DSH_HOME>/SOUL.md` (operator-local file next to the dsh home), then
+ * 2. `<DSH_AGENTS_HOME>/SOUL.md` (normally `~/.agents/SOUL.md`, next to the
+ *    AGENTS.md this package writes).
+ *
+ * The design allows the source to be absent; having a second conventional
+ * location means a user who keeps their persona beside AGENTS.md still works.
+ */
+export function defaultSoulCandidatePaths(env?: HomeEnv): readonly string[] {
+  return [defaultSoulPath(env), join(agentsHome(env), 'SOUL.md')];
 }
 
 /** Default soul block target: `<DSH_AGENTS_HOME>/AGENTS.md`. */

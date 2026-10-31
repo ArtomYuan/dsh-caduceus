@@ -39,6 +39,7 @@ export class LarkFeishuApi implements FeishuApi {
   private readonly logger: LoggerLike;
   private handler: ((message: InboundMessage) => void) | undefined;
   private running = false;
+  private botOpenId: string | undefined;
 
   constructor(options: LarkFeishuApiOptions) {
     this.logger = options.logger ?? silentLogger();
@@ -46,7 +47,18 @@ export class LarkFeishuApi implements FeishuApi {
     this.dispatcher = new EventDispatcher({});
     this.dispatcher.register({
       'im.message.receive_v1': (data: unknown) => {
-        const message = normalizeMessageEvent(data as RawMessageEventLike);
+        const raw = data as RawMessageEventLike;
+        const senderType = raw.sender?.sender_type;
+        if (senderType !== 'user') {
+          // Priority #1: a bot/app event must never enter a session (real
+          // incident: an app self-improvement notice became the first prompt
+          // and the fallback title).
+          this.logger.debug(
+            `ignoring non-human Feishu message (sender_type=${senderType ?? 'missing'})`,
+          );
+          return;
+        }
+        const message = normalizeMessageEvent(raw);
         if (message === undefined) {
           this.logger.debug('ignoring unsupported Feishu message event');
           return;
@@ -63,9 +75,36 @@ export class LarkFeishuApi implements FeishuApi {
 
   async start(): Promise<void> {
     if (this.running) return;
+    await this.resolveBotOpenId();
     await this.ws.start({ eventDispatcher: this.dispatcher });
     this.running = true;
     this.logger.info('feishu long connection started');
+  }
+
+  /** Resolve the bot's own open id once, best-effort (group @ gate). */
+  private async resolveBotOpenId(): Promise<void> {
+    try {
+      const response = (await this.client.request({
+        url: '/open-apis/bot/v3/info',
+        method: 'GET',
+      })) as { bot?: { open_id?: string }; data?: { open_id?: string } };
+      const openId = response.bot?.open_id ?? response.data?.open_id;
+      if (typeof openId === 'string' && openId.length > 0) {
+        this.botOpenId = openId;
+        this.logger.debug(`resolved bot open id ${openId}`);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `could not resolve bot open id; group @ gate will accept any mention: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /** The bot's own open id, or `undefined` until resolved. */
+  getBotOpenId(): string | undefined {
+    return this.botOpenId;
   }
 
   async stop(): Promise<void> {
