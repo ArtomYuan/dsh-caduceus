@@ -18,7 +18,7 @@ import { runPersonaCommand } from './command.js';
 /** Stable cordis plugin name; must match the bundle row id. */
 export const name = 'caduceus-persona';
 
-/** Optional explicit file overrides (defaults follow `$DSH_HOME` / `$DSH_AGENTS_HOME`). */
+/** Optional explicit file overrides (default target is `<DSH_HOME>/AGENTS.md`). */
 export interface Config {
   readonly soulFile?: string;
   readonly agentsFile?: string;

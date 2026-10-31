@@ -20,6 +20,7 @@ const { SCOPE_KEY_SEPARATOR, SESSION_MAP_VERSION, SessionStore, scopeKey } = awa
 const { COMMAND_NAMES, parseCommand } = await load('commands/parse.js');
 const { truncateCardContent } = await load('render/truncate.js');
 const { SOUL_END_MARKER, SOUL_START_MARKER, readSoul, syncSoul } = await load('persona/blocks.js');
+const { defaultAgentsFile, legacyAgentsFile } = await load('home.js');
 const { FeishuApiError, normalizeMessageEvent, ReliableTransport } = await load('transport/index.js');
 const { StatusTracker, shouldNotifyTerminal, terminalNotice } = await load('status.js');
 const { CARD_BYTE_LIMIT, cardByteSize, progressCard } = await load('render/index.js');
@@ -87,6 +88,14 @@ try {
   assert.ok(!(await readFile(mapPath, 'utf8')).includes('"tmp"'));
 
   // 5. Persona block: only the marked region changes, repeat sync is a no-op.
+  assert.equal(
+    defaultAgentsFile({ DSH_HOME: join(dir, 'dsh-smoke'), DSH_AGENTS_HOME: join(dir, 'agents-smoke') }),
+    join(dir, 'dsh-smoke', 'AGENTS.md'),
+  );
+  assert.equal(
+    legacyAgentsFile({ DSH_HOME: join(dir, 'dsh-smoke'), DSH_AGENTS_HOME: join(dir, 'agents-smoke') }),
+    join(dir, 'agents-smoke', 'AGENTS.md'),
+  );
   const soulFile = join(dir, 'SOUL.md');
   const agentsFile = join(dir, '.agents', 'AGENTS.md');
   const preamble = '# 用户全局\n\n前置内容，必须逐字节保留。\n\n';

@@ -152,7 +152,7 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 
 ## 人格块
 
-SOUL 源按顺序尝试：`$DSH_HOME/SOUL.md` → `$DSH_AGENTS_HOME/SOUL.md`（通常是 `~/.agents/SOUL.md`），同步到 `$DSH_AGENTS_HOME/AGENTS.md` 的标记块：
+SOUL 源按顺序尝试：`$DSH_HOME/SOUL.md` → `$DSH_AGENTS_HOME/SOUL.md`（通常是 `~/.agents/SOUL.md`），同步到 **`$DSH_HOME/AGENTS.md`**（dsh agent-instructions 实际读取的用户全局指令文件）的标记块：
 
 ```md
 <!-- dsh-caduceus:soul:start -->
@@ -163,6 +163,7 @@ SOUL 源按顺序尝试：`$DSH_HOME/SOUL.md` → `$DSH_AGENTS_HOME/SOUL.md`（�
 - **只替换两个标记之间的内容**，标记外一个字节不动；
 - 幂等：内容相同不写盘；
 - 两个 SOUL 源都不存在时**不建文件、不报错**，只记一行 info `persona source missing`；
+- 旧位置 `$DSH_AGENTS_HOME/AGENTS.md` 若仍有本插件标记块，只提示「发现遗留块…可删」，**不删文件、不再写入**；`/persona show`/`sync` 均会显示真实目标路径与存在性；
 - 目标文件损坏时返回状态（`malformed`），不抛错，不破坏原文件；
 - 建议正文 ≤ 2 KB（设计稿 §4 的指令预算），超限只告警。
 

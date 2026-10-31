@@ -37,9 +37,10 @@ export function dshHome(env: HomeEnv = process.env): string {
 }
 
 /**
- * `$DSH_AGENTS_HOME`, defaulting to `<DSH_HOME>/../.agents` (design doc §14 ⑧:
- * the second user-global instruction root, normally `~/.agents`). Always
- * absolute, so a relative `DSH_HOME` cannot leak into the join.
+ * `$DSH_AGENTS_HOME`, defaulting to `<DSH_HOME>/../.agents` (normally
+ * `~/.agents`). This root is used by skill discovery, NOT by dsh's global
+ * instruction loader (which reads `<DSH_HOME>/AGENTS.md`). Always absolute, so
+ * a relative `DSH_HOME` cannot leak into the join.
  */
 export function agentsHome(env: HomeEnv = process.env): string {
   return resolve(firstNonEmpty(env.DSH_AGENTS_HOME) ?? join(dshHome(env), '..', '.agents'));
@@ -57,19 +58,24 @@ export function defaultSoulPath(env?: HomeEnv): string {
 
 /**
  * SOUL source candidates, in priority order:
- * 1. `<DSH_HOME>/SOUL.md` (operator-local file next to the dsh home), then
- * 2. `<DSH_AGENTS_HOME>/SOUL.md` (normally `~/.agents/SOUL.md`, next to the
- *    AGENTS.md this package writes).
+ * 1. `<DSH_HOME>/SOUL.md`, then
+ * 2. `<DSH_AGENTS_HOME>/SOUL.md` (normally `~/.agents/SOUL.md`).
  *
  * The design allows the source to be absent; having a second conventional
- * location means a user who keeps their persona beside AGENTS.md still works.
+ * location means a user who already keeps a SOUL file under the agents root
+ * still works.
  */
 export function defaultSoulCandidatePaths(env?: HomeEnv): readonly string[] {
   return [defaultSoulPath(env), join(agentsHome(env), 'SOUL.md')];
 }
 
-/** Default soul block target: `<DSH_AGENTS_HOME>/AGENTS.md`. */
+/** Default soul block target: `<DSH_HOME>/AGENTS.md` (what dsh actually reads). */
 export function defaultAgentsFile(env?: HomeEnv): string {
+  return join(dshHome(env), 'AGENTS.md');
+}
+
+/** Legacy target written by older caduceus builds: `<DSH_AGENTS_HOME>/AGENTS.md`. */
+export function legacyAgentsFile(env?: HomeEnv): string {
   return join(agentsHome(env), 'AGENTS.md');
 }
 

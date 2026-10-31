@@ -230,3 +230,21 @@ test('syncSoul 不触碰注入路径之外的任何文件', async (t) => {
   assert.equal(readFileSync(other, 'utf8'), '不要动');
   assert.ok((await readFile(agentsFile, 'utf8')).includes(SOUL_END_MARKER));
 });
+
+test('syncSoul: 目标已存在时只替换块内，块外字节逐字节不变', async (t) => {
+  const dir = makeDir(t);
+  const soulFile = join(dir, 'SOUL.md');
+  const agentsFile = join(dir, 'AGENTS.md');
+  const prefix = '# 用户全局\r\n\n前置\r\n';
+  const suffix = '\n\n后置\r\n';
+  const oldBlock = block('旧人格');
+  writeFileSync(agentsFile, `${prefix}${oldBlock}${suffix}`, 'utf8');
+  writeFileSync(soulFile, '新人格\n', 'utf8');
+
+  const result = await syncSoul({ soulFile, agentsFile });
+  assert.equal(result.status, 'updated');
+  const actual = readFileSync(agentsFile, 'utf8');
+  assert.equal(actual, `${prefix}${block('新人格')}${suffix}`);
+  assert.ok(actual.startsWith(prefix));
+  assert.ok(actual.endsWith(suffix));
+});

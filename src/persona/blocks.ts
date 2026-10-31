@@ -14,8 +14,11 @@
  * - a missing SOUL source or an unreadable/malformed target returns a status,
  *   it never throws (a broken persona must not take the service down).
  *
- * The default target is `$DSH_AGENTS_HOME/AGENTS.md` (`~/.agents/AGENTS.md` by
- * default). The default source is tried in order: `$DSH_HOME/SOUL.md`, then
+ * The default target is `$DSH_HOME/AGENTS.md` — the single user-global
+ * instruction file that `@deepseek-ai/dsh-agent-instructions` actually reads.
+ * (Older builds wrote `$DSH_AGENTS_HOME/AGENTS.md`, which dsh never loads;
+ * that legacy location is only detected and reported, never written.)
+ * The default source is tried in order: `$DSH_HOME/SOUL.md`, then
  * `$DSH_AGENTS_HOME/SOUL.md` (normally `~/.agents/SOUL.md`). When no candidate
  * exists the sync is a no-op: status `missing`, one info log line
  * `persona source missing`, and neither file is created or modified.
@@ -24,7 +27,12 @@
  */
 import { readFile } from 'node:fs/promises';
 import { writeFileAtomic } from '../atomic-write.js';
-import { defaultAgentsFile, defaultSoulCandidatePaths, type HomeEnv } from '../home.js';
+import {
+  defaultAgentsFile,
+  defaultSoulCandidatePaths,
+  legacyAgentsFile,
+  type HomeEnv,
+} from '../home.js';
 import { silentLogger, type LoggerLike } from '../logger.js';
 
 /** Opening marker, matched literally. */
@@ -61,7 +69,7 @@ export interface SoulPaths {
    * in order: `<DSH_HOME>/SOUL.md` then `<DSH_AGENTS_HOME>/SOUL.md`.
    */
   readonly soulFile?: string;
-  /** AGENTS.md target file; defaults to `<DSH_AGENTS_HOME>/AGENTS.md`. */
+  /** AGENTS.md target file; defaults to `<DSH_HOME>/AGENTS.md`. */
   readonly agentsFile?: string;
   /** Environment used only to resolve default paths. */
   readonly env?: HomeEnv;
@@ -85,6 +93,10 @@ export interface SoulSyncResult {
   readonly reason?: string;
   /** Candidate source paths that were tried, in order (diagnostics/tests). */
   readonly tried?: readonly string[];
+  /** Whether the target `AGENTS.md` exists after the operation. */
+  readonly agentsExists?: boolean;
+  /** Legacy `<DSH_AGENTS_HOME>/AGENTS.md` that still contains our block, if any. */
+  readonly legacyFile?: string;
 }
 
 /** Read outcome for `/persona show`. */
@@ -97,6 +109,10 @@ export interface SoulReadResult {
   readonly agentsBytes?: number;
   readonly warnings: readonly string[];
   readonly reason?: string;
+  /** Whether the target `AGENTS.md` exists (false for ENOENT). */
+  readonly agentsExists: boolean;
+  /** Legacy `<DSH_AGENTS_HOME>/AGENTS.md` that still contains our block, if any. */
+  readonly legacyFile?: string;
 }
 
 function countOccurrences(haystack: string, needle: string): number {
@@ -197,6 +213,31 @@ export function upsertSoulBlock(existing: string, soul: string): SoulUpsertResul
 }
 
 /**
+ * Detect the old target location (`<DSH_AGENTS_HOME>/AGENTS.md`) containing our
+ * block. This is read-only: the legacy file is never modified or deleted; the
+ * caller only reports it in logs and `/persona`.
+ */
+export async function findLegacySoulBlock(
+  paths: SoulPaths = {},
+): Promise<string | undefined> {
+  const target = paths.agentsFile ?? defaultAgentsFile(paths.env);
+  const legacy = legacyAgentsFile(paths.env);
+  if (legacy === target) return undefined;
+  try {
+    const text = await readFile(legacy, 'utf8');
+    if (inspectSoulBlock(text).status !== 'absent') {
+      (paths.logger ?? silentLogger()).warn(
+        `legacy soul block found at ${legacy}; this file is no longer written by caduceus and may be deleted`,
+      );
+      return legacy;
+    }
+  } catch {
+    // Missing/unreadable legacy file: nothing to report.
+  }
+  return undefined;
+}
+
+/**
  * Sync `<soulFile>` into the soul block of `<agentsFile>`.
  *
  * Never throws for filesystem problems: missing/source errors map to `missing`,
@@ -228,6 +269,7 @@ export async function syncSoul(paths: SoulPaths = {}): Promise<SoulSyncResult> {
           warnings: [],
           reason: `soul source unavailable (${candidate}): ${errorMessage(error)}`,
           tried,
+          agentsExists: false,
         };
       }
       // Not found: fall through to the next candidate.
@@ -247,10 +289,20 @@ export async function syncSoul(paths: SoulPaths = {}): Promise<SoulSyncResult> {
       warnings: [],
       reason: `soul source unavailable; tried ${tried.join(', ')}`,
       tried,
+      agentsExists: false,
     };
   }
 
-  const base = { soulFile, agentsFile, soulBytes: 0, agentsBytes: 0, tried } as const;
+  const legacyFile = await findLegacySoulBlock({ ...paths, agentsFile });
+  const base = {
+    soulFile,
+    agentsFile,
+    soulBytes: 0,
+    agentsBytes: 0,
+    tried,
+    legacyFile,
+    agentsExists: true,
+  } as const;
 
   let exists = true;
   let existing = '';
@@ -267,6 +319,7 @@ export async function syncSoul(paths: SoulPaths = {}): Promise<SoulSyncResult> {
     }
     exists = false;
   }
+  const agentsExists = exists;
 
   const upserted = upsertSoulBlock(existing, soulText);
   if (upserted.status === 'malformed-target') {
@@ -294,6 +347,7 @@ export async function syncSoul(paths: SoulPaths = {}): Promise<SoulSyncResult> {
       soulBytes,
       agentsBytes: Buffer.byteLength(existing, 'utf8'),
       warnings: upserted.warnings,
+      agentsExists: true,
     };
   }
 
@@ -304,6 +358,7 @@ export async function syncSoul(paths: SoulPaths = {}): Promise<SoulSyncResult> {
     soulBytes,
     agentsBytes: Buffer.byteLength(upserted.content, 'utf8'),
     warnings: upserted.warnings,
+    agentsExists,
   };
 }
 
@@ -316,6 +371,7 @@ export async function readSoul(paths: SoulPaths = {}): Promise<SoulReadResult> {
   const candidates =
     paths.soulFile === undefined ? defaultSoulCandidatePaths(paths.env) : [paths.soulFile];
   const warnings: string[] = [];
+  const legacyFile = await findLegacySoulBlock({ ...paths, agentsFile });
 
   let soulFile: string = candidates[0] as string;
   let soulBytes: number | undefined;
@@ -344,6 +400,8 @@ export async function readSoul(paths: SoulPaths = {}): Promise<SoulReadResult> {
       ...(soulBytes === undefined ? {} : { soulBytes }),
       warnings,
       reason: `AGENTS.md unavailable (${agentsFile}): ${errorMessage(error)}`,
+      agentsExists: false,
+      ...(legacyFile === undefined ? {} : { legacyFile }),
     };
   }
 
@@ -356,6 +414,8 @@ export async function readSoul(paths: SoulPaths = {}): Promise<SoulReadResult> {
       ...(soulBytes === undefined ? {} : { soulBytes }),
       agentsBytes: Buffer.byteLength(text, 'utf8'),
       warnings,
+      agentsExists: true,
+      ...(legacyFile === undefined ? {} : { legacyFile }),
     };
   }
   if (inspection.status === 'malformed') {
@@ -367,6 +427,8 @@ export async function readSoul(paths: SoulPaths = {}): Promise<SoulReadResult> {
       agentsBytes: Buffer.byteLength(text, 'utf8'),
       warnings,
       reason: inspection.reason,
+      agentsExists: true,
+      ...(legacyFile === undefined ? {} : { legacyFile }),
     };
   }
   return {
@@ -377,5 +439,7 @@ export async function readSoul(paths: SoulPaths = {}): Promise<SoulReadResult> {
     ...(soulBytes === undefined ? {} : { soulBytes }),
     agentsBytes: Buffer.byteLength(text, 'utf8'),
     warnings,
+    agentsExists: true,
+    ...(legacyFile === undefined ? {} : { legacyFile }),
   };
 }
