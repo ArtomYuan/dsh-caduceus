@@ -68,14 +68,6 @@ export class FakeTransport implements Transport {
   stopCount = 0;
   /** When set, the next `updateCard` throws once (final-edit fallback tests). */
   failUpdateCardWith: Error | undefined;
-  /** When set, the next card create (sendCard or card reply) throws once. */
-  failCardCreateWith: Error | undefined;
-  /** When set, every pin call throws this error (policy/limit tests). */
-  pinError: FeishuApiError | undefined;
-  /** When set, every unpin call throws this error. */
-  unpinError: FeishuApiError | undefined;
-  readonly pinCalls: string[] = [];
-  readonly unpinCalls: string[] = [];
   readonly #botOpenId: string | undefined;
   private handler: ((message: InboundMessage) => void) | undefined;
   private seq = 0;
@@ -121,11 +113,6 @@ export class FakeTransport implements Transport {
     card: FeishuCard,
     options: SendOptions = {},
   ): Promise<SentMessage> {
-    if (this.failCardCreateWith !== undefined) {
-      const error = this.failCardCreateWith;
-      this.failCardCreateWith = undefined;
-      throw error;
-    }
     const messageId = this.nextId();
     this.calls.push({
       op: 'sendCard',
@@ -152,11 +139,6 @@ export class FakeTransport implements Transport {
     payload: ReplyPayload,
     options: ReplyOptions = {},
   ): Promise<SentMessage> {
-    if (payload.kind === 'card' && this.failCardCreateWith !== undefined) {
-      const error = this.failCardCreateWith;
-      this.failCardCreateWith = undefined;
-      throw error;
-    }
     const created = this.nextId();
     this.calls.push({
       op: 'reply',
@@ -168,16 +150,6 @@ export class FakeTransport implements Transport {
       ...(options.uuid === undefined ? {} : { uuid: options.uuid }),
     });
     return { messageId: created };
-  }
-
-  async pinMessage(messageId: string): Promise<void> {
-    this.pinCalls.push(messageId);
-    if (this.pinError !== undefined) throw this.pinError;
-  }
-
-  async unpinMessage(messageId: string): Promise<void> {
-    this.unpinCalls.push(messageId);
-    if (this.unpinError !== undefined) throw this.unpinError;
   }
 
   /** Deliver one inbound message through the registered handler (test seam). */
@@ -229,8 +201,6 @@ export class FakeFeishuApi implements FeishuApi {
   readonly created: CreateMessageInput[] = [];
   readonly replied: ReplyMessageInput[] = [];
   readonly patched: { readonly messageId: string; readonly card: FeishuCard }[] = [];
-  readonly pinned: string[] = [];
-  readonly unpinned: string[] = [];
   readonly failReplyCodes: number[] = [];
   private handler: ((message: InboundMessage) => void) | undefined;
   started = false;
@@ -261,14 +231,6 @@ export class FakeFeishuApi implements FeishuApi {
 
   async patchCard(messageId: string, card: FeishuCard): Promise<void> {
     this.patched.push({ messageId, card });
-  }
-
-  async pinMessage(messageId: string): Promise<void> {
-    this.pinned.push(messageId);
-  }
-
-  async unpinMessage(messageId: string): Promise<void> {
-    this.unpinned.push(messageId);
   }
 }
 

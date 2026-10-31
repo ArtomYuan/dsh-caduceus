@@ -226,7 +226,7 @@ export interface StatusTextOptions {
 }
 
 /**
- * Render `/status` and the status card body.
+ * Render `/status`.
  *
  * Two sessions that differ only in activity always produce different text:
  * the state label, the running flag, the step count and the timestamps all
@@ -260,14 +260,6 @@ function terminalDetail(snapshot: StatusSnapshot): string {
 export function recentEventText(snapshot: StatusSnapshot, maxChars = 40): string {
   const raw = snapshot.lastEventType ?? '（无）';
   return Array.from(raw).slice(0, maxChars).join('');
-}
-
-/** Status card lines (the same body as `/status`, options included). */
-export function statusCardLines(
-  snapshot: StatusSnapshot,
-  options: StatusTextOptions = {},
-): string[] {
-  return statusText(snapshot, options).split('\n');
 }
 
 /** Reasons that must proactively notify the user without being asked. */

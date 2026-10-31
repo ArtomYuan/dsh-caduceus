@@ -236,12 +236,6 @@ try {
     async updateCard(messageId, card) {
       calls.push({ op: 'updateCard', messageId, card });
     },
-    async pinMessage(messageId) {
-      calls.push({ op: 'pinMessage', messageId });
-    },
-    async unpinMessage(messageId) {
-      calls.push({ op: 'unpinMessage', messageId });
-    },
     async reply(chatId, messageId, payload) {
       calls.push({ op: 'reply', messageId: `m-${calls.length + 1}`, chatId, replyTo: messageId, payload });
       return { messageId: `m-${calls.length}` };
@@ -321,15 +315,7 @@ try {
     return [];
   });
   const createdTitles = createdCardEntries.map((entry) => entry.card.header?.title?.content);
-  assert.ok(createdTitles.includes('飞书会话 · 状态'), 'persistent status card must exist');
-  assert.ok(createdTitles.includes('飞书会话 · 过程'), 'process card must exist');
-  const statusCreated = createdCardEntries.find(
-    (entry) => entry.card.header?.title?.content === '飞书会话 · 状态',
-  );
-  assert.ok(
-    calls.some((call) => call.op === 'pinMessage' && call.messageId === statusCreated?.messageId),
-    'status card is pinned once',
-  );
+  assert.deepEqual(createdTitles, ['飞书会话 · 过程'], 'exactly one process card, no status card');
   const finalCard = calls
     .filter(
       (call) =>

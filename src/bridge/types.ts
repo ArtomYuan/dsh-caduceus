@@ -72,10 +72,6 @@ export interface BridgeConfig {
   readonly busyMode: BusyMode;
   /** Ordinary groups isolated per sender (Hermes default true); topics exempt. */
   readonly groupSessionsPerUser: boolean;
-  /** Standalone per-scope status card (default true). */
-  readonly statusCard?: boolean;
-  /** Best-effort pin of the persistent status card (default true). */
-  readonly pinStatusCard?: boolean;
 }
 
 /** Everything the bridge needs; unit tests provide fakes for every seam. */
@@ -109,8 +105,6 @@ export interface BridgeOptions {
   readonly ownershipDir?: string;
   /** Discover caduceus session ids on disk for `/adopt` (tests inject; default []). */
   readonly sessionIdsProvider?: () => readonly string[];
-  /** Persistent status-card pin records (restart-safe unpin). */
-  readonly pinStore?: import('../pin-store.js').PinStore;
   /**
    * True when a session id has a durable log on disk. Used by `/sessions` to
    * mark ghost entries `（未落地）`. Defaults to `() => true` (unknown = assume

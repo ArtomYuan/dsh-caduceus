@@ -51,15 +51,3 @@ test('resolveGatewayConfig: logLevel 默认 info，可配 debug', () => {
   assert.equal(resolveGatewayConfig({ logLevel: 'debug' }, {}, '/tmp/work').logLevel, 'debug');
 });
 
-test('resolveGatewayConfig: statusCard 默认 true，可配置 false', () => {
-  assert.equal(resolveGatewayConfig({}, {}, '/tmp/work').bridge.statusCard, true);
-  assert.equal(resolveGatewayConfig({ statusCard: false }, {}, '/tmp/work').bridge.statusCard, false);
-});
-
-test('resolveGatewayConfig: pinStatusCard 默认 true，可配置 false', () => {
-  assert.equal(resolveGatewayConfig({}, {}, '/tmp/work').bridge.pinStatusCard, true);
-  assert.equal(
-    resolveGatewayConfig({ pinStatusCard: false }, {}, '/tmp/work').bridge.pinStatusCard,
-    false,
-  );
-});

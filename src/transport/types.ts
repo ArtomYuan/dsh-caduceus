@@ -126,10 +126,6 @@ export interface Transport {
   sendText(chatId: string, text: string, options?: SendOptions): Promise<SentMessage>;
   sendCard(chatId: string, card: FeishuCard, options?: SendOptions): Promise<SentMessage>;
   updateCard(messageId: string, card: FeishuCard): Promise<void>;
-  /** Pin one message (best-effort; chat policy/limits surface as FeishuApiError). */
-  pinMessage(messageId: string): Promise<void>;
-  /** Unpin one message (best effort; missing/already-unpinned may throw). */
-  unpinMessage(messageId: string): Promise<void>;
   /**
    * The bot's own open id when known (needed for the group @ gate). Optional:
    * fake transports may omit it, and the real one resolves it lazily.

@@ -176,23 +176,6 @@ export function finalCardPlainText(input: FinalCardInput): string {
   return `${finalStateLine(input, false)}\n\n${input.body}`;
 }
 
-export interface StatusCardInput {
-  readonly title: string;
-  /** Rendered status lines (state, steps, timing, last event). */
-  readonly lines: readonly string[];
-  readonly template?: string;
-}
-
-/** Legacy standalone status card (no longer sent; the process card is merged). */
-export function statusCard(input: StatusCardInput): FeishuCard {
-  const elements = input.lines.map((line) => div(line));
-  return buildCard({
-    title: input.title,
-    template: input.template ?? 'grey',
-    elements,
-  });
-}
-
 /** A standalone markdown card (used for help/status replies rendered as cards). */
 export function markdownCard(title: string, markdown: string, template = 'grey'): FeishuCard {
   return buildCard({ title, template, elements: [div(tailText(markdown))] });

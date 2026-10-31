@@ -25,7 +25,6 @@ import { defaultLogPath } from './home.js';
 import { adaptLogger, teeLoggers, type LoggerLike } from './logger.js';
 import { formatStartupLine } from './observability.js';
 import { runPersonaCommand } from './persona/command.js';
-import { PinStore } from './pin-store.js';
 import { hasSessionLog } from './session-files.js';
 import { SessionStore } from './session-key.js';
 import { createLarkFeishuApi } from './transport/lark.js';
@@ -124,8 +123,6 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
   );
   const sessionMap = new SessionStore();
   sessionMap.load();
-  const pinStore = new PinStore();
-  pinStore.load();
   // Ownership backfill is read-only for dsh sessions (session-map writes only),
   // and must run even in idle/no-credential mode so old sessions stay reachable.
   backfillSessionOwnership(sessionMap, { logger });
@@ -151,7 +148,6 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
     logger,
     sessionExists: (sessionId) => hasSessionLog(sessionId),
     sessionIdsProvider: () => scanSessionDirs().map((entry) => entry.sessionId),
-    pinStore,
     // Lazy per use: the service can register AFTER this plugin mounts.
     sessionTitleProvider: () => ctx.get('sessionTitle') as SessionTitleLike | undefined,
     persona: (action) => runPersonaCommand(action, { logger }),
