@@ -116,3 +116,10 @@ test('denylist 至少包含 /export，且大小写不敏感', () => {
   assert.equal(isWebOnlyCommand('EXPORT'), true);
   assert.equal(isWebOnlyCommand('compact'), false);
 });
+
+test('/sessions 支持 --all；带其他参数仍返回 usage', () => {
+  assert.deepEqual(parseCommand('/sessions'), { kind: 'sessions' });
+  assert.deepEqual(parseCommand('/sessions --all'), { kind: 'sessions', all: true });
+  assert.deepEqual(parseCommand('/SESSIONS --ALL'), { kind: 'sessions', all: true });
+  assert.equal(parseCommand('/sessions --other').kind, 'usage');
+});

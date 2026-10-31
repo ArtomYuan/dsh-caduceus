@@ -62,6 +62,7 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 | `allowedUsers` | 空（全部） | 允许服务的用户 open_id 白名单 |
 | `cardThrottleMs` | `400` | 过程卡片 patch 节流（Feishu 5 QPS 的一半） |
 | `busyMode` | `queue` | 忙时策略：`queue` → followup、`steer` → steer、`interrupt` → cancel+steer |
+| `groupSessionsPerUser` | `true` | 普通群按发送者隔离（Hermes 默认）；`false` 回退整群共享。话题键不受此开关影响；启动日志会打印 `groupSessionsPerUser=<bool>` |
 
 缺凭据时 entry 仍然加载（`caduceus-gateway ready`），但**不会启动长连接**，profile 因此保持可引导。
 
@@ -70,9 +71,9 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 | 命令 | 说明 |
 |:--|:--|
 | `/new` | 为当前聊天/话题新建会话，旧会话保留 |
-| `/sessions` | 列出本聊天/话题的会话：`▸ 标题 · 相对时间 · sessionId 前 8 位`，当前行前加 `* `，无标题显示「（未命名）」，末尾提示 `/rename` |
+| `/sessions [--all]` | 默认只列当前 scopeKey：`▸ 标题 · 相对时间 · sessionId 前 8 位`（当前行 `* `，无标题「（未命名）」，末尾提示 `/rename`）。`--all` 列出同一 chatId 下所有 scope（旧键/话题/用户），行尾加 scope 标签，末尾提示用 `/resume <id 前 8 位>` |
 | `/rename <标题>` | 重命名当前会话的标题（标题非法时回一句人话） |
-| `/resume [id]` | 恢复本聊天/话题的上一条或指定会话 |
+| `/resume [id\|前缀]` | 无参恢复本 scope 上一条；带参可按完整 sessionId 或 ≥8 位不歧义前缀在本 chat 所有 scope 内恢复（命中多条给歧义提示） |
 | `/stop` | 中断当前正在运行的一轮（`cancel({kind:'user'})`） |
 | `/status` | 显示本会话状态、步数、工具数、起止时间与最近事件 |
 | `/persona [show\|sync]` | 查看或同步 SOUL 人格块 |
@@ -113,7 +114,7 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 
 - 键：与 Hermes `build_session_key` 一致的三分规则：
   - p2p：`chatId`（无 chatId 回落 sender）；
-  - 普通群（无话题）：`chatId + "\u0000" + sender_open_id`（**按人隔离**，与 Hermes `group_sessions_per_user` 默认一致）；
+  - 普通群（无话题）：`chatId + "\u0000" + sender_open_id`（**按人隔离**，与 Hermes `group_sessions_per_user` 默认一致；`groupSessionsPerUser=false` 时回退 `chatId` 整群共享）；
   - 群内话题：`chatId + "\u0000" + threadId`（多人共享，与 Hermes `thread_sessions_per_user` 默认一致）。
 - 旧格式可读：v4 为当前格式；v3 是 `entries` 对象（老键**原样保留**为旧共享会话，**不批量改写**）；v2 是扁平 `{ "<scope key>": "feishu-<ts>" }`；v1 把这些字符串放在 `sessions` 下。下一次落盘写成 v4。
 - 写入是原子的：先写同目录 `.tmp`，再 `rename` 覆盖；权限 `0600`。

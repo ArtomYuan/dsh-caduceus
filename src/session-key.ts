@@ -48,6 +48,9 @@ export const SCOPE_KEY_SEPARATOR = '\u0000';
  *   means "no topic".
  * @param senderOpenId - the sender's app-scoped open id (`ou_…`), needed to
  *   isolate ordinary group chats per user.
+ * @param groupSessionsPerUser - mirrors Hermes' `group_sessions_per_user`:
+ *   `true` (default) isolates ordinary groups per sender; `false` falls back to
+ *   a chat-wide shared session. Topic keys are unaffected either way.
  * @returns the scope key (see the module table).
  */
 export function scopeKey(
@@ -55,6 +58,7 @@ export function scopeKey(
   chatId: string,
   threadId: string | null | undefined,
   senderOpenId: string,
+  groupSessionsPerUser: boolean = true,
 ): string {
   if (chatType === 'p2p') {
     // Hermes DMs are keyed by chat_id; fall back to the sender when absent.
@@ -67,9 +71,10 @@ export function scopeKey(
     // Topic sessions are shared by everyone in the thread (Hermes default).
     return `${chatId}${SCOPE_KEY_SEPARATOR}${threadId}`;
   }
-  // Ordinary group chats are per-user (Hermes group_sessions_per_user default).
-  // An empty sender degrades to a shared session instead of an odd trailing NUL.
-  return senderOpenId.length > 0
+  // Ordinary group chats are per-user by default (Hermes
+  // group_sessions_per_user). Disabling the switch falls back to a chat-wide
+  // shared session; an empty sender does the same instead of a trailing NUL.
+  return groupSessionsPerUser && senderOpenId.length > 0
     ? `${chatId}${SCOPE_KEY_SEPARATOR}${senderOpenId}`
     : chatId;
 }

@@ -25,9 +25,9 @@ export interface CommandSpec {
 /** Command metadata; `helpText()` and the README command table both derive from it. */
 export const COMMAND_SPECS: readonly CommandSpec[] = [
   { name: 'new', usage: '/new', description: '为当前聊天/话题新建会话，旧会话保留' },
-  { name: 'sessions', usage: '/sessions', description: '列出本聊天/话题的会话与标题' },
+  { name: 'sessions', usage: '/sessions [--all]', description: '列出本会话；--all 列出同聊天下所有 scope 的会话' },
   { name: 'rename', usage: '/rename <标题>', description: '重命名当前会话的标题' },
-  { name: 'resume', usage: '/resume [id]', description: '恢复本聊天/话题的上一条或指定会话' },
+  { name: 'resume', usage: '/resume [id|前缀]', description: '恢复上一条或按完整 id / 前缀（≥8 位）恢复会话' },
   { name: 'stop', usage: '/stop', description: '中断当前正在运行的一轮' },
   { name: 'status', usage: '/status', description: '显示本会话的运行状态、步数与起止时间' },
   { name: 'persona', usage: '/persona [show|sync]', description: '查看或同步 SOUL 人格块' },
@@ -38,7 +38,7 @@ export type PersonaAction = 'show' | 'sync';
 
 export type ParsedCommand =
   | { readonly kind: 'new' }
-  | { readonly kind: 'sessions' }
+  | { readonly kind: 'sessions'; readonly all?: boolean }
   | { readonly kind: 'rename'; readonly title: string }
   | { readonly kind: 'resume'; readonly sessionId?: string }
   | { readonly kind: 'stop' }
@@ -73,8 +73,11 @@ export function parseCommand(raw: string): ParsedCommand {
   switch (command) {
     case 'new':
       return rest === '' ? { kind: 'new' } : usageResult('new', '/new 不接受参数');
-    case 'sessions':
-      return rest === '' ? { kind: 'sessions' } : usageResult('sessions', '/sessions 不接受参数');
+    case 'sessions': {
+      if (rest === '') return { kind: 'sessions' };
+      if (rest.toLowerCase() === '--all') return { kind: 'sessions', all: true };
+      return usageResult('sessions', '用法：/sessions [--all]');
+    }
     case 'stop':
       return rest === '' ? { kind: 'stop' } : usageResult('stop', '/stop 不接受参数');
     case 'status':

@@ -97,6 +97,7 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
   logger.info('caduceus-gateway ready');
 
   const resolved = resolveGatewayConfig(config);
+  logger.info(`groupSessionsPerUser=${resolved.bridge.groupSessionsPerUser}`);
   if (resolved.credentials === undefined) {
     logger.warn(
       'feishu credentials missing (appId/appSecret or FEISHU_APP_ID/FEISHU_APP_SECRET); long connection not started',

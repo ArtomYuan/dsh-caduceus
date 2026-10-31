@@ -25,7 +25,7 @@ import { progressCard, statusCard } from '../render/cards.js';
 import { CardStream, systemClock } from '../render/stream.js';
 import type { CardChannel, Clock } from '../render/stream.js';
 import { truncateCardContent } from '../render/truncate.js';
-import { mintSessionId, scopeKey, type SessionStore } from '../session-key.js';
+import { mintSessionId, scopeKey, SCOPE_KEY_SEPARATOR, type SessionStore } from '../session-key.js';
 import {
   StatusTracker,
   shouldNotifyTerminal,
@@ -37,7 +37,7 @@ import {
   type StatusEventLike,
   type StatusSnapshot,
 } from '../status.js';
-import type { FeishuCard, InboundMessage, Transport } from '../transport/types.js';
+import type { ChatType, FeishuCard, InboundMessage, Transport } from '../transport/types.js';
 import { ScopeQueue } from './scope-queue.js';
 import type { AgentLike, AgentsLike, BridgeConfig, BridgeOptions, SessionTitleLike } from './types.js';
 
@@ -47,6 +47,7 @@ const FINAL_TEXT_MAX_BYTES = 150 * 1024;
 interface ScopeState {
   readonly key: string;
   readonly chatId: string;
+  readonly chatType: ChatType;
   readonly threadId?: string;
   lastInboundMessageId?: string;
   sessionId?: string;
@@ -164,7 +165,13 @@ export class Bridge {
     if (!this.#accepts(message)) return;
     if (message.text.trim().length === 0) return;
     await this.#queue.run(
-      scopeKey(message.chatType, message.chatId, message.threadId, message.senderOpenId),
+      scopeKey(
+        message.chatType,
+        message.chatId,
+        message.threadId,
+        message.senderOpenId,
+        this.#config.groupSessionsPerUser,
+      ),
       () => this.#processInbound(message),
     );
   }
@@ -294,7 +301,10 @@ export class Bridge {
         return;
       }
       case 'sessions': {
-        await this.#replyText(state, this.#sessionsText(state));
+        await this.#replyText(
+          state,
+          command.all === true ? this.#sessionsAllText(state) : this.#sessionsText(state),
+        );
         return;
       }
       case 'status': {
@@ -464,6 +474,50 @@ export class Bridge {
     return `${marker}▸ ${title} · ${time} · ${sessionId.slice(0, 8)}`;
   }
 
+  /**
+   * `/sessions --all`: every session of this chatId (legacy pure-chatId key,
+   * topic keys, per-user keys), current scope first. Each line adds a scope
+   * label; time is relative when this process has the scope state, `—` otherwise.
+   */
+  #sessionsAllText(state: ScopeState): string {
+    const currentId = state.sessionId ?? this.#sessionMap.get(state.key);
+    const rows: { key: string; sessionId: string }[] = [];
+    for (const key of this.#scopeKeysForChat(state.chatId)) {
+      const sessionId = this.#sessionMap.get(key);
+      if (sessionId !== undefined) rows.push({ key, sessionId });
+    }
+    if (currentId !== undefined && !rows.some((row) => row.key === state.key)) {
+      rows.push({ key: state.key, sessionId: currentId });
+    }
+    const current = rows.find((row) => row.key === state.key);
+    const others = rows
+      .filter((row) => row.key !== state.key)
+      .sort((left, right) => left.key.localeCompare(right.key));
+    const ordered = [...(current === undefined ? [] : [current]), ...others];
+    if (ordered.length === 0) return '本聊天还没有会话，直接发消息或 /new 开始。';
+    return [
+      '本聊天下的会话（含其他 scope）：',
+      ...ordered.map((row) => this.#allSessionLine(state, row)),
+      '用 /resume <id 前 8 位> 继续某条会话',
+    ].join('\n');
+  }
+
+  #allSessionLine(state: ScopeState, row: { readonly key: string; readonly sessionId: string }): string {
+    const isCurrent = row.key === state.key;
+    const owner = isCurrent ? state : this.#states.get(row.key);
+    const title =
+      owner !== undefined && owner.sessionId === row.sessionId && owner.title !== undefined
+        ? owner.title
+        : this.#titleForSessionId(state, row.sessionId);
+    const timestamp = owner === undefined ? undefined : this.#lastActivityAt(owner);
+    const time = timestamp === undefined ? '—' : relativeTime(timestamp, this.#now());
+    const marker = isCurrent ? '* ' : '';
+    return `${marker}▸ ${title} · ${time} · ${row.sessionId.slice(0, 8)} · ${this.#scopeLabel(
+      state,
+      row.key,
+    )}`;
+  }
+
   /** Latest timestamp this scope has seen for its current session, if any. */
   #lastActivityAt(state: ScopeState): number | undefined {
     const snapshot = state.status.get();
@@ -550,31 +604,107 @@ export class Bridge {
   }
 
   async #resume(state: ScopeState, requested: string | undefined): Promise<void> {
-    const target = requested ?? state.previousSessionId;
-    if (target === undefined) {
-      await this.#replyText(state, '本聊天/话题没有可恢复的上一条会话（或指定 /resume <id>）。');
+    if (requested === undefined) {
+      const previous = state.previousSessionId;
+      if (previous === undefined) {
+        await this.#replyText(state, '本聊天/话题没有可恢复的上一条会话（或指定 /resume <id|前缀>）。');
+        return;
+      }
+      await this.#switchSession(state, previous);
       return;
     }
-    const current = state.sessionId ?? this.#sessionMap.get(state.key);
-    if (current !== undefined && current !== target) {
-      state.previousSessionId = current;
-      state.previousSessionAt = this.#lastActivityAt(state) ?? this.#now();
+
+    const query = requested.trim();
+    const matches = this.#matchSessionsByChat(state, query);
+    const exact = matches.find((match) => match.sessionId === query);
+    const selected = exact === undefined ? matches : [exact];
+
+    if (selected.length === 0) {
+      if (query.length < 8) {
+        await this.#replyText(state, '前缀至少 8 位（或输入完整 sessionId）。');
+      } else {
+        await this.#replyText(state, `没找到匹配的会话：${query}（可用 /sessions --all 查看）`);
+      }
+      return;
     }
-    this.#sessionMap.set(state.key, target);
-    state.sessionId = target;
-    state.pendingCreate = false;
-    state.running = false;
-    state.title = undefined;
-    state.status.reset();
-    this.#bindSession(state, target);
+    if (selected.length > 1) {
+      const lines = selected
+        .slice(0, 5)
+        .map((match) => `· ${match.sessionId.slice(0, 8)} · ${this.#scopeLabel(state, match.keys[0] as string)}`);
+      await this.#replyText(
+        state,
+        `前缀 ${query} 命中 ${selected.length} 条会话，请输入更多字符：\n${lines.join('\n')}`,
+      );
+      return;
+    }
+    const target = selected[0] as { sessionId: string; keys: string[] };
+    if (query.length < 8 && target.sessionId !== query) {
+      await this.#replyText(state, '前缀至少 8 位（或输入完整 sessionId）。');
+      return;
+    }
+    await this.#switchSession(state, target.sessionId);
+  }
+
+  /**
+   * Resume `target` and, only on success, point THIS scopeKey's mapping at it
+   * (no new session, no re-mint). Used by /resume for both the no-arg previous
+   * case and the id/prefix case.
+   */
+  async #switchSession(state: ScopeState, target: string): Promise<void> {
+    const current = state.sessionId ?? this.#sessionMap.get(state.key);
     try {
       const { agent } = await this.#agents.resume({ resumeSessionId: target });
+      if (current !== undefined && current !== target) {
+        state.previousSessionId = current;
+        state.previousSessionAt = this.#lastActivityAt(state) ?? this.#now();
+      }
+      this.#sessionMap.set(state.key, target);
+      state.sessionId = target;
+      state.pendingCreate = false;
+      state.running = false;
+      state.title = undefined;
+      state.status.reset();
+      this.#bindSession(state, target);
       this.#bindSession(state, String(agent.session.id));
       await this.#afterAgentReady(state);
       await this.#replyText(state, `已恢复会话 ${target}。`);
     } catch (error) {
       await this.#replyText(state, `恢复会话失败：${errorMessage(error)}`);
     }
+  }
+
+  /** Chat-scope keys (all scopes of one chatId) from the session map. */
+  #scopeKeysForChat(chatId: string): string[] {
+    return this.#sessionMap
+      .keys()
+      .filter((key) => key === chatId || key.startsWith(`${chatId}${SCOPE_KEY_SEPARATOR}`));
+  }
+
+  /** `/resume` matches: session ids under any scope of this chatId. */
+  #matchSessionsByChat(
+    state: ScopeState,
+    query: string,
+  ): { readonly sessionId: string; readonly keys: string[] }[] {
+    const matches = new Map<string, string[]>();
+    for (const key of this.#scopeKeysForChat(state.chatId)) {
+      const sessionId = this.#sessionMap.get(key);
+      if (sessionId === undefined) continue;
+      if (sessionId !== query && !sessionId.startsWith(query)) continue;
+      const keys = matches.get(sessionId);
+      if (keys === undefined) matches.set(sessionId, [key]);
+      else keys.push(key);
+    }
+    return [...matches.entries()].map(([sessionId, keys]) => ({ sessionId, keys }));
+  }
+
+  /** Human scope label for `/sessions --all` and `/resume` candidates. */
+  #scopeLabel(state: ScopeState, key: string): string {
+    const separatorAt = key.indexOf(SCOPE_KEY_SEPARATOR);
+    if (separatorAt === -1) return state.chatType === 'p2p' ? '私聊' : '旧会话';
+    const suffix = key.slice(separatorAt + 1);
+    if (suffix.startsWith('omt_')) return `话题 ${suffix.slice(0, 8)}`;
+    if (suffix.startsWith('ou_')) return `用户 ${suffix.slice(0, 8)}`;
+    return '旧会话';
   }
 
   async #tryResolve(
@@ -662,12 +792,19 @@ export class Bridge {
   }
 
   #stateFor(message: InboundMessage): ScopeState {
-    const key = scopeKey(message.chatType, message.chatId, message.threadId, message.senderOpenId);
+    const key = scopeKey(
+      message.chatType,
+      message.chatId,
+      message.threadId,
+      message.senderOpenId,
+      this.#config.groupSessionsPerUser,
+    );
     const existing = this.#states.get(key);
     if (existing !== undefined) return existing;
     const created: ScopeState = {
       key,
       chatId: message.chatId,
+      chatType: message.chatType,
       ...(message.threadId === undefined ? {} : { threadId: message.threadId }),
       pendingCreate: false,
       running: false,

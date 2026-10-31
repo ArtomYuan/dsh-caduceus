@@ -52,6 +52,8 @@ interface HarnessOptions {
   readonly prebindTopic?: boolean;
   /** Seed a legacy v3 session-map before the bridge loads it. */
   readonly seedMap?: Readonly<Record<string, string>>;
+  /** Ordinary-group isolation switch (default true). */
+  readonly groupSessionsPerUser?: boolean;
 }
 
 interface Harness {
@@ -105,6 +107,7 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
     allowedUsers: options.allowedUsers ?? [],
     cardThrottleMs: options.throttleMs ?? 400,
     busyMode: options.busyMode ?? 'queue',
+    groupSessionsPerUser: options.groupSessionsPerUser ?? true,
   };
   if (options.prebindTopic === true) {
     store.set(scopeKey('group', 'oc_chat', 'omt_t', 'ou_user'), 'feishu-prebound-1');
@@ -818,4 +821,146 @@ test('v3 旧共享条目原样保留，新消息落 per-user 新键（v4）', as
   assert.equal(persisted.version, SESSION_MAP_VERSION);
   assert.deepEqual(persisted.entries[legacyKey], { sessionId: 'feishu-legacy-shared' });
   assert.deepEqual(persisted.entries[newKey], { sessionId: newSession });
+});
+
+test('/sessions --all：同 chat 混合旧键/话题键/用户键全部列出且标签正确', async (t) => {
+  const h = makeHarness(t, {
+    botOpenId: 'ou_bot',
+    seedMap: {
+      oc_chat: 'feishu-legacy-01',
+      'oc_chat\u0000omt_oldtopic123': 'feishu-topic-01',
+      'oc_chat\u0000ou_otheruser123': 'feishu-user-01',
+      oc_other: 'feishu-otherchat',
+    },
+  });
+  await h.bridge.handleInbound(
+    inbound('hi', { chatType: 'group', senderOpenId: 'ou_me', mentions: ['ou_bot'] }),
+  );
+  const session = liveAgent(h).session;
+  h.titles.titles.set(String(session.id), '我的会话');
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 0));
+
+  await h.bridge.handleInbound(
+    inbound('/sessions --all', { chatType: 'group', senderOpenId: 'ou_me', mentions: ['ou_bot'] }),
+  );
+  const text = recordedTexts(h.transport).at(-1) ?? '';
+  const lines = text.split('\n');
+  assert.match(lines[0] as string, /本聊天下的会话/);
+  const currentLine = lines.find((line) => line.startsWith('* ▸ '));
+  assert.ok(currentLine !== undefined, text);
+  assert.match(currentLine, /^\* ▸ 我的会话 · (刚刚|\d+ 分钟前) · [a-z0-9-]{8} · 用户 ou_me$/);
+  assert.ok(lines.some((line) => /feishu-l · 旧会话$/.test(line)), text);
+  assert.ok(lines.some((line) => /feishu-t · 话题 omt_oldt$/.test(line)), text);
+  assert.ok(lines.some((line) => /feishu-u · 用户 ou_other$/.test(line)), text);
+  assert.equal(lines.at(-1), '用 /resume <id 前 8 位> 继续某条会话');
+  assert.ok(!text.includes('feishu-o'), 'other chat sessions must not be listed');
+  assert.equal(lines.length, 6, text); // header + 4 sessions + hint
+});
+
+test('/sessions 不带参数：只列当前 scopeKey，不出现其他 scope 的会话', async (t) => {
+  const h = makeHarness(t, {
+    botOpenId: 'ou_bot',
+    seedMap: {
+      oc_chat: 'feishu-legacy-01',
+      'oc_chat\u0000omt_oldtopic123': 'feishu-topic-01',
+      'oc_chat\u0000ou_otheruser123': 'feishu-user-01',
+    },
+  });
+  await h.bridge.handleInbound(
+    inbound('hi', { chatType: 'group', senderOpenId: 'ou_me', mentions: ['ou_bot'] }),
+  );
+  await h.bridge.handleInbound(
+    inbound('/sessions', { chatType: 'group', senderOpenId: 'ou_me', mentions: ['ou_bot'] }),
+  );
+  const text = recordedTexts(h.transport).at(-1) ?? '';
+  const currentId = h.store.get(
+    scopeKey('group', 'oc_chat', null, 'ou_me'),
+  ) as string;
+  assert.ok(text.includes(currentId.slice(0, 8)), text);
+  assert.ok(!text.includes('feishu-l'), text);
+  assert.ok(!text.includes('feishu-t'), text);
+  assert.ok(!text.includes('feishu-u'), text);
+  assert.equal(text.split('\n').at(-1), '用 /rename <标题> 改当前会话名');
+});
+
+test('/resume 前缀：唯一命中时切换到该会话', async (t) => {
+  const h = makeHarness(t, {
+    botOpenId: 'ou_bot',
+    seedMap: { 'oc_chat\u0000omt_oldtopic123': 'feishu-unique-1234' },
+  });
+  await h.bridge.handleInbound(
+    inbound('hi', { chatType: 'group', senderOpenId: 'ou_me', mentions: ['ou_bot'] }),
+  );
+  const currentKey = scopeKey('group', 'oc_chat', null, 'ou_me');
+  const before = h.store.get(currentKey);
+  assert.notEqual(before, 'feishu-unique-1234');
+
+  await h.bridge.handleInbound(
+    inbound('/resume feishu-u', { chatType: 'group', senderOpenId: 'ou_me', mentions: ['ou_bot'] }),
+  );
+  assert.equal(h.store.get(currentKey), 'feishu-unique-1234');
+  assert.ok(h.agents.resumed.includes('feishu-unique-1234'));
+  assert.match(recordedTexts(h.transport).at(-1) ?? '', /已恢复会话 feishu-unique-1234/);
+});
+
+test('/resume 前缀：多条命中时给歧义提示且不切换', async (t) => {
+  const h = makeHarness(t, {
+    botOpenId: 'ou_bot',
+    seedMap: {
+      'oc_chat\u0000omt_ambig1111': 'feishu-ambig-1111',
+      'oc_chat\u0000ou_ambig2222': 'feishu-ambig-2222',
+    },
+  });
+  await h.bridge.handleInbound(
+    inbound('hi', { chatType: 'group', senderOpenId: 'ou_me', mentions: ['ou_bot'] }),
+  );
+  const currentKey = scopeKey('group', 'oc_chat', null, 'ou_me');
+  const before = h.store.get(currentKey);
+
+  await h.bridge.handleInbound(
+    inbound('/resume feishu-a', { chatType: 'group', senderOpenId: 'ou_me', mentions: ['ou_bot'] }),
+  );
+  const text = recordedTexts(h.transport).at(-1) ?? '';
+  assert.match(text, /命中 2 条会话/);
+  assert.ok(text.includes('feishu-a'));
+  assert.equal(h.store.get(currentKey), before, 'ambiguous prefix must not switch');
+});
+
+test('/resume：零命中与过短前缀都给出明确提示', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('hi'));
+  const currentKey = scopeKey('p2p', 'oc_chat', null, 'ou_user');
+  const before = h.store.get(currentKey);
+
+  await h.bridge.handleInbound(inbound('/resume feishu-zzzzzzzz'));
+  assert.match(recordedTexts(h.transport).at(-1) ?? '', /没找到匹配的会话/);
+
+  await h.bridge.handleInbound(inbound('/resume feishu'));
+  assert.match(recordedTexts(h.transport).at(-1) ?? '', /前缀至少 8 位/);
+  assert.equal(h.store.get(currentKey), before);
+});
+
+test('groupSessionsPerUser=false：普通群两个 sender 回退为同键共享', async (t) => {
+  const h = makeHarness(t, { botOpenId: 'ou_bot', groupSessionsPerUser: false });
+  await h.bridge.handleInbound(
+    inbound('A 说', { chatType: 'group', senderOpenId: 'ou_a', mentions: ['ou_bot'] }),
+  );
+  await h.bridge.handleInbound(
+    inbound('B 说', { chatType: 'group', senderOpenId: 'ou_b', mentions: ['ou_bot'] }),
+  );
+  assert.equal(h.store.keys().length, 1);
+  assert.equal(h.store.keys()[0], 'oc_chat');
+  assert.equal(h.agents.created.length, 1);
+  assert.equal(liveAgent(h).followups.length, 2);
+});
+
+test('/sessions --all：p2p 当前会话的 scope 标签为「私聊」', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('hi'));
+  await h.bridge.handleInbound(inbound('/sessions --all'));
+  const text = recordedTexts(h.transport).at(-1) ?? '';
+  const currentLine = text.split('\n').find((line) => line.startsWith('* ▸ '));
+  assert.ok(currentLine !== undefined, text);
+  assert.match(currentLine, / · 私聊$/);
+  assert.equal(text.split('\n').at(-1), '用 /resume <id 前 8 位> 继续某条会话');
 });

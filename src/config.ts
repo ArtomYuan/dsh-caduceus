@@ -23,6 +23,8 @@ export interface GatewayConfig {
   readonly allowedUsers?: readonly string[];
   readonly cardThrottleMs?: number;
   readonly busyMode?: BusyMode;
+  /** Ordinary groups isolated per sender (Hermes default true); topics exempt. */
+  readonly groupSessionsPerUser?: boolean;
 }
 
 /** Schemastery schema for the `caduceus-gateway` entry. */
@@ -34,6 +36,7 @@ export const Config = z.object({
   allowedUsers: z.array(z.string()).required(false),
   cardThrottleMs: z.natural().min(1).required(false),
   busyMode: z.union([z.const('queue'), z.const('steer'), z.const('interrupt')]).required(false),
+  groupSessionsPerUser: z.boolean().required(false),
 });
 
 /** Default card patch throttle: half of Feishu's 5 QPS budget. */
@@ -41,6 +44,9 @@ export const DEFAULT_CARD_THROTTLE_MS = 400;
 
 /** Default busy policy: queue the message for the next turn. */
 export const DEFAULT_BUSY_MODE: BusyMode = 'queue';
+
+/** Default ordinary-group isolation: per sender (Hermes default). */
+export const DEFAULT_GROUP_SESSIONS_PER_USER = true;
 
 export interface ResolvedGatewayConfig {
   readonly credentials?: {
@@ -83,6 +89,8 @@ export function resolveGatewayConfig(
     allowedUsers: config.allowedUsers ?? [],
     cardThrottleMs: config.cardThrottleMs ?? DEFAULT_CARD_THROTTLE_MS,
     busyMode: config.busyMode ?? DEFAULT_BUSY_MODE,
+    groupSessionsPerUser:
+      config.groupSessionsPerUser ?? DEFAULT_GROUP_SESSIONS_PER_USER,
   };
   return {
     ...(appId === undefined || appSecret === undefined ? {} : { credentials: { appId, appSecret } }),

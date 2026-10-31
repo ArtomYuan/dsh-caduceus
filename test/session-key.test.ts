@@ -276,3 +276,16 @@ test('SessionStore: 未 load 就读写抛错（防止空表覆盖磁盘）', (t)
   assert.throws(() => store.set('oc_x', 'feishu-1'), /load\(\)/);
   assert.throws(() => store.persist(), /load\(\)/);
 });
+
+test('scopeKey: groupSessionsPerUser=false 时普通群回退 chatId（话题不受影响）', () => {
+  assert.equal(scopeKey('group', 'oc_g', null, 'ou_a', false), 'oc_g');
+  assert.equal(scopeKey('group', 'oc_g', null, 'ou_b', false), 'oc_g');
+  assert.equal(
+    scopeKey('group', 'oc_g', 'omt_t', 'ou_a', false),
+    `oc_g${SCOPE_KEY_SEPARATOR}omt_t`,
+  );
+  assert.equal(
+    scopeKey('group', 'oc_g', 'omt_t', 'ou_b', false),
+    `oc_g${SCOPE_KEY_SEPARATOR}omt_t`,
+  );
+});

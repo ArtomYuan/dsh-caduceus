@@ -62,6 +62,8 @@ export interface BridgeConfig {
   readonly allowedUsers: readonly string[];
   readonly cardThrottleMs: number;
   readonly busyMode: BusyMode;
+  /** Ordinary groups isolated per sender (Hermes default true); topics exempt. */
+  readonly groupSessionsPerUser: boolean;
 }
 
 /** Everything the bridge needs; unit tests provide fakes for every seam. */

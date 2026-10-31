@@ -40,6 +40,7 @@ try {
   assert.equal(topicA, `oc_smoke${SCOPE_KEY_SEPARATOR}omt_a`);
   assert.notEqual(topicA, topicB);
   assert.equal(topicA, scopeKey('group', 'oc_smoke', 'omt_a', 'ou_b'));
+  assert.equal(scopeKey('group', 'oc_smoke', null, 'ou_a', false), 'oc_smoke');
 
   // 2. Command classification: eight owned commands, everything else passes
   //    through with the original bytes.
