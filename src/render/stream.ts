@@ -35,9 +35,39 @@ export interface CardChannel {
   update(messageId: string, card: FeishuCard): Promise<void>;
 }
 
+/**
+ * One throttle window shared by SEVERAL card streams (e.g. a per-turn process
+ * card and a per-scope status card), so rendering both cannot double the patch
+ * rate. Initial creates are not gated (each card needs its first message);
+ * patches consume the window.
+ */
+export class CardPatchBudget {
+  #lastAt: number | undefined;
+
+  /** Consume the current window if it is free; returns whether it was taken. */
+  tryConsume(now: number, windowMs: number): boolean {
+    if (this.#lastAt !== undefined && now - this.#lastAt < windowMs) return false;
+    this.#lastAt = now;
+    return true;
+  }
+
+  /** Milliseconds until the shared window opens (0 when already open). */
+  remaining(now: number, windowMs: number): number {
+    if (this.#lastAt === undefined) return 0;
+    return Math.max(0, windowMs - (now - this.#lastAt));
+  }
+
+  /** Record a patch send (also used by flushes that bypass `tryConsume`). */
+  mark(now: number): void {
+    this.#lastAt = now;
+  }
+}
+
 export interface CardStreamOptions {
   readonly throttleMs: number;
   readonly clock?: Clock;
+  /** Shared patch window across sibling streams (process + status cards). */
+  readonly budget?: CardPatchBudget;
   /** When provided, send failures are reported here instead of rejecting. */
   readonly onError?: (error: unknown) => void;
 }
@@ -53,6 +83,7 @@ export class CardStream {
   readonly #channel: CardChannel;
   readonly #clock: Clock;
   readonly #throttleMs: number;
+  readonly #budget: CardPatchBudget | undefined;
   readonly #onError: ((error: unknown) => void) | undefined;
 
   #messageId: string | undefined;
@@ -68,6 +99,7 @@ export class CardStream {
     this.#channel = channel;
     this.#clock = options.clock ?? systemClock;
     this.#throttleMs = Math.max(1, options.throttleMs);
+    this.#budget = options.budget;
     this.#onError = options.onError;
   }
 
@@ -89,7 +121,9 @@ export class CardStream {
     }
 
     const elapsed = this.#clock.now() - this.#lastSentAt;
-    if (elapsed >= this.#throttleMs) {
+    const free = elapsed >= this.#throttleMs &&
+      (this.#budget === undefined || this.#budget.tryConsume(this.#clock.now(), this.#throttleMs));
+    if (free) {
       this.#clearPending();
       await this.#enqueue(card, json);
       return;
@@ -127,8 +161,12 @@ export class CardStream {
 
   #arm(): void {
     if (this.#timer !== undefined) return;
-    const elapsed = this.#clock.now() - this.#lastSentAt;
-    const delay = Math.max(0, this.#throttleMs - elapsed);
+    const now = this.#clock.now();
+    const elapsed = now - this.#lastSentAt;
+    const delay = Math.max(
+      Math.max(0, this.#throttleMs - elapsed),
+      this.#budget?.remaining(now, this.#throttleMs) ?? 0,
+    );
     this.#timer = this.#clock.setTimeout(() => {
       this.#timer = undefined;
       void this.flush().catch((error: unknown) => this.#report(error));
@@ -143,6 +181,7 @@ export class CardStream {
         this.#messageId = sent.messageId;
       } else {
         await this.#channel.update(this.#messageId, card);
+        this.#budget?.mark(this.#clock.now());
       }
       this.#lastSentJson = json;
       this.#lastSentAt = this.#clock.now();

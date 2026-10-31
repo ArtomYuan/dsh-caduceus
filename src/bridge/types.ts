@@ -72,6 +72,8 @@ export interface BridgeConfig {
   readonly busyMode: BusyMode;
   /** Ordinary groups isolated per sender (Hermes default true); topics exempt. */
   readonly groupSessionsPerUser: boolean;
+  /** Standalone per-scope status card (default true). */
+  readonly statusCard?: boolean;
 }
 
 /** Everything the bridge needs; unit tests provide fakes for every seam. */

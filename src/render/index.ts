@@ -2,7 +2,7 @@
  * Render public surface.
  * @module @artomyuan/dsh-caduceus/render
  */
-export { CardStream, systemClock } from './stream.js';
+export { CardPatchBudget, CardStream, systemClock } from './stream.js';
 export type { CardChannel, CardStreamOptions, Clock, TimerHandle } from './stream.js';
 export {
   CARD_BYTE_LIMIT,

@@ -68,6 +68,8 @@ export class FakeTransport implements Transport {
   stopCount = 0;
   /** When set, the next `updateCard` throws once (final-edit fallback tests). */
   failUpdateCardWith: Error | undefined;
+  /** When set, the next card create (sendCard or card reply) throws once. */
+  failCardCreateWith: Error | undefined;
   readonly #botOpenId: string | undefined;
   private handler: ((message: InboundMessage) => void) | undefined;
   private seq = 0;
@@ -113,6 +115,11 @@ export class FakeTransport implements Transport {
     card: FeishuCard,
     options: SendOptions = {},
   ): Promise<SentMessage> {
+    if (this.failCardCreateWith !== undefined) {
+      const error = this.failCardCreateWith;
+      this.failCardCreateWith = undefined;
+      throw error;
+    }
     const messageId = this.nextId();
     this.calls.push({
       op: 'sendCard',
@@ -139,6 +146,11 @@ export class FakeTransport implements Transport {
     payload: ReplyPayload,
     options: ReplyOptions = {},
   ): Promise<SentMessage> {
+    if (payload.kind === 'card' && this.failCardCreateWith !== undefined) {
+      const error = this.failCardCreateWith;
+      this.failCardCreateWith = undefined;
+      throw error;
+    }
     const created = this.nextId();
     this.calls.push({
       op: 'reply',

@@ -307,8 +307,22 @@ try {
     data: { turn: 1, reason: { kind: 'completed' } },
     time: 30,
   });
-  const finalCard = calls.filter((call) => call.op === 'updateCard').at(-1)?.card;
-  assert.ok(finalCard, 'final answer must be an in-place card update');
+  const createdCards = calls.flatMap((call) => {
+    if (call.op === 'sendCard') return [call.card];
+    if (call.op === 'reply' && call.payload.kind === 'card') return [call.payload.card];
+    return [];
+  });
+  const createdTitles = createdCards.map((card) => card.header?.title?.content);
+  assert.ok(createdTitles.includes('飞书会话 · 状态'), 'persistent status card must exist');
+  assert.ok(createdTitles.includes('飞书会话 · 过程'), 'process card must exist');
+  const finalCard = calls
+    .filter(
+      (call) =>
+        call.op === 'updateCard' &&
+        call.card.header?.title?.content === '飞书会话 · 过程',
+    )
+    .at(-1)?.card;
+  assert.ok(finalCard, 'final answer must be an in-place process-card update');
   assert.ok(JSON.stringify(finalCard).includes('smoke 输出'), 'answer must live in the card');
   assert.ok(
     !calls.some(

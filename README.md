@@ -94,10 +94,11 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 
 ## 状态层与卡片
 
-- **过程卡（唯一卡片）**：每轮一张，`cardThrottleMs` 节流（默认 400 ms，内容不变不 patch）；运行中显示状态行（会话标题 · 状态 · 步数 · 工具 · 已运行）、一行「最近：<工具名或事件>」（≤40 字）与**助手正文尾部（≤8 KB 预算）**；收尾时**编辑同一张卡**到终态并渲染完整正文（卡体 ≤30 KB，超出保留尾部并加「…已省略 N 字符」）。
+- **状态卡（常驻）**：每个 scopeKey 首次活动时创建**一条**，之后所有更新都 patch 同一 `message_id`（不重发）；内容为 `会话：标题 · 状态 · 步数（工具） · 最近事件 · 更新于 <相对时间> · 会话 ID 尾 8 位`，**不含助手正文**。状态卡创建/更新失败只记 `status card degraded: <reason>`，不影响回合，下个事件重试；配置 `statusCard: false` 可关闭。
+- **过程卡（每回合）**：每回合一张，与状态卡共用同一套 400 ms patch 预算（不会双倍打 API）；运行中显示状态行、`最近：<工具名或事件>`（≤40 字）与**助手正文尾部（≤8 KB 预算）**；`turn/end` 时**编辑同一张卡**到终态并渲染完整正文（卡体 ≤30 KB，超出保留尾部并加「…已省略 N 字符」）。
 - **状态**：过程卡的状态行即为每话题状态（空闲 / 运行中 / 待审批 / 失败 / 完成）；不再单独发状态卡，`/status` 命令输出保留。从未跑过回合的会话是「空闲」，有回合且结束后才是「完成」。
 - **标题时序**：标题未就绪时过程卡不写标题；`session/title` 到达后**就地 patch 同一张过程卡**（复用节流），不新发消息；agent create/resume 完成后还会**强制重渲一次**现有过程卡（首渲染可能早于标题服务就绪，只 patch、不新发）。
-- **收尾（答案就在卡里）**：`turn/end` 后**编辑同一张过程卡**为终态（完成/失败/已中断）+ 完整正文，不另发文本；一个回合对外只有 1 个 `message_id` + 若干次 patch。标题在收尾时从服务/缓存读取并写入卡内状态行。
+- **收尾（答案就在过程卡里）**：`turn/end` 后**编辑同一张过程卡**为终态（完成/失败/已中断）+ 完整正文，不另发文本；一个回合对外只有 1 个 `message_id` + 若干次 patch。标题在收尾时从服务/缓存读取并写入卡内状态行。
 - **唯一降级出口**：卡片编辑失败（抛错/返回失败）时才发一条文本，内容与卡一致，并记日志 `final fallback to text: <reason>`；不会双发。
 - `turn/end` 的 `reason.kind ∈ {error, interrupted, blocked}` 时再主动推一条消息，无需用户询问。
 - **回复位置**：入站 `thread_id ?? root_id` 归一为话题 id，出站 `reply_in_thread` 回同一话题；230071 / 230072 / 230019 自动降级为 `chat_id` 直发。
@@ -115,6 +116,7 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 - 门禁每条判定一行：`gate accept: p2p|mentioned …` / `gate drop: no-mention|bot-sender|not-allowed-chat|not-allowed-user|empty-text …`，附 `chat=`/`thread=`/`sender=` 前 12 位；
 - 命令分发：`command: /status`、`command: unknown passthrough /xxx`、`command: parse-fail <原文前 40>`；
 - 归属补录：启动一行 `backfill: scanned=N adopted=M skipped=K`；
+- 状态卡降级：`status card degraded: <reason>`（回合继续，下个事件重试）；
 - 会话键：`scope: kind=p2p|topic|group-user|group-shared key=<前 16 位> session=<后 8 位>`。
 
 ## 存储

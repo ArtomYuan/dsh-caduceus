@@ -33,9 +33,10 @@ import {
   finalCard,
   finalCardPlainText,
   progressCard,
+  statusCard,
   type FinalCardInput,
 } from '../render/cards.js';
-import { CardStream, systemClock } from '../render/stream.js';
+import { CardPatchBudget, CardStream, systemClock } from '../render/stream.js';
 import type { CardChannel, Clock } from '../render/stream.js';
 import { mintSessionId, scopeKey, SCOPE_KEY_SEPARATOR, type SessionStore } from '../session-key.js';
 import {
@@ -70,6 +71,12 @@ interface ScopeState {
   running: boolean;
   readonly status: StatusTracker;
   progress?: CardStream;
+  /** Per-scope persistent status card stream (created once, patched forever). */
+  statusStream?: CardStream;
+  /** Shared 400 ms patch window for progress + status cards. */
+  patchBudget?: CardPatchBudget;
+  /** Set after a status-card failure; the next event retries. */
+  statusDegraded?: boolean;
   lastOutput: string;
   /** Latest session title (from a `session/title` event or `/rename`). */
   title?: string;
@@ -205,6 +212,7 @@ export class Bridge {
         state.running = true;
         state.lastOutput = '';
         state.progress?.dispose();
+        await this.#renderStatus(state);
         state.progress = this.#makeCardStream(state);
         await this.#renderProgress(state);
         break;
@@ -214,6 +222,7 @@ export class Bridge {
       case 'tool/call':
       case 'tool/result': {
         await this.#renderProgress(state);
+        await this.#renderStatus(state);
         break;
       }
       case 'assistant/message': {
@@ -231,6 +240,7 @@ export class Bridge {
         if (title !== undefined) state.title = title;
         // Re-render the EXISTING process card in place (throttled); never
         // create a new message just because the title arrived late.
+        if (state.statusStream !== undefined) await this.#renderStatus(state);
         if (state.progress?.messageId !== undefined) await this.#renderProgress(state);
         break;
       }
@@ -243,6 +253,8 @@ export class Bridge {
   async #processInbound(message: InboundMessage): Promise<void> {
     const state = this.#stateFor(message);
     state.lastInboundMessageId = message.messageId;
+    // First activity in this scope creates the persistent status card (idle).
+    await this.#renderStatus(state);
     const text = message.text.trim();
     if (text.startsWith('/')) {
       await this.#handleSlash(state, message.text);
@@ -319,6 +331,7 @@ export class Bridge {
             state,
             `已新建会话 ${shortSessionId(fresh)}。上一会话可用 /resume 恢复。`,
           );
+          await this.#renderStatus(state, true);
         } catch (error) {
           await this.#replyText(state, `新建会话失败：${errorMessage(error)}`);
         }
@@ -445,6 +458,8 @@ export class Bridge {
         await this.#finalFallback(state, finalInput, error);
       }
     }
+
+    await this.#renderStatus(state, true);
 
     const kind = turnEndReasonKind(event.data);
     if (shouldNotifyTerminal(kind)) {
@@ -906,6 +921,7 @@ export class Bridge {
   async #afterAgentReady(state: ScopeState): Promise<void> {
     const title = this.#titleOfSession(state);
     if (title !== undefined) state.title = title;
+    if (state.statusStream !== undefined) await this.#renderStatus(state);
     if (state.progress?.messageId !== undefined) await this.#renderProgress(state);
   }
 
@@ -993,18 +1009,55 @@ export class Bridge {
     return created;
   }
 
-  #makeCardStream(state: ScopeState): CardStream {
+  #makeCardStream(state: ScopeState, kind: 'progress' | 'status' = 'progress'): CardStream {
     const channel: CardChannel = {
       create: (card: FeishuCard) => this.#sendNewCard(state, card),
       update: async (messageId: string, card: FeishuCard) => {
         await this.#transport.updateCard(messageId, card);
       },
     };
+    state.patchBudget ??= new CardPatchBudget();
     return new CardStream(channel, {
       throttleMs: this.#config.cardThrottleMs,
       clock: this.#clock,
-      onError: (error: unknown) => this.#logger.warn(`card stream failed: ${errorMessage(error)}`),
+      budget: state.patchBudget,
+      onError: (error: unknown) => {
+        if (kind === 'status') {
+          state.statusDegraded = true;
+          this.#logger.warn(`status card degraded: ${errorMessage(error)}`);
+          return;
+        }
+        this.#logger.warn(`card stream failed: ${errorMessage(error)}`);
+      },
     });
+  }
+
+  /**
+   * Create (first activity only) or patch the per-scope persistent status card.
+   * Failures are logged as `status card degraded: …` and retried on the next
+   * event; this method never throws into the turn loop.
+   */
+  async #renderStatus(state: ScopeState, flush = false): Promise<void> {
+    if (this.#config.statusCard === false) return;
+    state.statusStream ??= this.#makeCardStream(state, 'status');
+    const snapshot = state.status.get();
+    const title = this.#titleOf(state)?.trim() ?? state.title;
+    const sessionId = state.sessionId ?? this.#sessionMap.get(state.key);
+    const lines = [
+      `会话：${title !== undefined && title.length > 0 ? title : '标题生成中'}`,
+      `状态：${statusLabel(snapshot.state)}`,
+      `步数 ${snapshot.steps}（工具 ${snapshot.tools}）`,
+      `最近事件：${recentEventText(snapshot)}`,
+      `更新于 ${sessionTimeLabel(snapshot.lastEventAt, this.#now())}`,
+      ...(sessionId === undefined ? [] : [`会话 ID：${shortSessionId(sessionId)}`]),
+    ];
+    const card = statusCard({
+      title: '飞书会话 · 状态',
+      lines,
+      template: statusTemplate(snapshot.state),
+    });
+    await state.statusStream.set(card);
+    if (flush) await state.statusStream.flush();
   }
 
   async #sendNewCard(state: ScopeState, card: FeishuCard): Promise<{ messageId: string }> {

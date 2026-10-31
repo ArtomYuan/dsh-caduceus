@@ -65,6 +65,8 @@ interface HarnessOptions {
   readonly sessionExists?: (sessionId: string) => boolean;
   /** Caduceus session ids discoverable on disk for /adopt (default: none). */
   readonly sessionIdsProvider?: () => readonly string[];
+  /** Standalone per-scope status card (default true). */
+  readonly statusCard?: boolean;
 }
 
 interface Harness {
@@ -125,6 +127,7 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
     cardThrottleMs: options.throttleMs ?? 400,
     busyMode: options.busyMode ?? 'queue',
     groupSessionsPerUser: options.groupSessionsPerUser ?? true,
+    statusCard: options.statusCard ?? true,
   };
   // Ownership sidecars must never escape into the real ~/.dsh during tests.
   const ownershipDir = join(dir, 'owners');
@@ -170,6 +173,23 @@ function liveAgent(h: Harness): FakeAgent {
 
 function cardTitles(cards: { readonly card: FeishuCard }[]): string[] {
   return cards.map((entry) => entry.card.header?.title.content ?? '');
+}
+
+const PROCESS_CARD_TITLE = '飞书会话 · 过程';
+const STATUS_CARD_TITLE = '飞书会话 · 状态';
+
+function cardOfTitle(
+  cards: { readonly messageId: string; readonly card: FeishuCard }[],
+  title: string,
+): { readonly messageId: string; readonly card: FeishuCard } | undefined {
+  return cards.find((entry) => entry.card.header?.title.content === title);
+}
+
+function finalPatchOfCard(
+  transport: FakeTransport,
+  messageId: string,
+): FeishuCard | undefined {
+  return patchedCards(transport).filter((patch) => patch.messageId === messageId).at(-1)?.card;
 }
 
 test('同键串行：第一条未完成前，第二条不会进入 agent', async (t) => {
@@ -268,18 +288,13 @@ test('回合收尾：编辑同一张过程卡到终态，不另发文本', async
   );
 
   const cards = recordedCards(h.transport);
-  assert.deepEqual(cardTitles(cards), ['飞书会话 · 过程'], 'exactly one card');
-  const card = cards[0];
-  assert.ok(card !== undefined);
+  const processCard = cardOfTitle(cards, PROCESS_CARD_TITLE);
+  const statusCard = cardOfTitle(cards, STATUS_CARD_TITLE);
+  assert.ok(processCard !== undefined, 'one process card per turn');
+  assert.ok(statusCard !== undefined, 'one persistent status card per scope');
 
-  const updates = h.transport.calls.filter(
-    (call) => call.op === 'updateCard' && call.messageId === card.messageId,
-  );
-  assert.ok(updates.length >= 1, 'the same card must be patched at turn end');
-  const finalPatch = updates.at(-1);
-  assert.ok(finalPatch !== undefined && finalPatch.op === 'updateCard');
-  const finalJson = JSON.stringify(finalPatch.card);
-  assert.match(finalJson, /第一段/, 'final card carries the complete answer');
+  const finalJson = JSON.stringify(finalPatchOfCard(h.transport, processCard.messageId));
+  assert.match(finalJson, /第一段/, 'final process card carries the complete answer');
   assert.match(finalJson, /完成/);
 
   assert.equal(recordedTexts(h.transport).length, 0, 'no final text message may be sent');
@@ -315,10 +330,9 @@ for (const [kind, keyword] of [
       `expected a ${kind} notice, got: ${texts.join(' | ')}`,
     );
     const cards = recordedCards(h.transport);
-    assert.equal(cards.length, 1, 'answer card still exists');
-    const finalCard = patchedCards(h.transport).at(-1)?.card;
-    assert.ok(finalCard !== undefined);
-    const cardText = JSON.stringify(finalCard);
+    const processCard = cardOfTitle(cards, PROCESS_CARD_TITLE);
+    assert.ok(processCard !== undefined, 'answer card still exists');
+    const cardText = JSON.stringify(finalPatchOfCard(h.transport, processCard.messageId));
     assert.ok(
       /失败|已中断|待审批/.test(cardText),
       `final card must show the terminal state: ${cardText}`,
@@ -696,11 +710,9 @@ test('终态卡带标题：卡内含会话标题与完整正文，不另发文�
     time: 1_200,
   });
 
-  const card = recordedCards(h.transport).at(-1)?.card;
-  assert.ok(card !== undefined);
-  const finalUpdate = patchedCards(h.transport).at(-1)?.card;
-  assert.ok(finalUpdate !== undefined);
-  const text = JSON.stringify(finalUpdate);
+  const processCard = cardOfTitle(recordedCards(h.transport), PROCESS_CARD_TITLE);
+  assert.ok(processCard !== undefined);
+  const text = JSON.stringify(finalPatchOfCard(h.transport, processCard.messageId));
   assert.match(text, /会话：会话标题/);
   assert.match(text, /正文内容/);
   assert.equal(recordedTexts(h.transport).length, 0);
@@ -722,9 +734,9 @@ test('终态卡无标题：不写「未命名」，正文完整入卡', async (t
     time: 1_200,
   });
 
-  const finalUpdate = patchedCards(h.transport).at(-1)?.card;
-  assert.ok(finalUpdate !== undefined);
-  const text = JSON.stringify(finalUpdate);
+  const processCard = cardOfTitle(recordedCards(h.transport), PROCESS_CARD_TITLE);
+  assert.ok(processCard !== undefined);
+  const text = JSON.stringify(finalPatchOfCard(h.transport, processCard.messageId));
   assert.match(text, /正文内容/);
   assert.ok(!text.includes('未命名'));
   assert.ok(!text.includes('▸'));
@@ -1363,7 +1375,7 @@ test('/adopt：歧义列候选、零命中、已在其他 scope 下都给提示'
   assert.notEqual(foreign.store.get(scopeKey('group', 'oc_chat', null, 'ou_me')), foreignTarget);
 });
 
-test('合并后过程卡只发一张，含状态/步数/最近事件（不再有独立状态卡）', async (t) => {
+test('一张过程卡 + 一张常驻状态卡；过程卡含状态/步数/最近事件', async (t) => {
   const h = makeHarness(t);
   await h.bridge.handleInbound(inbound('hi'));
   const session = liveAgent(h).session;
@@ -1374,8 +1386,11 @@ test('合并后过程卡只发一张，含状态/步数/最近事件（不再有
   await tick();
 
   const cards = recordedCards(h.transport);
-  assert.deepEqual(cardTitles(cards), ['飞书会话 · 过程'], 'exactly one merged card');
-  const latest = patchedCards(h.transport).at(-1)?.card ?? cards[0]?.card;
+  assert.equal(cardTitles(cards).filter((title) => title === PROCESS_CARD_TITLE).length, 1);
+  assert.equal(cardTitles(cards).filter((title) => title === STATUS_CARD_TITLE).length, 1);
+  const processCard = cardOfTitle(cards, PROCESS_CARD_TITLE);
+  assert.ok(processCard !== undefined);
+  const latest = finalPatchOfCard(h.transport, processCard.messageId) ?? processCard.card;
   const text = JSON.stringify(latest);
   assert.match(text, /\*\*运行中\*\*/);
   assert.match(text, /步数 1/);
@@ -1384,7 +1399,7 @@ test('合并后过程卡只发一张，含状态/步数/最近事件（不再有
   assert.match(text, /过程消息；收尾会把终稿更新到本卡/);
 });
 
-test('同一回合助手正文只在卡片内出现一次（同 message_id）', async (t) => {
+test('同一回合助手正文只在过程卡内出现（同 message_id），状态卡不含正文', async (t) => {
   const h = makeHarness(t);
   await h.bridge.handleInbound(inbound('请回答'));
   const session = liveAgent(h).session;
@@ -1406,13 +1421,19 @@ test('同一回合助手正文只在卡片内出现一次（同 message_id）', 
     event('turn/end', { turn: 1, reason: { kind: 'completed' } }, 200),
   );
 
-  const finalCard = patchedCards(h.transport).at(-1)?.card;
-  assert.ok(finalCard !== undefined);
-  const finalText = JSON.stringify(finalCard);
+  const processCard = cardOfTitle(recordedCards(h.transport), PROCESS_CARD_TITLE);
+  assert.ok(processCard !== undefined);
+  const finalText = JSON.stringify(finalPatchOfCard(h.transport, processCard.messageId));
   for (const sentence of ['这是第一句完整回答', '这是第二句完整回答']) {
     assert.equal(finalText.split(sentence).length - 1, 1, `"${sentence}" must appear once in the card`);
   }
   assert.equal(recordedTexts(h.transport).length, 0, 'no separate answer text');
+  const statusCards = [...recordedCards(h.transport), ...patchedCards(h.transport)].filter(
+    (entry) => entry.card.header?.title.content === STATUS_CARD_TITLE,
+  );
+  for (const entry of statusCards) {
+    assert.ok(!JSON.stringify(entry.card).includes('这是第一句完整回答'), 'status card must not carry body');
+  }
   const bodyCardIds = new Set(
     [...recordedCards(h.transport), ...patchedCards(h.transport)]
       .filter((entry) => JSON.stringify(entry.card).includes('这是第一句完整回答'))
@@ -1470,7 +1491,9 @@ test('超长正文：终态卡 ≤30KB、保留尾部并写「…已省略 N 字
     time: 200,
   });
 
-  const card = patchedCards(h.transport).at(-1)?.card;
+  const processCard = cardOfTitle(recordedCards(h.transport), PROCESS_CARD_TITLE);
+  assert.ok(processCard !== undefined);
+  const card = finalPatchOfCard(h.transport, processCard.messageId);
   assert.ok(card !== undefined);
   assert.ok(cardByteSize(card) <= CARD_BYTE_LIMIT, `card is ${cardByteSize(card)} bytes`);
   const serialized = JSON.stringify(card);
@@ -1478,5 +1501,114 @@ test('超长正文：终态卡 ≤30KB、保留尾部并写「…已省略 N 字
   assert.ok(serialized.includes('结尾标记'), 'kept tail must include the end');
   assert.ok(!serialized.includes('开头标记'), 'dropped head must be gone');
   assert.ok(!serialized.includes('\uFFFD'), 'UTF-8 boundaries must stay safe');
+  assert.equal(recordedTexts(h.transport).length, 0);
+});
+
+test('状态卡：同一 scope 跨回合复用同一 message_id，过程卡每回合新建', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('第一轮'));
+  const session = liveAgent(h).session;
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 100));
+  await h.bridge.handleSessionEvent(session, {
+    type: 'assistant/message',
+    data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: '第一轮答案' }] } },
+    time: 120,
+  });
+  await h.bridge.handleSessionEvent(session, {
+    type: 'turn/end',
+    data: { turn: 1, reason: { kind: 'completed' } },
+    time: 200,
+  });
+  await h.bridge.handleInbound(inbound('第二轮'));
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 2 }, 300));
+  await h.bridge.handleSessionEvent(session, {
+    type: 'turn/end',
+    data: { turn: 2, reason: { kind: 'completed' } },
+    time: 400,
+  });
+
+  const statusCards = recordedCards(h.transport).filter(
+    (entry) => entry.card.header?.title.content === STATUS_CARD_TITLE,
+  );
+  const processCards = recordedCards(h.transport).filter(
+    (entry) => entry.card.header?.title.content === PROCESS_CARD_TITLE,
+  );
+  assert.equal(statusCards.length, 1, 'status card is created once per scope');
+  assert.equal(processCards.length, 2, 'process card is created once per turn');
+  const statusId = statusCards[0]?.messageId;
+  const statusPatches = patchedCards(h.transport).filter((patch) => patch.messageId === statusId);
+  assert.ok(statusPatches.length >= 1, 'status card updates by patch, never re-sends');
+  // Cross-turn states visible on the persistent card.
+  const all = [JSON.stringify(statusCards[0]?.card), ...statusPatches.map((p) => JSON.stringify(p.card))].join('\n');
+  assert.match(all, /状态：空闲/);
+  assert.match(all, /状态：运行中/);
+  assert.match(all, /状态：完成/);
+});
+
+test('状态卡内容不含助手正文（长文本断言）', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('请回答'));
+  const session = liveAgent(h).session;
+  const body = '状态卡绝不能包含这段长正文。另一句也不该出现。';
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 100));
+  await h.bridge.handleSessionEvent(session, {
+    type: 'assistant/message',
+    data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: body }] } },
+    time: 120,
+  });
+  await h.bridge.handleSessionEvent(session, {
+    type: 'turn/end',
+    data: { turn: 1, reason: { kind: 'completed' } },
+    time: 200,
+  });
+
+  const statusCards = [...recordedCards(h.transport), ...patchedCards(h.transport)].filter(
+    (entry) => entry.card.header?.title.content === STATUS_CARD_TITLE,
+  );
+  assert.ok(statusCards.length >= 1);
+  for (const entry of statusCards) {
+    assert.ok(!JSON.stringify(entry.card).includes('状态卡绝不能包含这段长正文'));
+    assert.ok(!JSON.stringify(entry.card).includes('另一句也不该出现'));
+  }
+});
+
+test('statusCard=false：不创建状态卡，过程卡与收尾不受影响', async (t) => {
+  const h = makeHarness(t, { statusCard: false });
+  await h.bridge.handleInbound(inbound('hi'));
+  const session = liveAgent(h).session;
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 100));
+  await h.bridge.handleSessionEvent(session, {
+    type: 'turn/end',
+    data: { turn: 1, reason: { kind: 'completed' } },
+    time: 200,
+  });
+
+  const cards = recordedCards(h.transport);
+  assert.ok(!cardTitles(cards).includes(STATUS_CARD_TITLE));
+  const processCard = cardOfTitle(cards, PROCESS_CARD_TITLE);
+  assert.ok(processCard !== undefined);
+  assert.ok(finalPatchOfCard(h.transport, processCard.messageId) !== undefined);
+  assert.equal(recordedTexts(h.transport).length, 0);
+});
+
+test('状态卡创建失败：回合仍完成，日志含 status card degraded 并重试', async (t) => {
+  const h = makeHarness(t);
+  h.transport.failCardCreateWith = new Error('card create boom');
+  await h.bridge.handleInbound(inbound('hi'));
+  const session = liveAgent(h).session;
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 100));
+  await h.bridge.handleSessionEvent(session, {
+    type: 'turn/end',
+    data: { turn: 1, reason: { kind: 'completed' } },
+    time: 200,
+  });
+
+  assert.ok(
+    h.logger.entries.some((entry) => entry.message.startsWith('status card degraded:')),
+    h.logger.entries.map((entry) => entry.message).join(' | '),
+  );
+  const processCard = cardOfTitle(recordedCards(h.transport), PROCESS_CARD_TITLE);
+  assert.ok(processCard !== undefined, 'turn still renders its process card');
+  assert.ok(finalPatchOfCard(h.transport, processCard.messageId) !== undefined, 'turn still completes');
   assert.equal(recordedTexts(h.transport).length, 0);
 });
