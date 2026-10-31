@@ -52,6 +52,10 @@ interface HarnessOptions {
   readonly prebindTopic?: boolean;
   /** Seed a legacy v3 session-map before the bridge loads it. */
   readonly seedMap?: Readonly<Record<string, string>>;
+  /** Seed a v5 session-map (current + history) before the bridge loads it. */
+  readonly seedV5?: Readonly<
+    Record<string, { readonly sessionId: string; readonly history: readonly string[] }>
+  >;
   /** Ordinary-group isolation switch (default true). */
   readonly groupSessionsPerUser?: boolean;
   /** Deferred title service (lazy-resolution tests); overrides `title`. */
@@ -76,7 +80,13 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   let storeSeq = 0;
   const mapPath = join(dir, 'session-map.json');
-  if (options.seedMap !== undefined) {
+  if (options.seedV5 !== undefined) {
+    writeFileSync(
+      mapPath,
+      JSON.stringify({ version: 5, entries: options.seedV5, cwd: {} }),
+      'utf8',
+    );
+  } else if (options.seedMap !== undefined) {
     writeFileSync(
       mapPath,
       JSON.stringify({
@@ -832,8 +842,8 @@ test('v3 旧共享条目原样保留，新消息落 per-user 新键（v4）', as
     entries: Record<string, { sessionId: string }>;
   };
   assert.equal(persisted.version, SESSION_MAP_VERSION);
-  assert.deepEqual(persisted.entries[legacyKey], { sessionId: 'feishu-legacy-shared' });
-  assert.deepEqual(persisted.entries[newKey], { sessionId: newSession });
+  assert.deepEqual(persisted.entries[legacyKey], { sessionId: 'feishu-legacy-shared', history: [] });
+  assert.deepEqual(persisted.entries[newKey], { sessionId: newSession, history: [newSession] });
 });
 
 test('/sessions --all：同 chat 混合旧键/话题键/用户键全部列出且标签正确', async (t) => {
@@ -1164,4 +1174,78 @@ test('/sessions：map 里有但磁盘无日志的条目标「（未落地）」'
   assert.match(ghostLine, /（未落地）$/);
   const currentLine = text.split('\n').find((line) => line.startsWith('* ▸ '));
   assert.ok(currentLine !== undefined && !currentLine.includes('（未落地）'), text);
+});
+
+test('history：/new 把旧 id 留在 history，/sessions --all 枚举当前 + 历史', async (t) => {
+  const h = makeHarness(t);
+  const key = scopeKey('p2p', 'oc_chat', null, 'ou_user');
+  await h.bridge.handleInbound(inbound('hi'));
+  const first = h.store.get(key) as string;
+  await h.bridge.handleInbound(inbound('/new'));
+  const second = h.store.get(key) as string;
+  assert.notEqual(first, second);
+  assert.equal(h.store.history(key)[0], second);
+  assert.ok(h.store.history(key).includes(first));
+
+  await h.bridge.handleInbound(inbound('/sessions --all'));
+  const text = recordedTexts(h.transport).at(-1) ?? '';
+  assert.ok(text.includes(first.slice(-8)), text);
+  assert.ok(text.includes(second.slice(-8)), text);
+  assert.ok(text.split('\n').some((line) => line.startsWith('* ▸ ')));
+});
+
+test('重启模拟（v5 从磁盘 load）：/resume 命中 history 中的旧 id，并提到 history 首位', async (t) => {
+  const currentId = 'feishu-1793464086695';
+  const historyId = 'feishu-1793463503786';
+  const key = scopeKey('p2p', 'oc_chat', null, 'ou_user');
+  const h = makeHarness(t, {
+    seedV5: {
+      [key]: { sessionId: currentId, history: [currentId, historyId] },
+    },
+  });
+  await h.bridge.handleInbound(inbound('hi'));
+  assert.equal(h.store.get(key), currentId);
+
+  await h.bridge.handleInbound(inbound(`/resume ${historyId.slice(-8)}`));
+  assert.equal(h.store.get(key), historyId);
+  assert.equal(h.store.history(key)[0], historyId);
+  assert.ok(h.store.history(key).includes(currentId), 'old current stays reachable');
+  assert.ok(h.agents.resumed.includes(historyId));
+});
+
+test('/sessions --all：历史条目也带幽灵标记', async (t) => {
+  const key = scopeKey('p2p', 'oc_chat', null, 'ou_user');
+  const liveId = 'feishu-1793464086695';
+  const ghostId = 'feishu-1793463503786';
+  const h = makeHarness(t, {
+    seedV5: { [key]: { sessionId: liveId, history: [liveId, ghostId] } },
+    sessionExists: (sessionId) => sessionId !== ghostId,
+  });
+  await h.bridge.handleInbound(inbound('hi'));
+  await h.bridge.handleInbound(inbound('/sessions --all'));
+
+  const text = recordedTexts(h.transport).at(-1) ?? '';
+  const ghostLine = text.split('\n').find((line) => line.includes(ghostId.slice(-8)));
+  const liveLine = text.split('\n').find((line) => line.startsWith('* ▸ '));
+  assert.ok(ghostLine !== undefined, text);
+  assert.match(ghostLine, /（未落地）$/);
+  assert.ok(liveLine !== undefined && !liveLine.includes('（未落地）'), text);
+});
+
+test('/resume 歧义：历史中两条同尾号给出候选且不切换', async (t) => {
+  const key = scopeKey('p2p', 'oc_chat', null, 'ou_user');
+  const currentId = 'feishu-current-99999999';
+  const h = makeHarness(t, {
+    seedV5: {
+      [key]: {
+        sessionId: currentId,
+        history: [currentId, 'feishu-ambig-11111111', 'feishu-other-11111111'],
+      },
+    },
+  });
+  await h.bridge.handleInbound(inbound('hi'));
+  await h.bridge.handleInbound(inbound('/resume 11111111'));
+  const text = recordedTexts(h.transport).at(-1) ?? '';
+  assert.match(text, /命中 2 条会话/);
+  assert.equal(h.store.get(key), currentId);
 });

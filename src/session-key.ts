@@ -11,20 +11,31 @@
  * | ordinary group (no thread) | `chatId + "\u0000" + senderOpenId` — per user |
  *
  * The mapping persists as `<DSH_HOME>/caduceus/session-map.json` in format
- * **v4** (same `{version, entries, cwd}` shape as v3):
+ * **v5**: each scope key keeps the current session id plus a bounded history
+ * (most recent first, no duplicates; `history[0]` is normally the current id):
  *
  * ```json
  * {
- *   "version": 4,
- *   "entries": { "oc_x\u0000ou_user": { "sessionId": "feishu-1793313252045" } },
+ *   "version": 5,
+ *   "entries": {
+ *     "oc_x\u0000ou_user": {
+ *       "sessionId": "feishu-1793464086695",
+ *       "history": [
+ *         "feishu-1793464086695",
+ *         "feishu-1793463503786",
+ *         "feishu-1793313252045"
+ *       ]
+ *     }
+ *   },
  *   "cwd": { "oc_x\u0000ou_user": "/home/artom/.dsh/workspace" }
  * }
  * ```
  *
- * Older maps still load: v3 (`entries` object; its keys are preserved verbatim
- * as legacy shared sessions and are NOT bulk re-keyed), v2 is a flat
- * `{ "<scope key>": "feishu-<ts>" }` object, and v1 nests those strings under
- * `sessions`. Loading never writes; the next persist writes v4.
+ * Older maps still load: v4/v3 (`entries` object without history; its keys are
+ * preserved verbatim as legacy shared sessions and are NOT bulk re-keyed; the
+ * history starts empty), v2 is a flat `{ "<scope key>": "feishu-<ts>" }`
+ * object, and v1 nests those strings under `sessions`. Loading never writes;
+ * the next persist writes v5.
  *
  * @module @artomyuan/dsh-caduceus/session-key
  */
@@ -34,7 +45,10 @@ import { defaultSessionMapPath, type HomeEnv } from './home.js';
 import type { ChatType } from './transport/types.js';
 
 /** Current on-disk format. */
-export const SESSION_MAP_VERSION = 4;
+export const SESSION_MAP_VERSION = 5;
+
+/** Maximum remembered past session ids per scope key. */
+export const SESSION_HISTORY_LIMIT = 50;
 
 /** Separator between the chat id and the disambiguator inside a scope key (NUL). */
 export const SCOPE_KEY_SEPARATOR = '\u0000';
@@ -94,13 +108,14 @@ export function mintSessionId(): string {
   return `feishu-${lastMintedAt}`;
 }
 
-/** One mapping entry. */
+/** One mapping entry: current id plus recent ids (newest first, current first). */
 export interface SessionEntry {
   readonly sessionId: string;
+  readonly history: readonly string[];
 }
 
-/** The v4 on-disk document (same shape as v3). */
-export interface SessionMapV4 {
+/** The v5 on-disk document. */
+export interface SessionMapV5 {
   readonly version: typeof SESSION_MAP_VERSION;
   readonly entries: Record<string, SessionEntry>;
   readonly cwd: Record<string, string>;
@@ -144,7 +159,7 @@ export class SessionStore {
   readonly filePath: string;
 
   private readonly mint: SessionIdMinter;
-  private readonly entries = new Map<string, string>();
+  private readonly entries = new Map<string, { sessionId: string; history: string[] }>();
   private readonly cwds = new Map<string, string>();
   private readonly warningLog: string[] = [];
   private loaded = false;
@@ -204,11 +219,12 @@ export class SessionStore {
 
     const version = parsed['version'];
     if (version === SESSION_MAP_VERSION) {
-      this.loadV4(parsed);
-    } else if (version === 3) {
-      // Legacy v3 map: keys are old shared-session scopes. Preserve them
-      // verbatim (no bulk re-key); the next persist writes v4.
-      this.loadV4(parsed);
+      this.loadV5(parsed);
+    } else if (version === 4 || version === 3) {
+      // Legacy v4/v3 map: keys are old shared-session scopes. Preserve them
+      // verbatim (no bulk re-key) and start each history empty; the next
+      // persist writes v5.
+      this.loadLegacyEntries(parsed);
     } else if (version === 1) {
       this.loadV1(parsed);
     } else if (version === 2) {
@@ -226,7 +242,13 @@ export class SessionStore {
   /** @throws when called before `load()`. */
   get(key: string): string | undefined {
     this.requireLoaded();
-    return this.entries.get(key);
+    return this.entries.get(key)?.sessionId;
+  }
+
+  /** Recent session ids for a key, newest first (normally current at index 0). */
+  history(key: string): readonly string[] {
+    this.requireLoaded();
+    return [...(this.entries.get(key)?.history ?? [])];
   }
 
   /** @throws when called before `load()`. */
@@ -241,12 +263,25 @@ export class SessionStore {
     return [...this.entries.keys()];
   }
 
-  /** Bind a key to a session id and persist. @throws when called before `load()`. */
+  /**
+   * Point a key at `sessionId` and persist. The previous current id is pushed
+   * to the front of `history`; the new current is removed from history (it is
+   * the current id now). History is deduped and capped at
+   * {@link SESSION_HISTORY_LIMIT}.
+   * @throws when called before `load()`.
+   */
   set(key: string, sessionId: string): void {
     this.requireLoaded();
     if (key.length === 0) throw new TypeError('session map: key must be a non-empty string');
     if (sessionId.length === 0) throw new TypeError('session map: sessionId must be a non-empty string');
-    this.entries.set(key, sessionId);
+    const entry = this.entries.get(key);
+    if (entry === undefined) {
+      this.entries.set(key, { sessionId, history: [sessionId] });
+    } else if (entry.sessionId !== sessionId) {
+      const prior = [entry.sessionId, ...entry.history].filter((id) => id !== sessionId);
+      const history = [...new Set([sessionId, ...prior])].slice(0, SESSION_HISTORY_LIMIT);
+      this.entries.set(key, { sessionId, history });
+    }
     this.persist();
   }
 
@@ -258,16 +293,16 @@ export class SessionStore {
   ensure(key: string, mint: SessionIdMinter = this.mint): string {
     this.requireLoaded();
     const existing = this.entries.get(key);
-    if (existing !== undefined) return existing;
+    if (existing !== undefined) return existing.sessionId;
     if (key.length === 0) throw new TypeError('session map: key must be a non-empty string');
     const sessionId = mint();
     if (sessionId.length === 0) throw new Error('session map: minter returned an empty session id');
-    for (const [otherKey, otherId] of this.entries) {
-      if (otherId === sessionId && otherKey !== key) {
+    for (const [otherKey, otherEntry] of this.entries) {
+      if (otherEntry.sessionId === sessionId && otherKey !== key) {
         throw new Error(`session map: minter returned duplicate session id ${sessionId}`);
       }
     }
-    this.entries.set(key, sessionId);
+    this.entries.set(key, { sessionId, history: [sessionId] });
     this.persist();
     return sessionId;
   }
@@ -303,17 +338,19 @@ export class SessionStore {
     return deleted;
   }
 
-  /** A plain v4 snapshot, suitable for JSON serialization in tests and logs. */
-  snapshot(): SessionMapV4 {
+  /** A plain v5 snapshot, suitable for JSON serialization in tests and logs. */
+  snapshot(): SessionMapV5 {
     this.requireLoaded();
     const entries: Record<string, SessionEntry> = {};
-    for (const [key, sessionId] of this.entries) entries[key] = { sessionId };
+    for (const [key, entry] of this.entries) {
+      entries[key] = { sessionId: entry.sessionId, history: [...entry.history] };
+    }
     const cwd: Record<string, string> = {};
     for (const [key, value] of this.cwds) cwd[key] = value;
     return { version: SESSION_MAP_VERSION, entries, cwd };
   }
 
-  /** Atomically write the current map as v4 (temp file beside the target, then rename). */
+  /** Atomically write the current map as v5 (temp file beside the target, then rename). */
   persist(): void {
     this.requireLoaded();
     writeFileAtomicSync(this.filePath, `${JSON.stringify(this.snapshot(), null, 2)}\n`);
@@ -328,7 +365,7 @@ export class SessionStore {
     for (const [key, value] of Object.entries(sessions)) {
       const sessionId = sessionIdOf(value);
       if (sessionId === undefined) this.warn(`session map ${this.filePath}: v1 entry ${JSON.stringify(key)} is not a session id; skipped`);
-      else this.entries.set(key, sessionId);
+      else this.entries.set(key, { sessionId, history: [] });
     }
     this.loadCwdTable(document, ['cwd', 'cwds']);
   }
@@ -339,18 +376,52 @@ export class SessionStore {
       if (reserved.has(key)) continue;
       const sessionId = sessionIdOf(value);
       if (sessionId === undefined) this.warn(`session map ${this.filePath}: v2 entry ${JSON.stringify(key)} is not a session id; skipped`);
-      else this.entries.set(key, sessionId);
+      else this.entries.set(key, { sessionId, history: [] });
     }
     this.loadCwdTable(document, ['cwd', 'cwds']);
   }
 
-  private loadV4(document: Record<string, unknown>): void {
+  private loadV5(document: Record<string, unknown>): void {
+    const entries = document['entries'];
+    if (!isRecord(entries)) {
+      this.warn(`session map ${this.filePath}: v5 document has no entries object; starting with an empty map`);
+      this.loadCwdTable(document, ['cwd']);
+      return;
+    }
+    for (const [key, value] of Object.entries(entries)) {
+      const sessionId = sessionIdOf(value);
+      if (sessionId === undefined) {
+        this.warn(`session map ${this.filePath}: v5 entry ${JSON.stringify(key)} has no sessionId; skipped`);
+        continue;
+      }
+      const rawHistory = isRecord(value) ? value['history'] : undefined;
+      const prior: string[] = [];
+      if (Array.isArray(rawHistory)) {
+        for (const item of rawHistory) {
+          if (typeof item !== 'string' || item.length === 0) continue;
+          if (item === sessionId || prior.includes(item)) continue;
+          prior.push(item);
+          if (prior.length >= SESSION_HISTORY_LIMIT - 1) break;
+        }
+      }
+      // Normalize: the current id leads the history (legacy/v3-v4 entries keep
+      // an empty history exactly as required by the migration contract).
+      this.entries.set(key, {
+        sessionId,
+        history: [sessionId, ...prior].slice(0, SESSION_HISTORY_LIMIT),
+      });
+    }
+    this.loadCwdTable(document, ['cwd']);
+  }
+
+  /** v4/v3 entry objects: current id only, history starts empty. */
+  private loadLegacyEntries(document: Record<string, unknown>): void {
     const entries = document['entries'];
     if (isRecord(entries)) {
       for (const [key, value] of Object.entries(entries)) {
         const sessionId = sessionIdOf(value);
         if (sessionId === undefined) this.warn(`session map ${this.filePath}: v3/v4 entry ${JSON.stringify(key)} has no sessionId; skipped`);
-        else this.entries.set(key, sessionId);
+        else this.entries.set(key, { sessionId, history: [] });
       }
     } else {
       this.warn(`session map ${this.filePath}: v3/v4 document has no entries object; starting with an empty map`);

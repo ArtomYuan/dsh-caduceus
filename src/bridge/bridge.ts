@@ -503,30 +503,44 @@ export class Bridge {
    * label; time is relative when this process has the scope state, `—` otherwise.
    */
   #sessionsAllText(state: ScopeState): string {
+    interface Row {
+      readonly key: string;
+      readonly sessionId: string;
+      readonly current: boolean;
+    }
+    const rows: Row[] = [];
+    const seen = new Set<string>();
+    const add = (key: string, sessionId: string | undefined, current: boolean): void => {
+      if (sessionId === undefined || seen.has(sessionId)) return;
+      seen.add(sessionId);
+      rows.push({ key, sessionId, current });
+    };
+
+    // Current scope: current id first, then its durable history.
     const currentId = state.sessionId ?? this.#sessionMap.get(state.key);
-    const rows: { key: string; sessionId: string }[] = [];
-    for (const key of this.#scopeKeysForChat(state.chatId)) {
-      const sessionId = this.#sessionMap.get(key);
-      if (sessionId !== undefined) rows.push({ key, sessionId });
+    add(state.key, currentId, true);
+    for (const id of this.#sessionMap.history(state.key)) add(state.key, id, false);
+
+    // Other scopes of this chat: current id then history (deterministic order).
+    for (const key of [...this.#scopeKeysForChat(state.chatId)].sort()) {
+      if (key === state.key) continue;
+      add(key, this.#sessionMap.get(key), false);
+      for (const id of this.#sessionMap.history(key)) add(key, id, false);
     }
-    if (currentId !== undefined && !rows.some((row) => row.key === state.key)) {
-      rows.push({ key: state.key, sessionId: currentId });
-    }
-    const current = rows.find((row) => row.key === state.key);
-    const others = rows
-      .filter((row) => row.key !== state.key)
-      .sort((left, right) => left.key.localeCompare(right.key));
-    const ordered = [...(current === undefined ? [] : [current]), ...others];
-    if (ordered.length === 0) return '本聊天还没有会话，直接发消息或 /new 开始。';
+
+    if (rows.length === 0) return '本聊天还没有会话，直接发消息或 /new 开始。';
     return [
-      '本聊天下的会话（含其他 scope）：',
-      ...ordered.map((row) => this.#allSessionLine(state, row)),
+      '本聊天下的会话（含其他 scope 与历史）：',
+      ...rows.map((row) => this.#allSessionLine(state, row)),
       '用 /resume <id 后 8 位> 继续某条会话',
     ].join('\n');
   }
 
-  #allSessionLine(state: ScopeState, row: { readonly key: string; readonly sessionId: string }): string {
-    const isCurrent = row.key === state.key;
+  #allSessionLine(
+    state: ScopeState,
+    row: { readonly key: string; readonly sessionId: string; readonly current: boolean },
+  ): string {
+    const isCurrent = row.current;
     const owner = isCurrent ? state : this.#states.get(row.key);
     const title =
       owner !== undefined && owner.sessionId === row.sessionId && owner.title !== undefined
@@ -726,15 +740,18 @@ export class Bridge {
     query: string,
   ): { readonly sessionId: string; readonly keys: string[] }[] {
     const matches = new Map<string, string[]>();
-    for (const key of this.#scopeKeysForChat(state.chatId)) {
-      const sessionId = this.#sessionMap.get(key);
-      if (sessionId === undefined) continue;
+    const consider = (key: string, sessionId: string): void => {
       if (sessionId !== query) {
-        if (query.length < 8 || !sessionId.endsWith(query)) continue;
+        if (query.length < 8 || !sessionId.endsWith(query)) return;
       }
       const keys = matches.get(sessionId);
       if (keys === undefined) matches.set(sessionId, [key]);
-      else keys.push(key);
+      else if (!keys.includes(key)) keys.push(key);
+    };
+    for (const key of this.#scopeKeysForChat(state.chatId)) {
+      const current = this.#sessionMap.get(key);
+      if (current !== undefined) consider(key, current);
+      for (const sessionId of this.#sessionMap.history(key)) consider(key, sessionId);
     }
     return [...matches.entries()].map(([sessionId, keys]) => ({ sessionId, keys }));
   }

@@ -126,7 +126,7 @@ test('SessionStore: 原子写 —— 先写 .tmp 再 rename，落盘后无残留
   assert.equal(readJson(filePath)['version'], SESSION_MAP_VERSION);
 });
 
-test('SessionStore: v2 扁平映射 → 原样保留旧键，load 不改写，persist 升级 v3', (t) => {
+test('SessionStore: v2 扁平映射 → 原样保留旧键，load 不改写，persist 升级 v5', (t) => {
   const dir = makeDir(t);
   const filePath = join(dir, 'session-map.json');
   const topicKey = `oc_x${SCOPE_KEY_SEPARATOR}omt_y`;
@@ -149,13 +149,13 @@ test('SessionStore: v2 扁平映射 → 原样保留旧键，load 不改写，pe
   const upgraded = readJson(filePath);
   assert.equal(upgraded['version'], SESSION_MAP_VERSION);
   const entries = upgraded['entries'] as Record<string, { sessionId: string }>;
-  assert.deepEqual(entries[topicKey], { sessionId: 'feishu-1793313252045' });
-  assert.deepEqual(entries['oc_plain'], { sessionId: 'feishu-1793313252000' });
-  assert.deepEqual(entries['oc_new'], { sessionId: 'feishu-3' });
+  assert.deepEqual(entries[topicKey], { sessionId: 'feishu-1793313252045', history: [] });
+  assert.deepEqual(entries['oc_plain'], { sessionId: 'feishu-1793313252000', history: [] });
+  assert.deepEqual(entries['oc_new'], { sessionId: 'feishu-3', history: ['feishu-3'] });
   assert.deepEqual(upgraded['cwd'], {});
 });
 
-test('SessionStore: v3 旧条目原样保留，load 不改写，新键落 v4 且不批量改写', (t) => {
+test('SessionStore: v3 旧条目原样保留，load 不改写，新键落 v5 且不批量改写', (t) => {
   const dir = makeDir(t);
   const filePath = join(dir, 'session-map.json');
   const legacyTopicKey = `oc_x${SCOPE_KEY_SEPARATOR}omt_y`;
@@ -185,9 +185,9 @@ test('SessionStore: v3 旧条目原样保留，load 不改写，新键落 v4 且
   const persisted = readJson(filePath);
   assert.equal(persisted['version'], SESSION_MAP_VERSION);
   const entries = persisted['entries'] as Record<string, { sessionId: string }>;
-  assert.deepEqual(entries[legacyTopicKey], { sessionId: 'feishu-old-topic' });
-  assert.deepEqual(entries['oc_legacy_shared'], { sessionId: 'feishu-old-shared' });
-  assert.deepEqual(entries[newKey], { sessionId: 'feishu-new' });
+  assert.deepEqual(entries[legacyTopicKey], { sessionId: 'feishu-old-topic', history: [] });
+  assert.deepEqual(entries['oc_legacy_shared'], { sessionId: 'feishu-old-shared', history: [] });
+  assert.deepEqual(entries[newKey], { sessionId: 'feishu-new', history: ['feishu-new'] });
   assert.deepEqual(persisted['cwd'], { oc_legacy_shared: '/home/artom/agent-workspace' });
 });
 
@@ -199,7 +199,7 @@ test('SessionStore: 带 version:2 的旧文件同样迁移', (t) => {
   store.load();
   assert.equal(store.get('oc_x'), 'feishu-7');
   assert.deepEqual(store.warnings, []);
-  assert.deepEqual(store.snapshot().entries, { oc_x: { sessionId: 'feishu-7' } });
+  assert.deepEqual(store.snapshot().entries, { oc_x: { sessionId: 'feishu-7', history: [] } });
 });
 
 test('SessionStore: v1（sessions / cwd 两表）迁移，persist 后写 v3', (t) => {
@@ -288,4 +288,71 @@ test('scopeKey: groupSessionsPerUser=false 时普通群回退 chatId（话题不
     scopeKey('group', 'oc_g', 'omt_t', 'ou_b', false),
     `oc_g${SCOPE_KEY_SEPARATOR}omt_t`,
   );
+});
+
+test('SessionStore: v4→v5 迁移 —— 老单 id 保留为当前，history=[]，load 不改写', (t) => {
+  const dir = makeDir(t);
+  const filePath = join(dir, 'session-map.json');
+  const key = scopeKey('p2p', 'oc_dm', null, 'ou_user');
+  const legacy = {
+    version: 4,
+    entries: { [key]: { sessionId: 'feishu-1793463503786' } },
+    cwd: { [key]: '/home/artom/agent-workspace' },
+  };
+  writeFileSync(filePath, JSON.stringify(legacy), 'utf8');
+
+  const store = new SessionStore({ filePath });
+  store.load();
+  assert.equal(store.get(key), 'feishu-1793463503786');
+  assert.deepEqual(store.history(key), []);
+  assert.deepEqual(readJson(filePath), legacy, 'load must not rewrite the v4 file');
+
+  store.set(key, 'feishu-1793464086695');
+  const persisted = readJson(filePath);
+  assert.equal(persisted['version'], SESSION_MAP_VERSION);
+  const entries = persisted['entries'] as Record<string, { sessionId: string; history: string[] }>;
+  assert.deepEqual(entries[key], {
+    sessionId: 'feishu-1793464086695',
+    history: ['feishu-1793464086695', 'feishu-1793463503786'],
+  });
+  assert.deepEqual(persisted['cwd'], legacy.cwd);
+});
+
+test('SessionStore: set 迁移 —— 新 id 提到 history 首位，去重且最多 50 条', (t) => {
+  const dir = makeDir(t);
+  const filePath = join(dir, 'session-map.json');
+  const key = scopeKey('p2p', 'oc_dm', null, 'ou_user');
+  const store = new SessionStore({ filePath });
+  store.load();
+
+  store.set(key, 'feishu-1000');
+  assert.deepEqual(store.history(key), ['feishu-1000']);
+  store.set(key, 'feishu-1001');
+  assert.deepEqual(store.history(key), ['feishu-1001', 'feishu-1000']);
+  store.set(key, 'feishu-1000');
+  assert.deepEqual(store.history(key), ['feishu-1000', 'feishu-1001']);
+
+  for (let index = 0; index < 60; index += 1) store.set(key, `feishu-2000-${index}`);
+  const history = store.history(key);
+  assert.equal(history.length, 50);
+  assert.equal(history[0], 'feishu-2000-59');
+  assert.equal(new Set(history).size, 50);
+});
+
+test('SessionStore: 重新 load 后 history 与当前 id 都保留（重启模拟）', (t) => {
+  const dir = makeDir(t);
+  const filePath = join(dir, 'session-map.json');
+  const key = scopeKey('p2p', 'oc_dm', null, 'ou_user');
+  const store = new SessionStore({ filePath });
+  store.load();
+  store.set(key, 'feishu-1111111111111');
+  store.set(key, 'feishu-2222222222222');
+
+  const reopened = new SessionStore({ filePath });
+  reopened.load();
+  assert.equal(reopened.get(key), 'feishu-2222222222222');
+  assert.deepEqual(reopened.history(key), [
+    'feishu-2222222222222',
+    'feishu-1111111111111',
+  ]);
 });

@@ -76,7 +76,10 @@ try {
   assert.equal(store.get(topicA), 'feishu-1000');
   const rawMap = JSON.parse(await readFile(mapPath, 'utf8'));
   assert.equal(rawMap.version, SESSION_MAP_VERSION);
-  assert.deepEqual(rawMap.entries[topicA], { sessionId: 'feishu-1000' });
+  assert.deepEqual(rawMap.entries[topicA], {
+    sessionId: 'feishu-1000',
+    history: ['feishu-1000'],
+  });
   assert.ok(!(await readFile(mapPath, 'utf8')).includes('"tmp"'));
 
   // 5. Persona block: only the marked region changes, repeat sync is a no-op.
@@ -322,6 +325,7 @@ try {
 
   // 12. /new materializes immediately: a live agent exists and the map points
   //     at exactly that id (no ghost entry waiting to fail a later resume).
+  const previousSessionId = bridgeStore.get('oc_bridge');
   const liveBefore = fakeAgents.live.size;
   await bridge.handleInbound({
     messageId: 'om_new',
@@ -338,6 +342,13 @@ try {
   const lastReply = calls.filter((call) => call.op === 'reply' && call.payload.kind === 'text').at(-1);
   assert.ok(lastReply !== undefined && lastReply.payload.kind === 'text');
   assert.ok(lastReply.payload.text.includes('已新建会话'));
+  assert.ok(
+    bridgeStore.history('oc_bridge').includes(newSessionId),
+    'history keeps the current id',
+  );
+  if (previousSessionId !== undefined) {
+    assert.ok(bridgeStore.history('oc_bridge').includes(previousSessionId));
+  }
 
   // 13. Visible file log + startup/scope lines (no secret leakage).
   const logFile = join(dir, 'log', 'caduceus.log');
@@ -374,7 +385,7 @@ try {
   assert.equal(shortSessionId('feishu-1793460837083'), '60837083');
 
   console.log(
-    'smoke ok: scopeKey / parseCommand / truncate / SessionStore v4 / persona / transport(thread+fallback) / status / cards / bridge-final / file-log',
+    'smoke ok: scopeKey / parseCommand / truncate / SessionStore v5 / persona / transport(thread+fallback) / status / cards / bridge-final / file-log',
   );
 } finally {
   await rm(dir, { recursive: true, force: true });
