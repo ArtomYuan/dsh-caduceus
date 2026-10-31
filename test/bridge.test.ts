@@ -592,9 +592,11 @@ test('agent 就绪后强制重渲状态卡：同一 message_id 且带上标题',
   );
   assert.ok(patches.length >= 1, 'existing status card must be patched');
   assert.match(JSON.stringify(patches.at(-1)?.card), /服务端标题/);
+  const firstLine = patches.at(-1)?.card.elements[0]?.text?.content;
+  assert.equal(firstLine, '会话：服务端标题', 'status card keeps `会话：{title}` as its first line');
 });
 
-test('/sessions 行格式：标题 · 时间 · sessionId 前 8 位', async (t) => {
+test('/sessions 行格式：▸ 标题 · 相对时间 · sessionId 前 8 位', async (t) => {
   const h = makeHarness(t);
   await h.bridge.handleInbound(inbound('hi'));
   const session = liveAgent(h).session;
@@ -605,9 +607,10 @@ test('/sessions 行格式：标题 · 时间 · sessionId 前 8 位', async (t) 
 
   await h.bridge.handleInbound(inbound('/sessions'));
   const text = recordedTexts(h.transport).at(-1) ?? '';
-  assert.match(text, /· 会话标题 · \d{2}:\d{2}:\d{2}Z · [a-z0-9-]{8}$/, text);
+  assert.match(text, /^\* ▸ 会话标题 · 刚刚 · [a-z0-9-]{8}$/m, text);
   assert.ok(text.includes(String(session.id).slice(0, 8)), text);
   assert.ok(!text.includes(String(session.id)), 'full sessionId must not be printed');
+  assert.equal(text.split('\n').at(-1), '用 /rename <标题> 改当前会话名');
 });
 
 test('/sessions 标题为空时显示「（未命名）」而不是空白', async (t) => {
@@ -618,5 +621,98 @@ test('/sessions 标题为空时显示「（未命名）」而不是空白', asyn
 
   await h.bridge.handleInbound(inbound('/sessions'));
   const text = recordedTexts(h.transport).at(-1) ?? '';
-  assert.match(text, /· （未命名） · \d{2}:\d{2}:\d{2}Z · [a-z0-9-]{8}$/, text);
+  assert.match(text, /^\* ▸ （未命名） · 刚刚 · [a-z0-9-]{8}$/m, text);
+});
+
+test('终稿带标题：首行 `▸ 标题` + 空行 + 完整正文', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('hi'));
+  const session = liveAgent(h).session;
+  h.titles.titles.set(String(session.id), '会话标题');
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 1_000));
+  await h.bridge.handleSessionEvent(session, {
+    type: 'assistant/message',
+    data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: '正文内容' }] } },
+    time: 1_100,
+  });
+  await h.bridge.handleSessionEvent(session, {
+    type: 'turn/end',
+    data: { turn: 1, reason: { kind: 'completed' } },
+    time: 1_200,
+  });
+
+  const final = h.transport.calls.find(
+    (call) => call.op === 'reply' && call.payload.kind === 'text' && call.payload.text.includes('正文内容'),
+  );
+  assert.ok(final !== undefined && final.op === 'reply' && final.payload.kind === 'text');
+  assert.equal(final.payload.text, '▸ 会话标题\n\n正文内容');
+});
+
+test('终稿无标题：没有 `▸` 首行，也不出现「未命名」', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('hi'));
+  const session = liveAgent(h).session;
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 1_000));
+  await h.bridge.handleSessionEvent(session, {
+    type: 'assistant/message',
+    data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: '正文内容' }] } },
+    time: 1_100,
+  });
+  await h.bridge.handleSessionEvent(session, {
+    type: 'turn/end',
+    data: { turn: 1, reason: { kind: 'completed' } },
+    time: 1_200,
+  });
+
+  const final = h.transport.calls.find(
+    (call) => call.op === 'reply' && call.payload.kind === 'text' && call.payload.text.includes('正文内容'),
+  );
+  assert.ok(final !== undefined && final.op === 'reply' && final.payload.kind === 'text');
+  assert.equal(final.payload.text, '正文内容');
+  assert.ok(!final.payload.text.startsWith('▸'));
+  assert.ok(!final.payload.text.includes('未命名'));
+});
+
+test('/sessions 多会话：当前行标记、相对时间排序、只列本 scopeKey', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('A'));
+  const agentA = liveAgent(h);
+  await h.bridge.handleSessionEvent(agentA.session, event('turn/start', { turn: 1 }, 0));
+  h.titles.titles.set(String(agentA.session.id), '标题一');
+  h.clock.advance(5 * 60 * 1000);
+
+  // A session in another scope must never leak into this list.
+  await h.bridge.handleInbound(inbound('别的话题', { threadId: 'omt_other' }));
+  const otherAgent = [...h.agents.live.values()].find(
+    (agent) => agent !== agentA && String(agent.session.id) !== String(h.store.get(scopeKey('oc_chat'))),
+  );
+  assert.ok(otherAgent !== undefined);
+  h.titles.titles.set(String(otherAgent.session.id), '别的话题标题');
+
+  await h.bridge.handleInbound(inbound('/new'));
+  await h.bridge.handleInbound(inbound('B'));
+  const currentSessionId = h.store.get(scopeKey('oc_chat')) as string;
+  const agentB = h.agents.live.get(currentSessionId);
+  assert.ok(agentB !== undefined);
+  await h.bridge.handleSessionEvent(
+    agentB.session,
+    event('turn/start', { turn: 1 }, h.clock.now()),
+  );
+  h.titles.titles.set(currentSessionId, '标题二');
+  h.clock.advance(1_000);
+
+  await h.bridge.handleInbound(inbound('/sessions'));
+  const text = recordedTexts(h.transport).at(-1) ?? '';
+  const lines = text.split('\n');
+  const currentLine = lines.find((line) => line.startsWith('* ▸ '));
+  const previousLine = lines.find((line) => line.startsWith('▸ ') && !line.startsWith('* '));
+  assert.ok(currentLine !== undefined, text);
+  assert.ok(previousLine !== undefined, text);
+  assert.ok(currentLine.includes('标题二'), text);
+  assert.ok(previousLine.includes('标题一'), text);
+  assert.ok(lines.indexOf(currentLine) < lines.indexOf(previousLine), 'current session first');
+  assert.match(currentLine, /^\* ▸ 标题二 · 刚刚 · [a-z0-9-]{8}$/);
+  assert.match(previousLine, /^▸ 标题一 · 5 分钟前 · [a-z0-9-]{8}$/);
+  assert.ok(!text.includes('别的话题标题'), 'cross-scope session must not be listed');
+  assert.equal(lines.at(-1), '用 /rename <标题> 改当前会话名');
 });

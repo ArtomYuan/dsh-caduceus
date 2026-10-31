@@ -51,6 +51,8 @@ interface ScopeState {
   lastInboundMessageId?: string;
   sessionId?: string;
   previousSessionId?: string;
+  /** Unix epoch ms of the previous session's last known activity. */
+  previousSessionAt?: number;
   /** Set by `/new`: the next resolution must create, not resume. */
   pendingCreate: boolean;
   running: boolean;
@@ -66,13 +68,24 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** UTC `HH:MM:SSZ` label used by `/sessions` (deterministic across hosts). */
+/** UTC `HH:MM:SSZ` label used for diagnostics. */
 function clockLabel(ms: number): string {
   const date = new Date(ms);
   const hh = String(date.getUTCHours()).padStart(2, '0');
   const mm = String(date.getUTCMinutes()).padStart(2, '0');
   const ss = String(date.getUTCSeconds()).padStart(2, '0');
   return `${hh}:${mm}:${ss}Z`;
+}
+
+/** Human relative time for `/sessions` (e.g. `刚刚`, `5 分钟前`, `2 小时前`). */
+function relativeTime(ms: number, now: number): string {
+  const seconds = Math.max(0, Math.floor((now - ms) / 1000));
+  if (seconds < 60) return '刚刚';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  return `${Math.floor(hours / 24)} 天前`;
 }
 
 /** Extract the assistant's text from one `assistant/message` payload. */
@@ -252,7 +265,10 @@ export class Bridge {
     switch (command.kind) {
       case 'new': {
         const current = state.sessionId ?? this.#sessionMap.get(state.key);
-        if (current !== undefined) state.previousSessionId = current;
+        if (current !== undefined) {
+          state.previousSessionId = current;
+          state.previousSessionAt = this.#lastActivityAt(state) ?? this.#now();
+        }
         const fresh = this.#mint();
         this.#sessionMap.set(state.key, fresh);
         this.#sessionMap.setCwd(
@@ -385,49 +401,72 @@ export class Bridge {
   }
 
   async #sendFinal(state: ScopeState, text: string): Promise<void> {
-    const clipped = truncateCardContent(text, { maxBytes: FINAL_TEXT_MAX_BYTES }).text;
+    // First line is the current session title when one is known. If the
+    // provider title lands after this final message, no edit/retry happens —
+    // the next turn naturally carries it.
+    const title = this.#titleOf(state)?.trim();
+    const header = title !== undefined && title.length > 0 ? `▸ ${title}\n\n` : '';
+    const budget = Math.max(1, FINAL_TEXT_MAX_BYTES - Buffer.byteLength(header, 'utf8'));
+    const clipped = truncateCardContent(text, { maxBytes: budget }).text;
+    const content = `${header}${clipped}`;
     try {
       if (state.lastInboundMessageId !== undefined) {
         await this.#transport.reply(
           state.chatId,
           state.lastInboundMessageId,
-          { kind: 'text', text: clipped },
+          { kind: 'text', text: content },
           { threadId: state.threadId },
         );
       } else {
-        await this.#transport.sendText(state.chatId, clipped);
+        await this.#transport.sendText(state.chatId, content);
       }
     } catch (error) {
       this.#logger.warn(`final message failed: ${errorMessage(error)}`);
     }
   }
 
+  /**
+   * `/sessions` body. Only THIS scopeKey's sessions are listed (current first,
+   * then the previous one); a cross-topic session can never leak in because the
+   * bridge only knows the sessions bound to this scope.
+   */
   #sessionsText(state: ScopeState): string {
     const current = state.sessionId ?? this.#sessionMap.get(state.key);
     const lines: string[] = [];
     if (current !== undefined) {
-      lines.push(`· ${this.#sessionListLine(state, current)}`);
+      lines.push(this.#sessionListLine(state, current, true));
     }
     if (state.previousSessionId !== undefined && state.previousSessionId !== current) {
-      lines.push(`· ${this.#sessionListLine(state, state.previousSessionId)}`);
+      lines.push(this.#sessionListLine(state, state.previousSessionId, false));
     }
     if (lines.length === 0) return '本聊天/话题还没有会话，直接发消息或 /new 开始。';
-    return ['本聊天/话题的会话：', ...lines].join('\n');
+    return [
+      '本聊天/话题的会话：',
+      ...lines,
+      '用 /rename <标题> 改当前会话名',
+    ].join('\n');
   }
 
   /**
-   * One `/sessions` row: `<title> · <time> · <sessionId 前 8 位>`.
-   * The title comes from `sessionTitle.get(session)` when that session has a
-   * live agent; a missing/empty title renders as `（未命名）`, never blank.
-   * Time is the latest turn/event timestamp available for the scope, `—` when
-   * unknown (e.g. a session that has not produced an event in this process).
+   * One `/sessions` row: `[ * ]▸ <title> · <relative time> · <sessionId 前 8 位>`.
+   * Title comes from the cache / `sessionTitle.get(session)`; empty → `（未命名）`.
+   * Time is relative to now (`刚刚` / `N 分钟前` / `N 小时前` / `N 天前`), `—` when
+   * this process has no timestamp for that session (e.g. a previous session).
    */
-  #sessionListLine(state: ScopeState, sessionId: string): string {
+  #sessionListLine(state: ScopeState, sessionId: string, isCurrent: boolean): string {
     const title = this.#titleForSessionId(state, sessionId);
+    const currentId = state.sessionId ?? this.#sessionMap.get(state.key);
+    const timestamp =
+      sessionId === currentId ? this.#lastActivityAt(state) : state.previousSessionAt;
+    const time = timestamp === undefined ? '—' : relativeTime(timestamp, this.#now());
+    const marker = isCurrent ? '* ' : '';
+    return `${marker}▸ ${title} · ${time} · ${sessionId.slice(0, 8)}`;
+  }
+
+  /** Latest timestamp this scope has seen for its current session, if any. */
+  #lastActivityAt(state: ScopeState): number | undefined {
     const snapshot = state.status.get();
-    const timestamp = snapshot.startedAt ?? snapshot.endedAt ?? snapshot.lastEventAt;
-    const time = timestamp === undefined ? '—' : clockLabel(timestamp);
-    return `${title} · ${time} · ${sessionId.slice(0, 8)}`;
+    return snapshot.startedAt ?? snapshot.endedAt ?? snapshot.lastEventAt;
   }
 
   #titleForSessionId(state: ScopeState, sessionId: string): string {
@@ -516,7 +555,10 @@ export class Bridge {
       return;
     }
     const current = state.sessionId ?? this.#sessionMap.get(state.key);
-    if (current !== undefined && current !== target) state.previousSessionId = current;
+    if (current !== undefined && current !== target) {
+      state.previousSessionId = current;
+      state.previousSessionAt = this.#lastActivityAt(state) ?? this.#now();
+    }
     this.#sessionMap.set(state.key, target);
     state.sessionId = target;
     state.pendingCreate = false;
@@ -599,6 +641,7 @@ export class Bridge {
       this.#logger.warn(`resume failed for ${sessionId}; reminting: ${errorMessage(error)}`);
       const fresh = this.#mint();
       state.previousSessionId = sessionId;
+      state.previousSessionAt = this.#lastActivityAt(state) ?? this.#now();
       state.sessionId = fresh;
       this.#sessionMap.set(state.key, fresh);
       this.#bindSession(state, fresh);
