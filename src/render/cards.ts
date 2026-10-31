@@ -74,6 +74,8 @@ export interface ProgressCardInput {
   readonly recentEvent?: string;
   /** Assistant output tail shown while the turn runs (≤8 KB). */
   readonly tail?: string;
+  /** Append `（preset 未挂载）` to the state line. */
+  readonly presetMissing?: boolean;
 }
 
 /** Clip by Unicode code point so a label never exceeds the budget. */
@@ -99,6 +101,7 @@ export function progressCard(input: ProgressCardInput): FeishuCard {
     const seconds = Math.max(0, Math.floor((now - input.startedAt) / 1000));
     stateLine.push(`已运行 ${seconds}s`);
   }
+  if (input.presetMissing === true) stateLine.push('（preset 未挂载）');
   const elements: FeishuCardElement[] = [
     div(stateLine.join(' · ')),
     div(`最近：${clipLabel(input.recentEvent ?? '（无）')}`),
@@ -121,6 +124,8 @@ export interface FinalCardInput {
   /** Complete assistant output; clipped to the card budget with a head note. */
   readonly body: string;
   readonly template?: string;
+  /** Append `（preset 未挂载）` to the state line. */
+  readonly presetMissing?: boolean;
 }
 
 /** State-line parts shared by the card markdown and the text fallback. */
@@ -132,6 +137,7 @@ function finalStateLine(input: FinalCardInput, markdown: boolean): string {
   }
   parts.push(markdown ? `**${input.stateLabel}**` : input.stateLabel);
   parts.push(`步数 ${input.steps}`, `工具 ${input.tools}`);
+  if (input.presetMissing === true) parts.push('（preset 未挂载）');
   const end = input.endedAt ?? Date.now();
   if (input.startedAt !== undefined) {
     const seconds = Math.max(0, Math.floor((end - input.startedAt) / 1000));

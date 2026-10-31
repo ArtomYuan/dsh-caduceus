@@ -6,7 +6,13 @@
  */
 import type { UserMessage } from '@deepseek-ai/dsh-llm';
 
-import type { AgentLike, AgentsLike, SessionLike, SessionTitleLike } from '../../src/bridge/types.js';
+import type {
+  AgentLike,
+  AgentPresetsLike,
+  AgentsLike,
+  SessionLike,
+  SessionTitleLike,
+} from '../../src/bridge/types.js';
 import type { LoggerLike } from '../../src/logger.js';
 import type { SessionOwnershipMeta } from '../../src/ownership.js';
 import type { Clock, TimerHandle } from '../../src/render/stream.js';
@@ -261,13 +267,36 @@ export class FakeAgent implements AgentLike {
 }
 
 /** `ctx.get('agents')` double with gates for serialization tests. */
+/** `ctx.get('agentPresets')` double: records mounts and can simulate failures. */
+export class FakeAgentPresets implements AgentPresetsLike {
+  readonly mountCalls: { readonly id: string | undefined }[] = [];
+  /** Returned by `composedPreset`; undefined simulates a legacy unbound agent. */
+  composedPresetValue: string | undefined;
+  mountError: Error | undefined;
+
+  async mount(_agentCtx: unknown, id?: string): Promise<unknown> {
+    this.mountCalls.push({ id });
+    if (this.mountError !== undefined) throw this.mountError;
+    return { id: id ?? 'standard' };
+  }
+
+  composedPreset(_agentCtx: unknown): string | undefined {
+    return this.composedPresetValue;
+  }
+}
+
 export class FakeAgents implements AgentsLike {
   readonly live = new Map<string, FakeAgent>();
   readonly created: string[] = [];
   readonly createCalls: {
     readonly sessionId: string;
-    readonly meta: { readonly cwd: string; readonly caduceus: SessionOwnershipMeta };
+    readonly meta: {
+      readonly cwd: string;
+      readonly caduceus: SessionOwnershipMeta;
+      readonly agentPreset?: string;
+    };
   }[] = [];
+  readonly setupCalls: unknown[] = [];
   readonly resumed: string[] = [];
   readonly failResume = new Set<string>();
   /** When set, the next create rejects once (for /new failure tests). */
@@ -277,7 +306,12 @@ export class FakeAgents implements AgentsLike {
 
   async create(options: {
     readonly sessionId: string;
-    readonly meta: { readonly cwd: string; readonly caduceus: SessionOwnershipMeta };
+    readonly meta: {
+      readonly cwd: string;
+      readonly caduceus: SessionOwnershipMeta;
+      readonly agentPreset?: string;
+    };
+    readonly setup?: (agentCtx: unknown) => Promise<void> | void;
   }): Promise<{ readonly agent: FakeAgent }> {
     this.createCalls.push({ sessionId: options.sessionId, meta: options.meta });
     if (this.failCreateWith !== undefined) {
@@ -288,17 +322,28 @@ export class FakeAgents implements AgentsLike {
     this.created.push(options.sessionId);
     if (this.createGate !== undefined) await this.createGate;
     const agent = new FakeAgent(options.sessionId);
+    if (options.setup !== undefined) {
+      this.setupCalls.push({ sessionId: options.sessionId, phase: 'create' });
+      await options.setup({ sessionId: options.sessionId, phase: 'create' });
+    }
     this.live.set(options.sessionId, agent);
     return { agent };
   }
 
-  async resume(options: { readonly resumeSessionId: string }): Promise<{ readonly agent: FakeAgent }> {
+  async resume(options: {
+    readonly resumeSessionId: string;
+    readonly setup?: (agentCtx: unknown) => Promise<void> | void;
+  }): Promise<{ readonly agent: FakeAgent }> {
     this.resumed.push(options.resumeSessionId);
     if (this.resumeGate !== undefined) await this.resumeGate;
     if (this.failResume.has(options.resumeSessionId)) {
       throw new Error(`no persisted log for ${options.resumeSessionId}`);
     }
     const agent = new FakeAgent(options.resumeSessionId);
+    if (options.setup !== undefined) {
+      this.setupCalls.push({ sessionId: options.resumeSessionId, phase: 'resume' });
+      await options.setup({ sessionId: options.resumeSessionId, phase: 'resume' });
+    }
     this.live.set(options.resumeSessionId, agent);
     return { agent };
   }

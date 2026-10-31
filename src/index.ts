@@ -17,7 +17,12 @@ import type { CommandRuntime } from '@deepseek-ai/dsh-commands';
 
 import { backfillSessionOwnership, scanSessionDirs } from './backfill.js';
 import { Bridge } from './bridge/bridge.js';
-import type { AgentLike, AgentsLike, SessionTitleLike } from './bridge/types.js';
+import type {
+  AgentLike,
+  AgentPresetsLike,
+  AgentsLike,
+  SessionTitleLike,
+} from './bridge/types.js';
 import { runHarnessCommand } from './commands/harness.js';
 import { Config, resolveGatewayConfig, type GatewayConfig } from './config.js';
 import { FileLogger } from './file-logger.js';
@@ -41,6 +46,12 @@ interface AgentsServiceLike {
   get(sessionId: string): AgentLike | undefined;
   create(options: Record<string, unknown>): Promise<{ readonly agent: AgentLike }>;
   resume(options: Record<string, unknown>): Promise<{ readonly agent: AgentLike }>;
+}
+
+interface SessionsServiceLike {
+  get(sessionId: string):
+    | { readonly header?: { readonly agentPreset?: string } }
+    | undefined;
 }
 
 interface AgentDefaultModelLike {
@@ -76,19 +87,28 @@ function makeAgents(ctx: Context): AgentsLike {
     ctx.get('agents') as AgentsServiceLike | undefined;
   return {
     get: (sessionId) => service()?.get(sessionId),
-    create: async ({ sessionId, meta }) => {
+    create: async ({ sessionId, meta, setup }) => {
       const agents = service();
       if (agents === undefined) {
         throw new Error('agents service unavailable; cannot create a session');
       }
-      return agents.create({ sessionId, meta, ...agentOptions(ctx) });
+      return agents.create({
+        sessionId,
+        meta,
+        ...(setup === undefined ? {} : { setup }),
+        ...agentOptions(ctx),
+      });
     },
-    resume: async ({ resumeSessionId }) => {
+    resume: async ({ resumeSessionId, setup }) => {
       const agents = service();
       if (agents === undefined) {
         throw new Error('agents service unavailable; cannot resume a session');
       }
-      return agents.resume({ resumeSessionId, ...agentOptions(ctx) });
+      return agents.resume({
+        resumeSessionId,
+        ...(setup === undefined ? {} : { setup }),
+        ...agentOptions(ctx),
+      });
     },
   };
 }
@@ -122,6 +142,7 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
       busyMode: resolved.bridge.busyMode,
     }),
   );
+  logger.info(`agent preset=${resolved.agentPreset}`);
   const sessionMap = new SessionStore();
   sessionMap.load();
   // Ownership backfill is read-only for dsh sessions (session-map writes only),
@@ -153,6 +174,10 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
     logger,
     sessionExists: (sessionId) => hasSessionLog(sessionId),
     sessionIdsProvider: () => scanSessionDirs().map((entry) => entry.sessionId),
+    agentPresets: ctx.get('agentPresets') as AgentPresetsLike | undefined,
+    sessionPresetLookup: (sessionId) =>
+      (ctx.get('sessions') as SessionsServiceLike | undefined)?.get(sessionId)?.header
+        ?.agentPreset,
     // Lazy per use: the service can register AFTER this plugin mounts.
     sessionTitleProvider: () => ctx.get('sessionTitle') as SessionTitleLike | undefined,
     persona: (action) => runPersonaCommand(action, { logger }),

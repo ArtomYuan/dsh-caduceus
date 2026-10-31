@@ -59,3 +59,16 @@ test('resolveGatewayConfig: personaAutoSync 默认 true，可配置 false', () =
     false,
   );
 });
+
+test('resolveGatewayConfig: agentPreset 默认 standard，可配置 other', () => {
+  assert.equal(resolveGatewayConfig({}, {}, '/tmp/work').agentPreset, 'standard');
+  assert.equal(resolveGatewayConfig({}, {}, '/tmp/work').bridge.agentPreset, 'standard');
+  assert.equal(
+    resolveGatewayConfig({ agentPreset: 'other' }, {}, '/tmp/work').agentPreset,
+    'other',
+  );
+  assert.equal(
+    resolveGatewayConfig({ agentPreset: 'other' }, {}, '/tmp/work').bridge.agentPreset,
+    'other',
+  );
+});

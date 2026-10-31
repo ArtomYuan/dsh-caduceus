@@ -21,6 +21,7 @@ import { CARD_BYTE_LIMIT, cardByteSize } from '../src/render/cards.js';
 import type { FeishuCard, InboundMessage } from '../src/transport/types.js';
 import {
   FakeAgent,
+  FakeAgentPresets,
   FakeAgents,
   FakeClock,
   FakeLogger,
@@ -65,11 +66,18 @@ interface HarnessOptions {
   readonly sessionExists?: (sessionId: string) => boolean;
   /** Caduceus session ids discoverable on disk for /adopt (default: none). */
   readonly sessionIdsProvider?: () => readonly string[];
+  /** Agent preset double; null means the optional service is unavailable. */
+  readonly agentPresets?: FakeAgentPresets | null;
+  /** Configured preset id (default `standard`). */
+  readonly agentPreset?: string;
+  /** Persistent session-header preset lookup (simulates a non-legacy header). */
+  readonly sessionPresetLookup?: (sessionId: string) => string | undefined;
 }
 
 interface Harness {
   readonly dir: string;
   readonly store: SessionStore;
+  readonly presets: FakeAgentPresets | undefined;
   readonly transport: FakeTransport;
   readonly agents: FakeAgents;
   readonly clock: FakeClock;
@@ -125,10 +133,13 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
     cardThrottleMs: options.throttleMs ?? 400,
     busyMode: options.busyMode ?? 'queue',
     groupSessionsPerUser: options.groupSessionsPerUser ?? true,
+    ...(options.agentPreset === undefined ? {} : { agentPreset: options.agentPreset }),
   };
   // Ownership sidecars must never escape into the real ~/.dsh during tests.
   const ownershipDir = join(dir, 'owners');
   const sessionIdsProvider = options.sessionIdsProvider ?? (() => []);
+  const agentPresets =
+    options.agentPresets === null ? undefined : (options.agentPresets ?? new FakeAgentPresets());
   if (options.prebindTopic === true) {
     store.set(scopeKey('group', 'oc_chat', 'omt_t', 'ou_user'), 'feishu-prebound-1');
   }
@@ -154,8 +165,12 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
     ...(options.sessionExists === undefined ? {} : { sessionExists: options.sessionExists }),
     ownershipDir,
     sessionIdsProvider,
+    ...(agentPresets === undefined ? {} : { agentPresets }),
+    ...(options.sessionPresetLookup === undefined
+      ? {}
+      : { sessionPresetLookup: options.sessionPresetLookup }),
   });
-  return { dir, store, transport, agents, clock, logger, titles, bridge };
+  return { dir, store, presets: agentPresets, transport, agents, clock, logger, titles, bridge };
 }
 
 function event(type: string, data: unknown, time = 0): StatusEventLike {
@@ -1492,3 +1507,110 @@ test('超长正文：终态卡 ≤30KB、保留尾部并写「…已省略 N 字
   assert.equal(recordedTexts(h.transport).length, 0);
 });
 
+
+test('create：meta.agentPreset=standard 且 setup 里 mount 一次', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('hi'));
+
+  const call = h.agents.createCalls.at(-1);
+  assert.ok(call !== undefined);
+  assert.equal(call.meta.agentPreset, 'standard');
+  assert.deepEqual(h.agents.setupCalls, [{ sessionId: call.sessionId, phase: 'create' }]);
+  assert.deepEqual(h.presets?.mountCalls, [{ id: 'standard' }]);
+});
+
+test('resume 已有 preset：composedPreset 命中 → 不再 mount', async (t) => {
+  const key = scopeKey('p2p', 'oc_chat', null, 'ou_user');
+  const h = makeHarness(t, { seedMap: { [key]: 'feishu-existing-1' } });
+  if (h.presets !== undefined) h.presets.composedPresetValue = 'standard';
+
+  await h.bridge.handleInbound(inbound('继续'));
+  assert.deepEqual(h.agents.resumed, ['feishu-existing-1']);
+  assert.equal(h.presets?.mountCalls.length, 0, 'already-composed resume must not mount again');
+});
+
+test('legacy resume（无 preset 头）：setup 里 mount 一次', async (t) => {
+  const key = scopeKey('p2p', 'oc_chat', null, 'ou_user');
+  const h = makeHarness(t, { seedMap: { [key]: 'feishu-legacy-no-preset' } });
+  if (h.presets !== undefined) h.presets.composedPresetValue = undefined;
+
+  await h.bridge.handleInbound(inbound('继续'));
+  assert.deepEqual(h.agents.resumed, ['feishu-legacy-no-preset']);
+  assert.deepEqual(h.presets?.mountCalls, [{ id: 'standard' }]);
+});
+
+test('mount 抛错：会话仍可用，warn 日志，状态行标「preset 未挂载」', async (t) => {
+  const h = makeHarness(t);
+  if (h.presets !== undefined) h.presets.mountError = new Error('mount boom');
+
+  await h.bridge.handleInbound(inbound('hi'));
+  const session = liveAgent(h).session;
+  assert.equal(liveAgent(h).followups.length, 1, 'agent must remain usable after mount failure');
+  assert.ok(
+    h.logger.entries.some(
+      (entry) => entry.level === 'warn' && entry.message.includes('agent preset mount failed'),
+    ),
+    h.logger.entries.map((entry) => entry.message).join(' | '),
+  );
+
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 100));
+  h.clock.advance(400);
+  await tick();
+  const processCard = cardOfTitle(recordedCards(h.transport), PROCESS_CARD_TITLE);
+  assert.ok(processCard !== undefined);
+  const latest = finalPatchOfCard(h.transport, processCard.messageId) ?? processCard.card;
+  assert.match(JSON.stringify(latest), /（preset 未挂载）/);
+});
+
+test('agentPreset 配置为 other：meta 与 mount 都用 other', async (t) => {
+  const h = makeHarness(t, { agentPreset: 'other' });
+  await h.bridge.handleInbound(inbound('hi'));
+
+  assert.equal(h.agents.createCalls.at(-1)?.meta.agentPreset, 'other');
+  assert.deepEqual(h.presets?.mountCalls, [{ id: 'other' }]);
+});
+
+test('agentPresets 服务缺失：warn 并继续，状态行标记未挂载', async (t) => {
+  const h = makeHarness(t, { agentPresets: null });
+  await h.bridge.handleInbound(inbound('hi'));
+  const session = liveAgent(h).session;
+  assert.equal(liveAgent(h).followups.length, 1, 'agent remains usable');
+  assert.ok(
+    h.logger.entries.some((entry) => entry.message.includes('agentPresets service unavailable')),
+    h.logger.entries.map((entry) => entry.message).join(' | '),
+  );
+
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 100));
+  h.clock.advance(400);
+  await tick();
+  const processCard = cardOfTitle(recordedCards(h.transport), PROCESS_CARD_TITLE);
+  assert.ok(processCard !== undefined);
+  const latest = finalPatchOfCard(h.transport, processCard.messageId) ?? processCard.card;
+  assert.match(JSON.stringify(latest), /（preset 未挂载）/);
+});
+
+test('resume 旧会话 remint 时新会话也带 preset 并 mount', async (t) => {
+  const key = scopeKey('p2p', 'oc_chat', null, 'ou_user');
+  const h = makeHarness(t, { seedMap: { [key]: 'feishu-gone' } });
+  h.agents.failResume.add('feishu-gone');
+
+  await h.bridge.handleInbound(inbound('hi'));
+  const reminted = h.store.get(key) as string;
+  assert.notEqual(reminted, 'feishu-gone');
+  assert.equal(h.agents.createCalls.at(-1)?.meta.agentPreset, 'standard');
+  assert.deepEqual(h.presets?.mountCalls, [{ id: 'standard' }]);
+});
+
+test('resume 会话头已有 agentPreset：不传 setup，mount 零调用', async (t) => {
+  const key = scopeKey('p2p', 'oc_chat', null, 'ou_user');
+  const h = makeHarness(t, {
+    seedMap: { [key]: 'feishu-header-has-preset' },
+    sessionPresetLookup: (sessionId) =>
+      sessionId === 'feishu-header-has-preset' ? 'standard' : undefined,
+  });
+  if (h.presets !== undefined) h.presets.composedPresetValue = undefined;
+
+  await h.bridge.handleInbound(inbound('继续'));
+  assert.deepEqual(h.agents.resumed, ['feishu-header-has-preset']);
+  assert.equal(h.presets?.mountCalls.length, 0, 'header preset must skip mount');
+});

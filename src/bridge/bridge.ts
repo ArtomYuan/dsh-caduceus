@@ -51,7 +51,14 @@ import {
 } from '../status.js';
 import type { ChatType, FeishuCard, InboundMessage, Transport } from '../transport/types.js';
 import { ScopeQueue } from './scope-queue.js';
-import type { AgentLike, AgentsLike, BridgeConfig, BridgeOptions, SessionTitleLike } from './types.js';
+import type {
+  AgentLike,
+  AgentPresetsLike,
+  AgentsLike,
+  BridgeConfig,
+  BridgeOptions,
+  SessionTitleLike,
+} from './types.js';
 
 /** Final-answer text cap from the design doc (§6 L3: 150 KB). */
 
@@ -121,6 +128,10 @@ export class Bridge {
   readonly #sessionExists: (sessionId: string) => boolean;
   readonly #ownershipDir: string | undefined;
   readonly #sessionIdsProvider: () => readonly string[];
+  readonly #agentPresets: AgentPresetsLike | undefined;
+  readonly #sessionPresetLookup: ((sessionId: string) => string | undefined) | undefined;
+  /** Session ids whose preset mount failed (shown as `（preset 未挂载）`). */
+  readonly #presetFailures = new Set<string>();
   readonly #sessionTitleProvider: () => SessionTitleLike | undefined;
   readonly #queue = new ScopeQueue();
   readonly #states = new Map<string, ScopeState>();
@@ -139,6 +150,8 @@ export class Bridge {
     this.#sessionExists = options.sessionExists ?? (() => true);
     this.#ownershipDir = options.ownershipDir;
     this.#sessionIdsProvider = options.sessionIdsProvider ?? (() => []);
+    this.#agentPresets = options.agentPresets;
+    this.#sessionPresetLookup = options.sessionPresetLookup;
     const provider =
       options.sessionTitleProvider ??
       (options.sessionTitle === undefined ? undefined : () => options.sessionTitle);
@@ -795,6 +808,33 @@ export class Bridge {
   }
 
   /**
+   * Mount the configured agent preset in the unpublished agent scope.
+   * Idempotent for resumes: a context that already reports a composed preset is
+   * left alone. Failures are contained (the session stays usable) and recorded
+   * so the card state line can show `（preset 未挂载）`.
+   */
+  async #mountPreset(sessionId: string, agentCtx: unknown): Promise<void> {
+    const preset = this.#config.agentPreset ?? 'standard';
+    const presets = this.#agentPresets;
+    if (presets === undefined) {
+      this.#presetFailures.add(sessionId);
+      this.#logger.warn(
+        `agentPresets service unavailable; preset ${preset} not mounted for ${sessionId}`,
+      );
+      return;
+    }
+    try {
+      if (presets.composedPreset(agentCtx) !== undefined) return;
+      await presets.mount(agentCtx, preset);
+    } catch (error) {
+      this.#presetFailures.add(sessionId);
+      this.#logger.warn(
+        `agent preset mount failed for ${sessionId} (${preset}): ${errorMessage(error)}`,
+      );
+    }
+  }
+
+  /**
    * Create an agent with dsh's own meta fields PLUS caduceus ownership, then
    * persist the ownership sidecar. The sidecar is the durable part because dsh
    * 0.2.1-rc.2 rebuilds its header from known fields and drops unknown meta.
@@ -805,7 +845,14 @@ export class Bridge {
     cwd: string,
   ): Promise<{ readonly agent: AgentLike }> {
     const caduceus = { chatId: state.chatId, scopeKey: state.key, kind: this.#scopeKind(state) };
-    const { agent } = await this.#agents.create({ sessionId, meta: { cwd, caduceus } });
+    const agentPreset = this.#config.agentPreset ?? 'standard';
+    const { agent } = await this.#agents.create({
+      sessionId,
+      meta: { cwd, caduceus, agentPreset },
+      setup: async (agentCtx) => {
+        await this.#mountPreset(sessionId, agentCtx);
+      },
+    });
     try {
       await writeOwnership(
         sessionId,
@@ -939,7 +986,19 @@ export class Bridge {
     }
 
     try {
-      const { agent } = await this.#agents.resume({ resumeSessionId: sessionId });
+      // A session header that already records a preset must not be mounted
+      // again; legacy headers (no agentPreset) get the setup mount below.
+      const persistedPreset = this.#sessionPresetLookup?.(sessionId);
+      const { agent } = await this.#agents.resume({
+        resumeSessionId: sessionId,
+        ...(persistedPreset === undefined
+          ? {
+              setup: async (agentCtx: unknown) => {
+                await this.#mountPreset(sessionId, agentCtx);
+              },
+            }
+          : {}),
+      });
       this.#bindSession(state, String(agent.session.id));
       return { agent, sessionId, cwd };
     } catch (error) {
@@ -1035,6 +1094,7 @@ export class Bridge {
       recentEventText(snapshot),
       state.lastOutput,
       this.#now(),
+      state.sessionId !== undefined && this.#presetFailures.has(state.sessionId),
     );
   }
 
@@ -1064,6 +1124,7 @@ export function progressCardForSnapshot(
   recentEvent: string,
   tail: string,
   now: number,
+  presetMissing = false,
 ): FeishuCard {
   return progressCard({
     title: '飞书会话 · 过程',
@@ -1073,6 +1134,7 @@ export function progressCardForSnapshot(
     ...(sessionTitle === undefined ? {} : { sessionTitle }),
     recentEvent,
     ...(tail.length === 0 ? {} : { tail }),
+    ...(presetMissing ? { presetMissing: true } : {}),
     ...(snapshot.startedAt === undefined ? {} : { startedAt: snapshot.startedAt }),
     now,
   });

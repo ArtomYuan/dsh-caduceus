@@ -251,9 +251,22 @@ try {
       return { messageId: `m-${calls.length}` };
     },
   };
+  const fakePresets = {
+    mountCalls: [],
+    async mount(_ctx, id) {
+      this.mountCalls.push(id);
+      return { id };
+    },
+    composedPreset() {
+      return undefined;
+    },
+  };
   const fakeAgents = {
     live: new Map(),
-    async create({ sessionId }) {
+    createCalls: [],
+    async create({ sessionId, meta, setup }) {
+      this.createCalls.push({ sessionId, meta });
+      if (setup !== undefined) await setup({ sessionId });
       const agent = {
         id: sessionId,
         session: { id: sessionId },
@@ -292,10 +305,12 @@ try {
       allowedUsers: [],
       cardThrottleMs: 400,
       busyMode: 'queue',
+      agentPreset: 'standard',
     },
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     ownershipDir: join(dir, 'owners-smoke'),
     sessionIdsProvider: () => [],
+    agentPresets: fakePresets,
   });
   await bridge.handleInbound({
     messageId: 'om_bridge',
@@ -306,6 +321,23 @@ try {
     createdAt: 0,
   });
   const session = [...fakeAgents.live.values()][0].session;
+  assert.equal(fakeAgents.createCalls[0]?.meta?.agentPreset, 'standard');
+  assert.deepEqual(fakePresets.mountCalls, ['standard']);
+  // dsh turns meta.agentPreset into the session header; project the header here
+  // so the smoke run proves the value the session file will carry.
+  const projectedHeader = {
+    type: 'session',
+    id: fakeAgents.createCalls[0].sessionId,
+    cwd: dir,
+    agentPreset: fakeAgents.createCalls[0].meta.agentPreset,
+  };
+  await writeFile(
+    join(dir, 'session-header-projection.json'),
+    JSON.stringify(projectedHeader),
+    'utf8',
+  );
+  const headerText = await readFile(join(dir, 'session-header-projection.json'), 'utf8');
+  assert.equal(JSON.parse(headerText).agentPreset, 'standard');
   await bridge.handleSessionEvent(session, { type: 'turn/start', data: { turn: 1 }, time: 10 });
   await bridge.handleSessionEvent(session, {
     type: 'assistant/message',

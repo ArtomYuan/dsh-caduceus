@@ -29,6 +29,8 @@ export interface GatewayConfig {
   readonly logLevel?: 'info' | 'debug';
   /** Auto-sync SOUL into `<DSH_HOME>/AGENTS.md` on startup (default true). */
   readonly personaAutoSync?: boolean;
+  /** Agent preset mounted for caduceus-created sessions (default `standard`). */
+  readonly agentPreset?: string;
 }
 
 /** Schemastery schema for the `caduceus-gateway` entry. */
@@ -43,6 +45,7 @@ export const Config = z.object({
   groupSessionsPerUser: z.boolean().required(false),
   logLevel: z.union([z.const('info'), z.const('debug')]).required(false),
   personaAutoSync: z.boolean().required(false),
+  agentPreset: z.string().required(false),
 });
 
 /** Default card patch throttle: half of Feishu's 5 QPS budget. */
@@ -60,6 +63,9 @@ export const DEFAULT_LOG_LEVEL: 'info' | 'debug' = 'info';
 /** Default: sync the persona block on startup so it never drifts. */
 export const DEFAULT_PERSONA_AUTO_SYNC = true;
 
+/** Default agent preset for caduceus sessions. */
+export const DEFAULT_AGENT_PRESET = 'standard';
+
 export interface ResolvedGatewayConfig {
   readonly credentials?: {
     readonly appId: string;
@@ -68,6 +74,7 @@ export interface ResolvedGatewayConfig {
   readonly bridge: BridgeConfig;
   readonly logLevel: 'info' | 'debug';
   readonly personaAutoSync: boolean;
+  readonly agentPreset: string;
 }
 
 export interface ConfigEnv {
@@ -105,11 +112,13 @@ export function resolveGatewayConfig(
     busyMode: config.busyMode ?? DEFAULT_BUSY_MODE,
     groupSessionsPerUser:
       config.groupSessionsPerUser ?? DEFAULT_GROUP_SESSIONS_PER_USER,
+    agentPreset: config.agentPreset ?? DEFAULT_AGENT_PRESET,
   };
   return {
     ...(appId === undefined || appSecret === undefined ? {} : { credentials: { appId, appSecret } }),
     bridge,
     logLevel: config.logLevel ?? DEFAULT_LOG_LEVEL,
     personaAutoSync: config.personaAutoSync ?? DEFAULT_PERSONA_AUTO_SYNC,
+    agentPreset: config.agentPreset ?? DEFAULT_AGENT_PRESET,
   };
 }
