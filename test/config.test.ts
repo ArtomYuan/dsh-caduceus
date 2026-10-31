@@ -51,3 +51,11 @@ test('resolveGatewayConfig: logLevel 默认 info，可配 debug', () => {
   assert.equal(resolveGatewayConfig({ logLevel: 'debug' }, {}, '/tmp/work').logLevel, 'debug');
 });
 
+
+test('resolveGatewayConfig: personaAutoSync 默认 true，可配置 false', () => {
+  assert.equal(resolveGatewayConfig({}, {}, '/tmp/work').personaAutoSync, true);
+  assert.equal(
+    resolveGatewayConfig({ personaAutoSync: false }, {}, '/tmp/work').personaAutoSync,
+    false,
+  );
+});

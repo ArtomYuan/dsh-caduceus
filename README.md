@@ -64,6 +64,7 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 | `busyMode` | `queue` | 忙时策略：`queue` → followup、`steer` → steer、`interrupt` → cancel+steer |
 | `groupSessionsPerUser` | `true` | 普通群按发送者隔离（Hermes 默认）；`false` 回退整群共享。话题键不受此开关影响；启动日志会打印 `groupSessionsPerUser=<bool>` |
 | `logLevel` | `info` | 文件日志级别：`info`（默认）或 `debug` |
+| `personaAutoSync` | `true` | 启动时自动把 SOUL 同步到 `$DSH_HOME/AGENTS.md`（幂等；`false` 时零调用） |
 
 缺凭据时 entry 仍然加载（`caduceus-gateway ready`），但**不会启动长连接**，profile 因此保持可引导。
 
@@ -151,6 +152,8 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 `$DSH_HOME` 默认 `<用户 home>/.dsh`；`$DSH_AGENTS_HOME` 默认 `$DSH_HOME/../.agents`。源码里一律用 `os.homedir()` 拼接，不依赖 shell 展开 `~`。
 
 ## 人格块
+
+启动时（飞书长连接启动之前）自动执行一次人格同步，无需手动发 `/persona sync`；内容未变时不写盘，源缺失时跳过，异常只记一行 warn、不阻断启动。日志形如 `persona: synced soulBytes=<n> agentsBytes=<n> status=created|updated|unchanged`；源缺失记 `persona: source missing; skipped`；目标 malformed 记 `persona: sync skipped (malformed)`。配置 `personaAutoSync: false` 可关闭（零调用）。
 
 SOUL 源按顺序尝试：`$DSH_HOME/SOUL.md` → `$DSH_AGENTS_HOME/SOUL.md`（通常是 `~/.agents/SOUL.md`），同步到 **`$DSH_HOME/AGENTS.md`**（dsh agent-instructions 实际读取的用户全局指令文件）的标记块：
 

@@ -24,6 +24,7 @@ import { FileLogger } from './file-logger.js';
 import { defaultLogPath } from './home.js';
 import { adaptLogger, teeLoggers, type LoggerLike } from './logger.js';
 import { formatStartupLine } from './observability.js';
+import { autoSyncPersona } from './persona/auto-sync.js';
 import { runPersonaCommand } from './persona/command.js';
 import { hasSessionLog } from './session-files.js';
 import { SessionStore } from './session-key.js';
@@ -126,8 +127,12 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
   // Ownership backfill is read-only for dsh sessions (session-map writes only),
   // and must run even in idle/no-credential mode so old sessions stay reachable.
   backfillSessionOwnership(sessionMap, { logger });
+  const personaAutoSync = (): Promise<void> =>
+    autoSyncPersona({ enabled: resolved.personaAutoSync, logger });
 
   if (resolved.credentials === undefined) {
+    // Still keep the projection fresh in idle/no-credentials mode.
+    void personaAutoSync();
     logger.warn(
       'feishu credentials missing (appId/appSecret or FEISHU_APP_ID/FEISHU_APP_SECRET); long connection not started',
     );
@@ -172,7 +177,12 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
   });
 
   ctx.effect(() => {
-    void transport.start().catch((error: unknown) => {
+    void (async () => {
+      // Persona sync completes before the long connection starts, so it is
+      // always ahead of the first inbound message.
+      await personaAutoSync();
+      await transport.start();
+    })().catch((error: unknown) => {
       logger.error(`feishu long connection failed to start: ${errorText(error)}`);
     });
     return () => {

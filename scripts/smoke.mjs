@@ -21,6 +21,7 @@ const { COMMAND_NAMES, parseCommand } = await load('commands/parse.js');
 const { truncateCardContent } = await load('render/truncate.js');
 const { SOUL_END_MARKER, SOUL_START_MARKER, readSoul, syncSoul } = await load('persona/blocks.js');
 const { defaultAgentsFile, legacyAgentsFile } = await load('home.js');
+const { autoSyncPersona } = await load('persona/auto-sync.js');
 const { FeishuApiError, normalizeMessageEvent, ReliableTransport } = await load('transport/index.js');
 const { StatusTracker, shouldNotifyTerminal, terminalNotice } = await load('status.js');
 const { CARD_BYTE_LIMIT, cardByteSize, progressCard } = await load('render/index.js');
