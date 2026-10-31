@@ -128,7 +128,9 @@ export class Bridge {
   readonly #sessionExists: (sessionId: string) => boolean;
   readonly #ownershipDir: string | undefined;
   readonly #sessionIdsProvider: () => readonly string[];
-  readonly #agentPresets: AgentPresetsLike | undefined;
+  readonly #agentPresetsProvider: (() => AgentPresetsLike | undefined) | undefined;
+  #agentPresetsCache: AgentPresetsLike | undefined;
+  #agentPresetsLogged = false;
   readonly #sessionPresetLookup: ((sessionId: string) => string | undefined) | undefined;
   /** Session ids whose preset mount failed (shown as `（preset 未挂载）`). */
   readonly #presetFailures = new Set<string>();
@@ -150,7 +152,9 @@ export class Bridge {
     this.#sessionExists = options.sessionExists ?? (() => true);
     this.#ownershipDir = options.ownershipDir;
     this.#sessionIdsProvider = options.sessionIdsProvider ?? (() => []);
-    this.#agentPresets = options.agentPresets;
+    this.#agentPresetsProvider =
+      options.agentPresetsProvider ??
+      (options.agentPresets === undefined ? undefined : () => options.agentPresets);
     this.#sessionPresetLookup = options.sessionPresetLookup;
     const provider =
       options.sessionTitleProvider ??
@@ -807,6 +811,14 @@ export class Bridge {
     return 'group-user';
   }
 
+  /** Resolve the preset service lazily; cache only successful lookups. */
+  #resolveAgentPresets(): AgentPresetsLike | undefined {
+    if (this.#agentPresetsCache !== undefined) return this.#agentPresetsCache;
+    const service = this.#agentPresetsProvider?.();
+    if (service !== undefined) this.#agentPresetsCache = service;
+    return service;
+  }
+
   /**
    * Mount the configured agent preset in the unpublished agent scope.
    * Idempotent for resumes: a context that already reports a composed preset is
@@ -815,13 +827,18 @@ export class Bridge {
    */
   async #mountPreset(sessionId: string, agentCtx: unknown): Promise<void> {
     const preset = this.#config.agentPreset ?? 'standard';
-    const presets = this.#agentPresets;
+    const presets = this.#resolveAgentPresets();
     if (presets === undefined) {
+      // Never cache the miss: the service may register after this attempt.
       this.#presetFailures.add(sessionId);
       this.#logger.warn(
         `agentPresets service unavailable; preset ${preset} not mounted for ${sessionId}`,
       );
       return;
+    }
+    if (!this.#agentPresetsLogged) {
+      this.#agentPresetsLogged = true;
+      this.#logger.info(`agentPresets resolved; mounting ${preset}`);
     }
     try {
       if (presets.composedPreset(agentCtx) !== undefined) return;

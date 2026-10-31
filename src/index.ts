@@ -174,7 +174,8 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
     logger,
     sessionExists: (sessionId) => hasSessionLog(sessionId),
     sessionIdsProvider: () => scanSessionDirs().map((entry) => entry.sessionId),
-    agentPresets: ctx.get('agentPresets') as AgentPresetsLike | undefined,
+    // Lazy per use: the preset registry can register AFTER this plugin mounts.
+    agentPresetsProvider: () => ctx.get('agentPresets') as AgentPresetsLike | undefined,
     sessionPresetLookup: (sessionId) =>
       (ctx.get('sessions') as SessionsServiceLike | undefined)?.get(sessionId)?.header
         ?.agentPreset,

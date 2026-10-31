@@ -119,8 +119,13 @@ export interface BridgeOptions {
   readonly ownershipDir?: string;
   /** Discover caduceus session ids on disk for `/adopt` (tests inject; default []). */
   readonly sessionIdsProvider?: () => readonly string[];
-  /** Optional `ctx.get('agentPresets')`; missing means presets cannot be mounted. */
+  /** Direct preset service (tests); `agentPresetsProvider` takes precedence. */
   readonly agentPresets?: AgentPresetsLike;
+  /**
+   * Lazy resolver: called on every create/resume until a service is found.
+   * MUST NOT cache undefined — the service may register after plugin apply.
+   */
+  readonly agentPresetsProvider?: () => AgentPresetsLike | undefined;
   /** Persistent session-header preset lookup (undefined = legacy header). */
   readonly sessionPresetLookup?: (sessionId: string) => string | undefined;
   /**

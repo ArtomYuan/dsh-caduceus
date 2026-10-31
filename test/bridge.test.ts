@@ -68,6 +68,8 @@ interface HarnessOptions {
   readonly sessionIdsProvider?: () => readonly string[];
   /** Agent preset double; null means the optional service is unavailable. */
   readonly agentPresets?: FakeAgentPresets | null;
+  /** Lazy preset provider (overrides `agentPresets`) for late-registration tests. */
+  readonly agentPresetsProvider?: () => FakeAgentPresets | undefined;
   /** Configured preset id (default `standard`). */
   readonly agentPreset?: string;
   /** Persistent session-header preset lookup (simulates a non-legacy header). */
@@ -165,7 +167,11 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
     ...(options.sessionExists === undefined ? {} : { sessionExists: options.sessionExists }),
     ownershipDir,
     sessionIdsProvider,
-    ...(agentPresets === undefined ? {} : { agentPresets }),
+    ...(options.agentPresetsProvider !== undefined
+      ? { agentPresetsProvider: options.agentPresetsProvider }
+      : agentPresets === undefined
+        ? {}
+        : { agentPresets }),
     ...(options.sessionPresetLookup === undefined
       ? {}
       : { sessionPresetLookup: options.sessionPresetLookup }),
@@ -1613,4 +1619,59 @@ test('resume 会话头已有 agentPreset：不传 setup，mount 零调用', asyn
   await h.bridge.handleInbound(inbound('继续'));
   assert.deepEqual(h.agents.resumed, ['feishu-header-has-preset']);
   assert.equal(h.presets?.mountCalls.length, 0, 'header preset must skip mount');
+});
+
+test('agentPresets 惰性解析：apply 时缺失不缓存，服务晚注册后 create 能拿到并 mount', async (t) => {
+  let service: FakeAgentPresets | undefined;
+  let lookups = 0;
+  const h = makeHarness(t, {
+    agentPresetsProvider: () => {
+      lookups += 1;
+      return service;
+    },
+  });
+
+  await h.bridge.handleInbound(inbound('第一轮'));
+  assert.equal(lookups, 1);
+  assert.ok(
+    h.logger.entries.some((entry) =>
+      entry.message.startsWith('agentPresets service unavailable; preset standard'),
+    ),
+    h.logger.entries.map((entry) => entry.message).join(' | '),
+  );
+
+  // Service registers after plugin apply: the miss must not have been cached.
+  const late = new FakeAgentPresets();
+  service = late;
+  await h.bridge.handleInbound(inbound('/new'));
+
+  assert.equal(lookups, 2, 'every create retries resolution until it succeeds');
+  assert.deepEqual(late.mountCalls, [{ id: 'standard' }]);
+  assert.ok(
+    h.logger.entries.some((entry) => entry.message === 'agentPresets resolved; mounting standard'),
+    h.logger.entries.map((entry) => entry.message).join(' | '),
+  );
+});
+
+test('agentPresets 解析成功后复用缓存：第二次 create 不再重新解析', async (t) => {
+  const presets = new FakeAgentPresets();
+  let lookups = 0;
+  const h = makeHarness(t, {
+    agentPresetsProvider: () => {
+      lookups += 1;
+      return presets;
+    },
+  });
+
+  await h.bridge.handleInbound(inbound('第一轮'));
+  await h.bridge.handleInbound(inbound('/new'));
+
+  assert.equal(lookups, 1, 'resolved service is reused');
+  assert.deepEqual(presets.mountCalls, [{ id: 'standard' }, { id: 'standard' }], 'each agent mounts once');
+  assert.equal(
+    h.logger.entries.filter((entry) => entry.message === 'agentPresets resolved; mounting standard')
+      .length,
+    1,
+    'resolution is logged once',
+  );
 });
