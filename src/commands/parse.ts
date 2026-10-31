@@ -1,8 +1,8 @@
 /**
  * Slash-command parsing for the Feishu surface. Pure: no I/O, no side effects.
  *
- * Seven commands are owned by dsh-caduceus: `/new`, `/sessions`, `/rename`,
- * `/resume`, `/stop`, `/persona`, `/help`. Everything else — unknown slash
+ * Eight commands are owned by dsh-caduceus: `/new`, `/sessions`, `/rename`,
+ * `/resume`, `/stop`, `/status`, `/persona`, `/help`. Everything else — unknown slash
  * commands such as `/compact` and all ordinary user text — comes back as
  * `{ kind: 'passthrough', raw }` so the caller can forward it unchanged to the
  * dsh command registry or the agent (design doc §6 L3).
@@ -11,7 +11,7 @@
  */
 
 /** Commands dsh-caduceus owns. Keep in sync with README's command table. */
-export const COMMAND_NAMES = ['new', 'sessions', 'rename', 'resume', 'stop', 'persona', 'help'] as const;
+export const COMMAND_NAMES = ['new', 'sessions', 'rename', 'resume', 'stop', 'status', 'persona', 'help'] as const;
 
 export type CommandName = (typeof COMMAND_NAMES)[number];
 
@@ -29,6 +29,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   { name: 'rename', usage: '/rename <标题>', description: '重命名当前会话的标题' },
   { name: 'resume', usage: '/resume [id]', description: '恢复本聊天/话题的上一条或指定会话' },
   { name: 'stop', usage: '/stop', description: '中断当前正在运行的一轮' },
+  { name: 'status', usage: '/status', description: '显示本会话的运行状态、步数与起止时间' },
   { name: 'persona', usage: '/persona [show|sync]', description: '查看或同步 SOUL 人格块' },
   { name: 'help', usage: '/help', description: '显示命令表' },
 ];
@@ -41,6 +42,7 @@ export type ParsedCommand =
   | { readonly kind: 'rename'; readonly title: string }
   | { readonly kind: 'resume'; readonly sessionId?: string }
   | { readonly kind: 'stop' }
+  | { readonly kind: 'status' }
   | { readonly kind: 'persona'; readonly action: PersonaAction }
   | { readonly kind: 'help' }
   | { readonly kind: 'usage'; readonly command: string; readonly usage: string; readonly reason: string }
@@ -75,6 +77,8 @@ export function parseCommand(raw: string): ParsedCommand {
       return rest === '' ? { kind: 'sessions' } : usageResult('sessions', '/sessions 不接受参数');
     case 'stop':
       return rest === '' ? { kind: 'stop' } : usageResult('stop', '/stop 不接受参数');
+    case 'status':
+      return rest === '' ? { kind: 'status' } : usageResult('status', '/status 不接受参数');
     case 'help':
       return { kind: 'help' };
     case 'rename':

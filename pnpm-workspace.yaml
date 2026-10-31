@@ -6,3 +6,7 @@ packages:
 
 autoInstallPeers: false
 strictPeerDependencies: false
+
+# protobufjs runs a postinstall build; allow it explicitly (lark SDK dependency).
+allowBuilds:
+  protobufjs: true

@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * dsh-caduceus slice-1 smoke check.
+ * dsh-caduceus smoke check (slice 1 pure logic + slice 2 transport/status/bridge).
  *
- * Exercises the built `dist/` modules end to end without a running dsh and
- * without touching `~/.dsh`: every path used here lives under a `mkdtemp`
- * directory. Run `pnpm build` first.
+ * Exercises the built `dist/` modules end to end without a running dsh, without
+ * Feishu credentials, and without touching `~/.dsh`: every path used here lives
+ * under a `mkdtemp` directory. Run `pnpm build` first.
  *
  * Usage: node scripts/smoke.mjs   (or: pnpm smoke)
  */
@@ -20,6 +20,10 @@ const { SCOPE_KEY_SEPARATOR, SESSION_MAP_VERSION, SessionStore, scopeKey } = awa
 const { COMMAND_NAMES, parseCommand } = await load('commands/parse.js');
 const { truncateCardContent } = await load('render/truncate.js');
 const { SOUL_END_MARKER, SOUL_START_MARKER, readSoul, syncSoul } = await load('persona/blocks.js');
+const { FeishuApiError, normalizeMessageEvent, ReliableTransport } = await load('transport/index.js');
+const { StatusTracker, shouldNotifyTerminal, terminalNotice } = await load('status.js');
+const { CARD_BYTE_LIMIT, cardByteSize, progressCard } = await load('render/index.js');
+const { Bridge } = await load('bridge/index.js');
 
 const dir = await mkdtemp(join(tmpdir(), 'dsh-caduceus-smoke-'));
 try {
@@ -31,12 +35,13 @@ try {
   assert.notEqual(topicA, topicB);
   assert.equal(scopeKey('oc_smoke'), 'oc_smoke');
 
-  // 2. Command classification: seven owned commands, everything else passes
+  // 2. Command classification: eight owned commands, everything else passes
   //    through with the original bytes.
-  assert.deepEqual([...COMMAND_NAMES], ['new', 'sessions', 'rename', 'resume', 'stop', 'persona', 'help']);
+  assert.deepEqual([...COMMAND_NAMES], ['new', 'sessions', 'rename', 'resume', 'stop', 'status', 'persona', 'help']);
   assert.deepEqual(parseCommand('/new'), { kind: 'new' });
+  assert.deepEqual(parseCommand('/status'), { kind: 'status' });
   assert.deepEqual(parseCommand('/compact'), { kind: 'passthrough', raw: '/compact' });
-  assert.deepEqual(parseCommand('普通消息'), { kind: 'passthrough', raw: '普通消息' });
+  assert.deepEqual(parseCommand('/export'), { kind: 'passthrough', raw: '/export' });
 
   // 3. Truncation: keep a UTF-8-safe tail and say how much was dropped.
   const long = '汉😀'.repeat(4000);
@@ -57,8 +62,7 @@ try {
   const rawMap = JSON.parse(await readFile(mapPath, 'utf8'));
   assert.equal(rawMap.version, SESSION_MAP_VERSION);
   assert.deepEqual(rawMap.entries[topicA], { sessionId: 'feishu-1000' });
-  const leftovers = await readFile(mapPath, 'utf8');
-  assert.ok(!leftovers.includes('"tmp"'));
+  assert.ok(!(await readFile(mapPath, 'utf8')).includes('"tmp"'));
 
   // 5. Persona block: only the marked region changes, repeat sync is a no-op.
   const soulFile = join(dir, 'SOUL.md');
@@ -72,13 +76,181 @@ try {
   const patched = await readFile(agentsFile, 'utf8');
   assert.ok(patched.startsWith(preamble));
   assert.ok(patched.includes(SOUL_START_MARKER) && patched.includes(SOUL_END_MARKER));
-  const again = await syncSoul({ soulFile, agentsFile });
-  assert.equal(again.status, 'unchanged');
+  assert.equal((await syncSoul({ soulFile, agentsFile })).status, 'unchanged');
   const shown = await readSoul({ soulFile, agentsFile });
   assert.equal(shown.status, 'present');
   assert.equal(shown.content, '你是 Hermes。');
 
-  console.log('smoke ok: scopeKey / parseCommand / truncateCardContent / SessionStore v3 / persona sync');
+  // 6. Normalization keeps the topic: thread_id wins over root_id.
+  const normalized = normalizeMessageEvent({
+    sender: { sender_id: { open_id: 'ou_smoke' } },
+    message: {
+      message_id: 'om_smoke',
+      chat_id: 'oc_smoke',
+      chat_type: 'group',
+      message_type: 'text',
+      content: JSON.stringify({ text: '你好' }),
+      thread_id: 'omt_thread',
+      root_id: 'om_root',
+    },
+  });
+  assert.equal(normalized.threadId, 'omt_thread');
+
+  // 7. Reliable transport: 230071 degrades to chat_id with the same uuid.
+  const apiCalls = { created: [], replied: [], patched: [] };
+  let uuidSeq = 0;
+  const api = {
+    async start() {},
+    async stop() {},
+    onMessage() {},
+    async createMessage(input) {
+      apiCalls.created.push(input);
+      return { messageId: `created-${apiCalls.created.length}` };
+    },
+    async replyMessage(input) {
+      apiCalls.replied.push(input);
+      throw new FeishuApiError('reply failed', 230071);
+    },
+    async patchCard(messageId, card) {
+      apiCalls.patched.push({ messageId, card });
+    },
+  };
+  const reliable = new ReliableTransport(api, { uuidFactory: () => `uuid-${++uuidSeq}` });
+  const sent = await reliable.reply(
+    'oc_smoke',
+    'om_smoke',
+    { kind: 'text', text: '降级' },
+    { threadId: 'omt_thread' },
+  );
+  assert.equal(sent.messageId, 'created-1');
+  assert.equal(apiCalls.created.length, 1);
+  assert.equal(apiCalls.created[0].uuid, apiCalls.replied[0].uuid);
+
+  // 8. Status: running → failed on error, with steps and a proactive notice.
+  const tracker = new StatusTracker();
+  tracker.apply({ type: 'turn/start', data: { turn: 1 }, time: 1 });
+  tracker.apply({ type: 'step/start', data: { turn: 1, step: 1 }, time: 2 });
+  tracker.apply({ type: 'step/start', data: { turn: 1, step: 2 }, time: 3 });
+  tracker.apply({
+    type: 'turn/end',
+    data: { turn: 1, reason: { kind: 'error', error: { message: 'boom' } } },
+    time: 4,
+  });
+  const status = tracker.get();
+  assert.equal(status.state, 'failed');
+  assert.equal(status.steps, 2);
+  assert.equal(shouldNotifyTerminal(status.terminalKind), true);
+  assert.match(terminalNotice(status.terminalKind, status.errorMessage), /boom/);
+
+  // 9. Cards: update_multi + 30 KB cap under a huge tail.
+  const card = progressCard({
+    title: '过程',
+    stateLabel: '运行中',
+    steps: 1,
+    tools: 0,
+    tail: '汉😀'.repeat(6000),
+  });
+  assert.equal(card.config.update_multi, true);
+  assert.ok(cardByteSize(card) <= CARD_BYTE_LIMIT);
+  assert.match(JSON.stringify(card), /已省略 \d+ 字符/);
+
+  // 10. Bridge end to end with inline fakes: a turn ends with a NEW final message.
+  const calls = [];
+  const transport = {
+    async start() {},
+    async stop() {},
+    onMessage(handler) {
+      this.handler = handler;
+    },
+    async sendText(chatId, text) {
+      calls.push({ op: 'sendText', messageId: `m-${calls.length + 1}`, chatId, text });
+      return { messageId: `m-${calls.length}` };
+    },
+    async sendCard(chatId, card) {
+      calls.push({ op: 'sendCard', messageId: `m-${calls.length + 1}`, chatId, card });
+      return { messageId: `m-${calls.length}` };
+    },
+    async updateCard(messageId, card) {
+      calls.push({ op: 'updateCard', messageId, card });
+    },
+    async reply(chatId, messageId, payload) {
+      calls.push({ op: 'reply', messageId: `m-${calls.length + 1}`, chatId, replyTo: messageId, payload });
+      return { messageId: `m-${calls.length}` };
+    },
+  };
+  const fakeAgents = {
+    live: new Map(),
+    async create({ sessionId }) {
+      const agent = {
+        id: sessionId,
+        session: { id: sessionId },
+        followups: [],
+        steers: [],
+        cancels: [],
+        followup(message) {
+          this.followups.push(message);
+        },
+        steer(message) {
+          this.steers.push(message);
+        },
+        cancel(cause) {
+          this.cancels.push(cause);
+        },
+      };
+      this.live.set(sessionId, agent);
+      return { agent };
+    },
+    async resume() {
+      throw new Error('smoke does not resume');
+    },
+    get(sessionId) {
+      return this.live.get(sessionId);
+    },
+  };
+  const bridgeStore = new SessionStore({ filePath: join(dir, 'bridge', 'session-map.json') });
+  bridgeStore.load();
+  const bridge = new Bridge({
+    transport,
+    sessionMap: bridgeStore,
+    agents: fakeAgents,
+    config: {
+      defaultCwd: dir,
+      allowedChats: [],
+      allowedUsers: [],
+      cardThrottleMs: 400,
+      busyMode: 'queue',
+    },
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+  });
+  await bridge.handleInbound({
+    messageId: 'om_bridge',
+    chatId: 'oc_bridge',
+    chatType: 'group',
+    senderOpenId: 'ou_bridge',
+    text: '跑一轮',
+    createdAt: 0,
+  });
+  const session = [...fakeAgents.live.values()][0].session;
+  await bridge.handleSessionEvent(session, { type: 'turn/start', data: { turn: 1 }, time: 10 });
+  await bridge.handleSessionEvent(session, {
+    type: 'assistant/message',
+    data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'smoke 输出' }] } },
+    time: 20,
+  });
+  await bridge.handleSessionEvent(session, {
+    type: 'turn/end',
+    data: { turn: 1, reason: { kind: 'completed' } },
+    time: 30,
+  });
+  const final = calls.find(
+    (call) => call.op === 'reply' && call.payload.kind === 'text' && call.payload.text === 'smoke 输出',
+  );
+  assert.ok(final, 'final answer must be a new message');
+  assert.ok(calls.some((call) => call.op === 'sendCard' || (call.op === 'reply' && call.payload.kind === 'card')));
+
+  console.log(
+    'smoke ok: scopeKey / parseCommand / truncate / SessionStore v3 / persona / transport(thread+fallback) / status / cards / bridge-final',
+  );
 } finally {
   await rm(dir, { recursive: true, force: true });
 }

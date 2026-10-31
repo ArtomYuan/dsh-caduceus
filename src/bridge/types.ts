@@ -1,0 +1,88 @@
+/**
+ * Bridge seams: the structural agent/session/title interfaces the bridge needs.
+ *
+ * They are deliberately local (not imports of the concrete dsh classes) so unit
+ * tests inject fakes and the gateway adapts `ctx.get('agents')` /
+ * `ctx.get('sessionTitle')` at the edge. The real dsh objects satisfy these
+ * shapes structurally.
+ *
+ * @module @artomyuan/dsh-caduceus/bridge/types
+ */
+import type { UserMessage } from '@deepseek-ai/dsh-llm';
+
+import type { HarnessCommandResult } from '../commands/harness.js';
+import type { LoggerLike } from '../logger.js';
+import type { Clock } from '../render/stream.js';
+import type { SessionStore } from '../session-key.js';
+import type { Transport } from '../transport/types.js';
+
+/** Busy-turn delivery policy (design doc §6 L3). */
+export type BusyMode = 'queue' | 'steer' | 'interrupt';
+
+/** Structural subset of a dsh session. */
+export interface SessionLike {
+  readonly id: string;
+}
+
+/** Structural subset of a live dsh agent. */
+export interface AgentLike {
+  readonly id: string;
+  readonly session: SessionLike;
+  followup(message: UserMessage): void;
+  steer(message: UserMessage): void;
+  cancel(cause: { kind: 'user' }): void;
+}
+
+/** Structural subset of `ctx.get('agents')` (`AgentRegistry`). */
+export interface AgentsLike {
+  get(sessionId: string): AgentLike | undefined;
+  create(options: {
+    readonly sessionId: string;
+    readonly meta: { readonly cwd: string };
+  }): Promise<{ readonly agent: AgentLike }>;
+  resume(options: { readonly resumeSessionId: string }): Promise<{ readonly agent: AgentLike }>;
+}
+
+/** Structural subset of `ctx.get('sessionTitle')`. */
+export interface SessionTitleLike {
+  rename(session: unknown, title: string): unknown;
+  get(session: unknown): { readonly title?: string } | undefined;
+}
+
+/** Normalized `/persona` outcome. */
+export interface PersonaCommandResult {
+  readonly kind: 'success' | 'error';
+  readonly text: string;
+}
+
+/** Resolved bridge configuration. */
+export interface BridgeConfig {
+  readonly defaultCwd: string;
+  readonly allowedChats: readonly string[];
+  readonly allowedUsers: readonly string[];
+  readonly cardThrottleMs: number;
+  readonly busyMode: BusyMode;
+}
+
+/** Everything the bridge needs; unit tests provide fakes for every seam. */
+export interface BridgeOptions {
+  readonly transport: Transport;
+  readonly sessionMap: SessionStore;
+  readonly agents: AgentsLike;
+  readonly config: BridgeConfig;
+  readonly logger: LoggerLike;
+  readonly clock?: Clock;
+  /** Session-id minter; defaults to `feishu-<epoch-ms>` from session-key.ts. */
+  readonly mintSessionId?: () => string;
+  /** dsh command registry forwarding (unknown slash commands). */
+  readonly runHarnessCommand?: (
+    agent: AgentLike,
+    line: string,
+  ) => Promise<HarnessCommandResult | undefined>;
+  /** Title service seam (`/rename`, `/sessions`, `/status`). */
+  readonly sessionTitle?: SessionTitleLike;
+  /** `/persona show|sync` handler shared with the persona entry. */
+  readonly persona?: (action: 'show' | 'sync') => Promise<PersonaCommandResult>;
+  /** Time source for elapsed rendering; defaults to the clock. */
+  readonly now?: () => number;
+}

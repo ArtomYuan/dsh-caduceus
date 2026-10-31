@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import { planSlashLine, isWebOnlyCommand, WEB_ONLY_DENYLIST } from '../src/commands/dispatch.js';
 import { COMMAND_NAMES, COMMAND_SPECS, helpText, parseCommand } from '../src/commands/parse.js';
 
 test('七条自有命令全部识别', () => {
@@ -77,4 +78,41 @@ test('README 命令表与 parse.ts 实际支持的命令完全一致', () => {
   const documented = [...section.matchAll(/^\|\s*`\/([a-z]+)/gm)].map((match) => match[1] as string);
   assert.ok(documented.length > 0, 'README 命令表里没有解析到任何命令行');
   assert.deepEqual([...documented].sort(), [...COMMAND_NAMES].sort());
+});
+
+test('/status 是自有命令，参数非法返回 usage', () => {
+  assert.deepEqual(parseCommand('/status'), { kind: 'status' });
+  assert.deepEqual(parseCommand('/STATUS'), { kind: 'status' });
+  assert.equal(parseCommand('/status 多余').kind, 'usage');
+  assert.ok(COMMAND_NAMES.includes('status'));
+});
+
+test('dispatch：自有命令 owned、/export 拒绝、其余透传原文', () => {
+  assert.deepEqual(planSlashLine('/status'), {
+    kind: 'owned',
+    command: { kind: 'status' },
+  });
+  assert.deepEqual(planSlashLine('/export'), {
+    kind: 'denied',
+    name: 'export',
+    line: '/export',
+  });
+  assert.deepEqual(planSlashLine('/compact'), {
+    kind: 'forward',
+    name: 'compact',
+    line: '/compact',
+  });
+  assert.deepEqual(planSlashLine('  /model deepseek-flash  '), {
+    kind: 'forward',
+    name: 'model',
+    line: '  /model deepseek-flash  ',
+  });
+  assert.equal(planSlashLine('/').kind, 'forward');
+});
+
+test('denylist 至少包含 /export，且大小写不敏感', () => {
+  assert.ok(WEB_ONLY_DENYLIST.includes('export'));
+  assert.equal(isWebOnlyCommand('export'), true);
+  assert.equal(isWebOnlyCommand('EXPORT'), true);
+  assert.equal(isWebOnlyCommand('compact'), false);
 });

@@ -1,0 +1,112 @@
+/**
+ * Reliable transport: the policy layer between the bridge and the raw Feishu
+ * API.
+ *
+ * Responsibilities (design doc §6 L3 + §12 risk 6):
+ * - every outbound message carries a `uuid`, so a retry (or the fallback path)
+ *   is idempotent for one hour on Feishu;
+ * - a thread reply (`reply_in_thread`) that fails with 230071 / 230072 / 230019
+ *   degrades to a normal chat_id send with the SAME uuid — one logical message
+ *   must never be delivered twice because the thread is unsupported;
+ * - interactive cards are rejected unless `config.update_multi = true`.
+ *
+ * @module @artomyuan/dsh-caduceus/transport/reliable
+ */
+import { randomUUID } from 'node:crypto';
+
+import { silentLogger, type LoggerLike } from '../logger.js';
+import type { FeishuApi } from './feishu-api.js';
+import {
+  FeishuApiError,
+  assertUpdateMulti,
+  cardPayload,
+  isThreadReplyFallbackCode,
+  textPayload,
+} from './types.js';
+import type {
+  FeishuCard,
+  InboundMessage,
+  ReplyOptions,
+  ReplyPayload,
+  SendOptions,
+  SentMessage,
+  Transport,
+} from './types.js';
+
+export interface ReliableTransportOptions {
+  readonly logger?: LoggerLike;
+  /** Idempotency-key factory (injectable for deterministic tests). */
+  readonly uuidFactory?: () => string;
+}
+
+/** {@link Transport} over a raw {@link FeishuApi}, adding uuid + fallback policy. */
+export class ReliableTransport implements Transport {
+  private readonly api: FeishuApi;
+  private readonly logger: LoggerLike;
+  private readonly uuidFactory: () => string;
+
+  constructor(api: FeishuApi, options: ReliableTransportOptions = {}) {
+    this.api = api;
+    this.logger = options.logger ?? silentLogger();
+    this.uuidFactory = options.uuidFactory ?? randomUUID;
+  }
+
+  start(): Promise<void> {
+    return this.api.start();
+  }
+
+  stop(): Promise<void> {
+    return this.api.stop();
+  }
+
+  onMessage(handler: (message: InboundMessage) => void): void {
+    this.api.onMessage(handler);
+  }
+
+  async sendText(chatId: string, text: string, options: SendOptions = {}): Promise<SentMessage> {
+    return this.api.createMessage({
+      chatId,
+      msgType: 'text',
+      content: textPayload(text),
+      uuid: options.uuid ?? this.uuidFactory(),
+    });
+  }
+
+  async sendCard(chatId: string, card: FeishuCard, options: SendOptions = {}): Promise<SentMessage> {
+    assertUpdateMulti(card);
+    return this.api.createMessage({
+      chatId,
+      msgType: 'interactive',
+      content: cardPayload(card),
+      uuid: options.uuid ?? this.uuidFactory(),
+    });
+  }
+
+  async updateCard(messageId: string, card: FeishuCard): Promise<void> {
+    assertUpdateMulti(card);
+    await this.api.patchCard(messageId, card);
+  }
+
+  async reply(
+    chatId: string,
+    messageId: string,
+    payload: ReplyPayload,
+    options: ReplyOptions = {},
+  ): Promise<SentMessage> {
+    const uuid = options.uuid ?? this.uuidFactory();
+    const msgType = payload.kind === 'text' ? 'text' : 'interactive';
+    const content = payload.kind === 'text' ? textPayload(payload.text) : cardPayload(payload.card);
+    const replyInThread = options.threadId !== undefined && options.threadId.length > 0;
+    try {
+      return await this.api.replyMessage({ messageId, msgType, content, replyInThread, uuid });
+    } catch (error) {
+      if (error instanceof FeishuApiError && isThreadReplyFallbackCode(error.code)) {
+        this.logger.warn(
+          `thread reply failed with ${error.code}; degrading to chat_id send (uuid ${uuid})`,
+        );
+        return this.api.createMessage({ chatId, msgType, content, uuid });
+      }
+      throw error;
+    }
+  }
+}

@@ -1,29 +1,33 @@
 # dsh-caduceus
 
-> 给 dsh 套一层 Hermes Agent 风格的飞书外壳：一个话题一个会话、SOUL 人格块、`/new` `/sessions` `/resume` 等命令、卡片过程与终稿。
+> 给 dsh 套一层 Hermes Agent 风格的飞书外壳：一个话题一个会话、SOUL 人格块、`/new` `/sessions` `/resume` 等命令、节流过程卡片、终稿新发、状态卡与 `/status`。
 > 名字取赫尔墨斯的**双蛇杖**（caduceus）——传令之权，不是神名；设计受 Hermes Agent 的网关思路启发。
 
-**状态：第一刀（v0.1 骨架）。** 本刀交付项目骨架、四个纯逻辑模块与单测；**飞书长连接、agent 桥接、卡片渲染接线尚未实现**，两个 cordis entry 目前是可加载的空壳。设计稿见 [docs/DESIGN.md](docs/DESIGN.md)，验证手册见 [docs/VERIFY.md](docs/VERIFY.md)。
+**状态：第二刀（v0.1 功能面完成）。** 飞书长连接、消息归一化、agent 桥接、过程/状态卡片、忙时三档、标题与命令接线均已实现；测试全部用注入式假 transport / 假 agents，不需要真飞书凭据，也不读写真实 `~/.dsh`。真机验收（A1–A17）清单与验证方法见 [docs/SLICE2.md](docs/SLICE2.md)；设计稿见 [docs/DESIGN.md](docs/DESIGN.md)。
 
 ## 目录结构
 
 ```
 dsh-caduceus/
-├─ package.json          # dsh.bundle.patch → cordis.patch.yml；peer 由 dsh 运行时提供
-├─ cordis.patch.yml      # 两条自有 entry + 官方标题 provider（三行 insert）
-├─ tsconfig.json         # NodeNext · strict
+├─ package.json              # dsh.bundle.patch → cordis.patch.yml；peer 由 dsh 运行时提供
+├─ cordis.patch.yml          # 两条自有 entry + 官方标题 provider（三行 insert）
+├─ tsconfig.json             # NodeNext · strict
 ├─ src/
-│  ├─ index.ts           # entry: caduceus-gateway（第一刀空壳）
-│  ├─ persona/index.ts   # entry: caduceus-persona（第一刀空壳）
-│  ├─ home.ts            # DSH_HOME / DSH_AGENTS_HOME 路径解析（不展开 ~）
-│  ├─ atomic-write.ts    # 先写 .tmp 再 rename
-│  ├─ session-key.ts     # scopeKey + session-map.json v3（兼容 v1/v2）
-│  ├─ persona/blocks.ts  # AGENTS.md 的 soul 块读写（只动标记之间）
-│  ├─ commands/parse.ts  # 七条命令解析 + 未知透传
-│  └─ render/truncate.ts # 卡片内容按 UTF-8 安全截断尾部约 8 KB
-├─ test/                 # node:test（全部用 mkdtemp，不碰真实 ~/.dsh）
-├─ scripts/smoke.mjs     # 构建产物冒烟（仅临时目录）
-└─ docs/                 # 设计稿 + 验证手册
+│  ├─ index.ts               # entry: caduceus-gateway（配置 → transport → bridge 接线）
+│  ├─ persona/index.ts       # entry: caduceus-persona（/persona 注册进 dsh 命令注册表）
+│  ├─ config.ts              # schemastery Config + 环境变量兜底
+│  ├─ home.ts                # DSH_HOME / DSH_AGENTS_HOME 路径解析（不展开 ~）
+│  ├─ atomic-write.ts        # 先写 .tmp 再 rename
+│  ├─ session-key.ts         # scopeKey + session-map.json v3（兼容 v1/v2）
+│  ├─ status.ts              # 状态层：运行中/等待输入/待审批/失败/完成/已中断 + 步数/起止
+│  ├─ transport/             # 长连接与归一化（thread_id ?? root_id）、reply 降级、uuid 去重
+│  ├─ bridge/                # 同键串行、忙时三档、事件订阅、终稿新发
+│  ├─ render/                # 卡片、节流 CardStream、UTF-8 截断
+│  ├─ persona/blocks.ts      # AGENTS.md 的 soul 块读写（只动标记之间）
+│  └─ commands/              # 八条命令解析 + dsh 注册表转发 + Web-only denylist
+├─ test/                     # node:test（假 transport/agents，全部 mkdtemp）
+├─ scripts/smoke.mjs         # 构建产物冒烟（仅临时目录）
+└─ docs/                     # 设计稿 + 第一刀 VERIFY + 第二刀 SLICE2
 ```
 
 ## 安装
@@ -45,9 +49,9 @@ pnpm smoke       # 纯逻辑冒烟（临时目录，不碰 ~/.dsh）
 dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduceus
 ```
 
-> 第一刀的 entry 可加载但不连飞书：命令解析与存储逻辑已就绪，真机聊天验收属第二刀。**不要在生产 profile 上直接试**；临时 profile 的复制、安装、三条冒烟命令与清理步骤见 [docs/VERIFY.md](docs/VERIFY.md)。
+> 真机联调需要一个已开通机器人能力的飞书应用（`appId` / `appSecret`）。**不要在生产 profile 上直接试**；临时 profile 的复制、安装、冒烟与清理步骤见 [docs/VERIFY.md](docs/VERIFY.md) 与 [docs/SLICE2.md](docs/SLICE2.md)。
 
-## 配置（第二刀落地，以下为设计口径）
+## 配置
 
 | 键 | 默认 | 说明 |
 |:--|:--|:--|
@@ -56,8 +60,10 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 | `defaultCwd` | 进程 cwd | 新建会话的工作目录 |
 | `allowedChats` | 空（全部） | 允许服务的 chat id 白名单 |
 | `allowedUsers` | 空（全部） | 允许服务的用户 open_id 白名单 |
-| `cardThrottleMs` | `400` | 过程卡片 patch 节流（5 QPS 的一半） |
+| `cardThrottleMs` | `400` | 过程卡片 patch 节流（Feishu 5 QPS 的一半） |
 | `busyMode` | `queue` | 忙时策略：`queue` → followup、`steer` → steer、`interrupt` → cancel+steer |
+
+缺凭据时 entry 仍然加载（`caduceus-gateway ready`），但**不会启动长连接**，profile 因此保持可引导。
 
 ## 命令
 
@@ -67,11 +73,20 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 | `/sessions` | 列出本聊天/话题的会话与标题 |
 | `/rename <标题>` | 重命名当前会话的标题（标题非法时回一句人话） |
 | `/resume [id]` | 恢复本聊天/话题的上一条或指定会话 |
-| `/stop` | 中断当前正在运行的一轮 |
+| `/stop` | 中断当前正在运行的一轮（`cancel({kind:'user'})`） |
+| `/status` | 显示本会话状态、步数、工具数、起止时间与最近事件 |
 | `/persona [show\|sync]` | 查看或同步 SOUL 人格块 |
 | `/help` | 显示命令表 |
 
-其他 `/命令`（例如 `/compact`）与普通消息**原样透传**给 dsh 命令注册表 / agent，本包不拦。
+其他 `/命令`（例如 `/compact`）会**原样转发**给 dsh 命令注册表（`ctx.get('commands').execute`）；Web-only denylist（至少 `/export`）直接在飞书侧拒绝，不转发。普通消息交给 agent。
+
+## 状态层与卡片
+
+- **过程卡**：每轮一张，`cardThrottleMs` 节流（默认 400 ms，内容不变不 patch），只放尾部约 8 KB 内容，卡片 ≤ 30 KB。
+- **状态卡**：每话题一张，展示进行中 / 等待输入 / 待审批 / 失败 / 完成（含步数、工具数、起止时间），终态定格。
+- **终稿**：`turn/end` 后**新发**一条消息（绝不编辑过程卡）；`turn/end` 的 `reason.kind ∈ {error, interrupted, blocked}` 时再主动推一条消息，无需用户询问。
+- **回复位置**：入站 `thread_id ?? root_id` 归一为话题 id，出站 `reply_in_thread` 回同一话题；230071 / 230072 / 230019 自动降级为 `chat_id` 直发。
+- **重试幂等**：每次发送带 `uuid`，降级/重试复用同一 uuid（飞书侧 1 小时内至多成功一条）。
 
 ## 存储
 
@@ -109,11 +124,11 @@ SOUL 源默认 `$DSH_HOME/SOUL.md`，同步到 `$DSH_AGENTS_HOME/AGENTS.md` 的�
 
 ## 与 dsh 的版本关系
 
-`peerDependencies` 把 `@deepseek-ai/dsh-*` 钉在 **0.2.1-rc.2**（运行时由 dsh 安装提供，不打进本包）；`@deepseek-ai/cordis` 钉 `~4.0.5` —— cordis 走独立版本线，不随 dsh 0.2.1-rc.2 发版，这是唯一一条不对齐 0.2.1-rc.2 的例外。
+`peerDependencies` 把 `@deepseek-ai/dsh-*` 钉在 **0.2.1-rc.2**（运行时由 dsh 安装提供，不打进本包）；`@deepseek-ai/cordis` 钉 `~4.0.5`、`@deepseek-ai/schemastery` 钉 `^3.18.1` —— 这两个包走独立版本线，不随 dsh 0.2.1-rc.2 发版，是不对齐 0.2.1-rc.2 的例外。飞书 SDK `@larksuiteoapi/node-sdk ^1.76.0` 是本包的运行时依赖。
 
 ## 边界
 
 - 不改 dsh 安装目录、不改任何 preset；
 - 不写 `$DSH_HOME` 下的 sessions / storages / feishu 生产数据；
 - 不启动、停止、重启任何服务（服务生命周期由宿主统一管理）；
-- 单测一律使用 `mkdtemp` 临时目录，不读真实 `~/.dsh`。
+- 单测一律使用 `mkdtemp` 临时目录与注入式假实现，不读真实 `~/.dsh`、不需要飞书凭据。
