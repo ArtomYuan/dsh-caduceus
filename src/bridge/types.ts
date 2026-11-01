@@ -21,6 +21,14 @@ import type { Transport } from '../transport/types.js';
 /** Busy-turn delivery policy (design doc §6 L3). */
 export type BusyMode = 'queue' | 'steer' | 'interrupt';
 
+/** Session approval policy understood by dsh's approval service. */
+export type ApprovalPolicy = 'ask' | 'never';
+
+/** The slice of dsh's approval service the bridge needs. */
+export interface ApprovalServiceLike {
+  setPolicy(agent: AgentLike, policy: ApprovalPolicy): void;
+}
+
 /** Structural subset of a dsh session. */
 export interface SessionLike {
   readonly id: string;
@@ -119,6 +127,10 @@ export interface BridgeOptions {
   readonly now?: () => number;
   /** Interactive approval/question cards (wired by the gateway). */
   readonly interactive?: InteractiveRuntime;
+  /** Lazily resolve dsh's approval service (agent-scoped setPolicy). */
+  readonly approvalProvider?: () => ApprovalServiceLike | undefined;
+  /** Desired session approval policy (default `ask`). */
+  readonly approvalPolicy?: ApprovalPolicy;
   /** `/doctor` data collector (wired by the gateway; not available in tests by default). */
   readonly doctorInputs?: (
     session: DoctorSessionInfo,

@@ -13,7 +13,14 @@ import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 
 import { Bridge } from '../src/bridge/bridge.js';
-import type { AgentLike, BridgeConfig, BusyMode, SessionTitleLike } from '../src/bridge/types.js';
+import type {
+  AgentLike,
+  ApprovalPolicy,
+  ApprovalServiceLike,
+  BridgeConfig,
+  BusyMode,
+  SessionTitleLike,
+} from '../src/bridge/types.js';
 import type { HarnessCommandResult } from '../src/commands/harness.js';
 import { scopeKey, SESSION_MAP_VERSION, SessionStore } from '../src/session-key.js';
 import type { StatusEventLike } from '../src/status.js';
@@ -78,6 +85,10 @@ interface HarnessOptions {
   readonly selfCheck?: import('../src/selfcheck.js').SelfChecker;
   /** Interactive approval/question runtime (optional). */
   readonly interactive?: import('../src/interactive/runtime.js').InteractiveRuntime;
+  /** Approval service double; undefined means the service is missing. */
+  readonly approvalProvider?: () => ApprovalServiceLike | undefined;
+  /** Session approval policy override (bridge default `ask`). */
+  readonly approvalPolicy?: ApprovalPolicy;
   /** `/doctor` data collector (optional; tests inject deterministic data). */
   readonly doctorInputs?: (
     session: import('../src/doctor.js').DoctorSessionInfo,
@@ -185,6 +196,10 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
       : { sessionPresetLookup: options.sessionPresetLookup }),
     ...(options.selfCheck === undefined ? {} : { selfCheck: options.selfCheck }),
     ...(options.interactive === undefined ? {} : { interactive: options.interactive }),
+    ...(options.approvalProvider === undefined
+      ? {}
+      : { approvalProvider: options.approvalProvider }),
+    ...(options.approvalPolicy === undefined ? {} : { approvalPolicy: options.approvalPolicy }),
     ...(options.doctorInputs === undefined ? {} : { doctorInputs: options.doctorInputs }),
   });
   return { dir, store, presets: agentPresets, transport, agents, clock, logger, titles, bridge };
@@ -1994,4 +2009,73 @@ test('交互监听在 caduceus 的 create/resume agent scope 上注册', async (
   assert.equal(runtime.attachedCount, 3);
   assert.equal(h.agents.setupScopes.at(-1)?.phase, 'resume');
   assert.ok(h.agents.setupScopes.at(-1)?.listeners.has('approval/request'));
+});
+
+test('审批策略：创建会话默认调用 setPolicy(agent, ask) 并打日志', async (t) => {
+  const calls: { agent: AgentLike; policy: ApprovalPolicy }[] = [];
+  const h = makeHarness(t, {
+    approvalProvider: () => ({
+      setPolicy: (agent, policy) => {
+        calls.push({ agent, policy });
+      },
+    }),
+  });
+  await h.bridge.handleInbound(inbound('hi'));
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.agent, liveAgent(h));
+  assert.equal(calls[0]?.policy, 'ask');
+  assert.ok(
+    h.logger.entries.some(
+      (entry) => entry.level === 'info' && entry.message === 'agent approval policy=ask',
+    ),
+  );
+});
+
+test('审批策略：配置 never 时传 never', async (t) => {
+  const calls: ApprovalPolicy[] = [];
+  const h = makeHarness(t, {
+    approvalPolicy: 'never',
+    approvalProvider: () => ({
+      setPolicy: (_agent, policy) => {
+        calls.push(policy);
+      },
+    }),
+  });
+  await h.bridge.handleInbound(inbound('hi'));
+  assert.deepEqual(calls, ['never']);
+  assert.ok(
+    h.logger.entries.some(
+      (entry) => entry.level === 'info' && entry.message === 'agent approval policy=never',
+    ),
+  );
+});
+
+test('审批策略：服务缺失不抛、只 warn 一次', async (t) => {
+  const h = makeHarness(t, { approvalProvider: () => undefined });
+  await h.bridge.handleInbound(inbound('第一条'));
+  await h.bridge.handleInbound(inbound('/new'));
+  const warnings = h.logger.entries.filter(
+    (entry) => entry.level === 'warn' && entry.message.includes('approval service unavailable'),
+  );
+  assert.equal(warnings.length, 1);
+  assert.ok(liveAgent(h) !== undefined);
+});
+
+test('审批策略：resume 路径同样调用 setPolicy', async (t) => {
+  const calls: { agent: AgentLike; policy: ApprovalPolicy }[] = [];
+  const h = makeHarness(t, {
+    approvalProvider: () => ({
+      setPolicy: (agent, policy) => {
+        calls.push({ agent, policy });
+      },
+    }),
+  });
+  await h.bridge.handleInbound(inbound('hi'));
+  const firstId = liveAgent(h).session.id;
+  await h.bridge.handleInbound(inbound('/new'));
+  h.agents.live.delete(firstId);
+  await h.bridge.handleInbound(inbound(`/resume ${firstId.slice(-8)}`));
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls.map((call) => call.policy), ['ask', 'ask', 'ask']);
+  assert.equal(calls.at(-1)?.agent.session.id, firstId);
 });

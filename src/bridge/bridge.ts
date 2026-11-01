@@ -146,6 +146,7 @@ export class Bridge {
   readonly #selfCheck: import('../selfcheck.js').SelfChecker | undefined;
   readonly #agentCtxBySession = new Map<string, unknown>();
   readonly #toolsCheckedSessions = new Set<string>();
+  #approvalMissingWarned = false;
   /** Last fail-id set already notified into the conversation. */
   #selfCheckNotifiedSignature: string | undefined;
   /** Session ids whose preset mount failed (shown as `（preset 未挂载）`). */
@@ -839,6 +840,7 @@ export class Bridge {
         state.previousSessionId = current;
         state.previousSessionAt = this.#lastActivityAt(state) ?? this.#now();
       }
+      this.#applyApprovalPolicy(agent);
       this.#sessionMap.set(state.key, target);
       state.sessionId = target;
       state.pendingCreate = false;
@@ -905,6 +907,32 @@ export class Bridge {
     const service = this.#agentPresetsProvider?.();
     if (service !== undefined) this.#agentPresetsCache = service;
     return service;
+  }
+
+  /**
+   * Apply the configured session approval policy to a freshly created/resumed
+   * agent. Missing service warns once; setPolicy errors never block the turn.
+   */
+  #applyApprovalPolicy(agent: AgentLike): void {
+    const policy = this.#options.approvalPolicy ?? 'ask';
+    this.#logger.info(`agent approval policy=${policy}`);
+    const provider = this.#options.approvalProvider;
+    if (provider === undefined) return;
+    const service = provider();
+    if (service === undefined) {
+      if (!this.#approvalMissingWarned) {
+        this.#approvalMissingWarned = true;
+        this.#logger.warn('approval service unavailable; session approval policy not applied');
+      }
+      return;
+    }
+    try {
+      service.setPolicy(agent, policy);
+    } catch (error) {
+      this.#logger.warn(
+        `agent approval policy=${policy} failed: ${errorMessage(error)}`,
+      );
+    }
   }
 
   /** Register the approval/question waterfall answerers on our agent's scope. */
@@ -992,6 +1020,7 @@ export class Bridge {
     } catch (error) {
       this.#logger.warn(`ownership write failed for ${sessionId}: ${errorMessage(error)}`);
     }
+    this.#applyApprovalPolicy(agent);
     await this.#runSelfCheckStageB(state, sessionId);
     return { agent };
   }
@@ -1208,6 +1237,7 @@ export class Bridge {
         },
       });
       this.#bindSession(state, String(agent.session.id));
+      this.#applyApprovalPolicy(agent);
       await this.#runSelfCheckStageB(state, sessionId);
       return { agent, sessionId, cwd };
     } catch (error) {

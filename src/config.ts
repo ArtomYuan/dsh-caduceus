@@ -12,7 +12,7 @@ import { resolve } from 'node:path';
 
 import z from '@deepseek-ai/schemastery';
 
-import type { BridgeConfig, BusyMode } from './bridge/types.js';
+import type { ApprovalPolicy, BridgeConfig, BusyMode } from './bridge/types.js';
 
 /** Raw entry config as written in the profile. */
 export interface GatewayConfig {
@@ -37,6 +37,8 @@ export interface GatewayConfig {
   readonly questionCard?: boolean;
   /** Interactive card timeout in ms (default 300000). */
   readonly interactiveTimeoutMs?: number;
+  /** Session approval policy; IM humans are present, so default `ask`. */
+  readonly approvalPolicy?: ApprovalPolicy;
 }
 
 /** Schemastery schema for the `caduceus-gateway` entry. */
@@ -55,6 +57,7 @@ export const Config = z.object({
   approvalCard: z.boolean().required(false),
   questionCard: z.boolean().required(false),
   interactiveTimeoutMs: z.natural().min(1).required(false),
+  approvalPolicy: z.union([z.const('ask'), z.const('never')]).required(false),
 });
 
 /** Default card patch throttle: half of Feishu's 5 QPS budget. */
@@ -75,6 +78,9 @@ export const DEFAULT_PERSONA_AUTO_SYNC = true;
 /** Default agent preset for caduceus sessions. */
 export const DEFAULT_AGENT_PRESET = 'standard';
 
+/** Default session approval policy: ask, so dangerous actions prompt a card. */
+export const DEFAULT_APPROVAL_POLICY: ApprovalPolicy = 'ask';
+
 /** Default interactive-card switches/timeout. */
 export const DEFAULT_APPROVAL_CARD = true;
 export const DEFAULT_QUESTION_CARD = true;
@@ -92,6 +98,7 @@ export interface ResolvedGatewayConfig {
   readonly approvalCard: boolean;
   readonly questionCard: boolean;
   readonly interactiveTimeoutMs: number;
+  readonly approvalPolicy: ApprovalPolicy;
 }
 
 export interface ConfigEnv {
@@ -140,5 +147,6 @@ export function resolveGatewayConfig(
     approvalCard: config.approvalCard ?? DEFAULT_APPROVAL_CARD,
     questionCard: config.questionCard ?? DEFAULT_QUESTION_CARD,
     interactiveTimeoutMs: config.interactiveTimeoutMs ?? DEFAULT_INTERACTIVE_TIMEOUT_MS,
+    approvalPolicy: config.approvalPolicy ?? DEFAULT_APPROVAL_POLICY,
   };
 }

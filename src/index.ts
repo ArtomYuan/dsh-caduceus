@@ -21,6 +21,7 @@ import type { CommandRuntime } from '@deepseek-ai/dsh-commands';
 
 import { backfillSessionOwnership, scanSessionDirs } from './backfill.js';
 import { Bridge } from './bridge/bridge.js';
+import type { ApprovalServiceLike } from './bridge/types.js';
 import type {
   AgentLike,
   AgentPresetsLike,
@@ -237,6 +238,8 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
     agentPresetsProvider: () => ctx.get('agentPresets') as AgentPresetsLike | undefined,
     selfCheck,
     interactive,
+    approvalProvider: () => ctx.get('approval') as ApprovalServiceLike | undefined,
+    approvalPolicy: resolved.approvalPolicy,
     sessionPresetLookup: (sessionId) =>
       (ctx.get('sessions') as SessionsServiceLike | undefined)?.get(sessionId)?.header
         ?.agentPreset,

@@ -81,6 +81,7 @@ onlyBuiltDependencies:
 | `approvalCard` | `true` | Send interactive approval cards (`allow once` / `reject`) |
 | `questionCard` | `true` | Send interactive question cards; single-select ≤4 options get buttons |
 | `interactiveTimeoutMs` | `300000` | How long an approval/question card waits before it expires |
+| `approvalPolicy` | `ask` | Session approval policy: `ask` (card confirmation, default) or `never` |
 
 ## Commands
 
