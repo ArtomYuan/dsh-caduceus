@@ -6,7 +6,7 @@
  * @module dsh-caduceus/interactive/question
  */
 import { questionCard, questionTerminalCard } from './cards.js';
-import type { InteractiveContext, InteractiveHost } from './types.js';
+import { logPrefix, type InteractiveContext, type InteractiveHost } from './types.js';
 
 export interface QuestionItemLike {
   readonly id: string;
@@ -41,10 +41,14 @@ export function createQuestionAnswerer(
 ): QuestionAnswerer {
   return async (request) => {
     if (!host.config.questionCard) {
+      host.logger.warn('interactive: question skipped (questionCard disabled)');
       throw new Error('interactive question cards are disabled');
     }
     const context = contextFor();
-    if (context === undefined) throw new Error('no caduceus session context for user question');
+    if (context === undefined) {
+      host.logger.warn('interactive: question skipped (no session context)');
+      throw new Error('no caduceus session context for user question');
+    }
 
     let settle!: (answer: QuestionAnswerLike) => void;
     let fail!: (error: unknown) => void;
@@ -63,6 +67,9 @@ export function createQuestionAnswerer(
       reject: (error) => fail(error),
       meta: { questions: request.questions },
     });
+    host.logger.info(
+      `interactive: question request id=${entry.id} questions=${request.questions.length} scope=${context.scopeKey}`,
+    );
     const rendered = questionCard({
       requestId: entry.id,
       sessionId: context.sessionId,
@@ -86,18 +93,25 @@ export function createQuestionAnswerer(
     };
     entry.cleanup = cleanup;
 
+    host.logger.info(`interactive: question card sending chat=${logPrefix(context.chatId)}`);
     try {
       entry.cardMessageId = (await host.sendCard(context.chatId, rendered.card)).messageId;
+      host.logger.info(
+        `interactive: question card sent messageId=${logPrefix(entry.cardMessageId)}`,
+      );
     } catch (error) {
       host.pending.delete(entry.id);
       host.logger.error(
-        `question card send failed: ${error instanceof Error ? error.message : String(error)}`,
+        `interactive: question card send failed: ${error instanceof Error ? error.message : String(error)}`,
       );
       throw error instanceof Error ? error : new Error(String(error));
     }
 
     timer = host.clock.setTimeout(() => {
       if (host.pending.delete(entry.id) === undefined) return;
+      host.logger.info(
+        `interactive: question timed out after ${host.config.timeoutMs}ms`,
+      );
       void host
         .updateCard(
           entry.cardMessageId ?? '',

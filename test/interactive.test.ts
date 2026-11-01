@@ -305,3 +305,138 @@ test('卡片 patch 失败不影响 resolve（只 warn）', async () => {
     ),
   );
 });
+
+test('诊断日志：attach 成功与跳过（warn）', async () => {
+  const h = makeRuntime();
+  h.attach();
+  assert.ok(
+    h.logger.entries.some(
+      (entry) =>
+        entry.level === 'info' &&
+        entry.message === 'interactive: attached to agent scope (total=1)',
+    ),
+  );
+
+  assert.equal(h.runtime.attach({ foo: 1 }, () => undefined), false);
+  assert.ok(
+    h.logger.entries.some(
+      (entry) =>
+        entry.level === 'warn' &&
+        entry.message === 'interactive: attach skipped (not an agent scope: object keys=foo)',
+    ),
+  );
+});
+
+test('诊断日志：答者入口与 sendCard 前后', async () => {
+  const h = makeRuntime();
+  const { listeners } = h.attach();
+  const promise = listeners.get('approval/request')!({ toolName: 'bash' }, async () => 'unavailable');
+  await tick();
+  assert.ok(
+    h.logger.entries.some(
+      (entry) =>
+        entry.level === 'info' &&
+        /^interactive: approval request id=.+ questions=0 scope=/.test(entry.message),
+    ),
+  );
+  assert.ok(
+    h.logger.entries.some(
+      (entry) => entry.level === 'info' && entry.message === 'interactive: approval card sending chat=oc_chat',
+    ),
+  );
+  assert.ok(
+    h.logger.entries.some(
+      (entry) => entry.level === 'info' && entry.message === 'interactive: approval card sent messageId=m-1',
+    ),
+  );
+
+  const question = listeners.get('user-questions/request')!({
+    questions: [{ id: 'q1', question: '?', options: [{ label: 'a' }] }],
+  });
+  question.catch(() => undefined);
+  await tick();
+  assert.ok(
+    h.logger.entries.some(
+      (entry) =>
+        entry.level === 'info' &&
+        /^interactive: question request id=.+ questions=1 scope=/.test(entry.message),
+    ),
+  );
+
+  const buttons = buttonsOf(h.sent[0]!.card);
+  await h.runtime.handleCardAction(actionFor(buttons[0]!.value));
+  assert.equal(await promise, 'allowed-once');
+  h.clock.advance(300_000);
+  await tick();
+  await assert.rejects(question, /timed out/);
+});
+
+test('诊断日志：点击、未知 id、超时', async () => {
+  const h = makeRuntime({ timeoutMs: 1_000 });
+  const { listeners } = h.attach();
+  const promise = listeners.get('approval/request')!({ toolName: 'bash' }, async () => 'unavailable');
+  await tick();
+  const buttons = buttonsOf(h.sent[0]!.card);
+
+  await h.runtime.handleCardAction(actionFor({ id: 'missing', kind: 'approval' }));
+  assert.ok(
+    h.logger.entries.some(
+      (entry) => entry.level === 'info' && entry.message === 'card action ignored (unknown id)',
+    ),
+  );
+  await h.runtime.handleCardAction(actionFor({}, 'ou_owner', 'm-1'));
+  assert.ok(
+    h.logger.entries.some(
+      (entry) =>
+        entry.level === 'info' && entry.message === 'card action ignored (unknown id)',
+    ),
+  );
+
+  await h.runtime.handleCardAction(actionFor(buttons[0]!.value));
+  assert.equal(await promise, 'allowed-once');
+  assert.ok(
+    h.logger.entries.some(
+      (entry) =>
+        entry.level === 'info' &&
+        /^card action id=.+ kind=approval operator=ou_owner$/.test(entry.message),
+    ),
+  );
+
+  const second = listeners.get('approval/request')!({ toolName: 'bash' }, async () => 'unavailable');
+  await tick();
+  h.clock.advance(1_000);
+  await tick();
+  assert.equal(await second, 'cancelled');
+  assert.ok(
+    h.logger.entries.some(
+      (entry) =>
+        entry.level === 'info' &&
+        entry.message === 'interactive: approval timed out after 1000ms',
+    ),
+  );
+});
+
+test('诊断日志：config 关闭与 sendCard 失败', async () => {
+  const disabled = makeRuntime({ approvalCard: false });
+  const d = disabled.attach();
+  await d.listeners.get('approval/request')!({ toolName: 'bash' }, async () => 'unavailable');
+  assert.ok(
+    disabled.logger.entries.some(
+      (entry) =>
+        entry.level === 'warn' &&
+        entry.message === 'interactive: approval skipped (approvalCard disabled)',
+    ),
+  );
+
+  const h = makeRuntime({ failSend: true });
+  const { listeners } = h.attach();
+  const outcome = await listeners.get('approval/request')!({ toolName: 'bash' }, async () => 'unavailable');
+  assert.equal(outcome, 'cancelled');
+  assert.ok(
+    h.logger.entries.some(
+      (entry) =>
+        entry.level === 'error' &&
+        entry.message === 'interactive: approval card send failed: feishu send boom',
+    ),
+  );
+});

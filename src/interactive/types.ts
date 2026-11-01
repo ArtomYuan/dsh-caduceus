@@ -35,6 +35,24 @@ export interface AgentScopeLike {
   on(name: string, listener: (...args: any[]) => any): unknown;
 }
 
+export function logPrefix(value: string, max = 12): string {
+  return value.length <= max ? value : value.slice(0, max);
+}
+
+/** Short, safe description of a value for the attach-skipped diagnostic. */
+export function describeScope(value: unknown): string {
+  if (value === null) return 'null';
+  const type = typeof value;
+  if (type !== 'object') return type;
+  let keys: string[] = [];
+  try {
+    keys = Object.keys(value as Record<string, unknown>).slice(0, 6);
+  } catch {
+    return 'object (unreadable keys)';
+  }
+  return keys.length === 0 ? 'object keys=none' : `object keys=${keys.join(',')}`;
+}
+
 export function isAgentScope(value: unknown): value is AgentScopeLike {
   return (
     typeof value === 'object' &&

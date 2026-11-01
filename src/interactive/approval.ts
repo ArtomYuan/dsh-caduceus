@@ -11,7 +11,7 @@
  * @module dsh-caduceus/interactive/approval
  */
 import { approvalCard, approvalTerminalCard } from './cards.js';
-import type { InteractiveContext, InteractiveHost } from './types.js';
+import { logPrefix, type InteractiveContext, type InteractiveHost } from './types.js';
 
 export type ApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable';
 
@@ -31,9 +31,15 @@ export function createApprovalAnswerer(
   contextFor: () => InteractiveContext | undefined,
 ): ApprovalAnswerer {
   return async (request) => {
-    if (!host.config.approvalCard) return 'unavailable';
+    if (!host.config.approvalCard) {
+      host.logger.warn('interactive: approval skipped (approvalCard disabled)');
+      return 'unavailable';
+    }
     const context = contextFor();
-    if (context === undefined) return 'unavailable';
+    if (context === undefined) {
+      host.logger.warn('interactive: approval skipped (no session context)');
+      return 'unavailable';
+    }
 
     let settle!: (outcome: ApprovalOutcome) => void;
     const outcome = new Promise<ApprovalOutcome>((resolve) => {
@@ -50,6 +56,9 @@ export function createApprovalAnswerer(
       reject: () => settle('cancelled'),
       meta: { toolName: request.toolName, message: request.reason },
     });
+    host.logger.info(
+      `interactive: approval request id=${entry.id} questions=0 scope=${context.scopeKey}`,
+    );
     const card = approvalCard(
       entry.id,
       context.sessionId,
@@ -71,18 +80,25 @@ export function createApprovalAnswerer(
     };
     entry.cleanup = cleanup;
 
+    host.logger.info(`interactive: approval card sending chat=${logPrefix(context.chatId)}`);
     try {
       entry.cardMessageId = (await host.sendCard(context.chatId, card)).messageId;
+      host.logger.info(
+        `interactive: approval card sent messageId=${logPrefix(entry.cardMessageId)}`,
+      );
     } catch (error) {
       host.pending.delete(entry.id);
       host.logger.error(
-        `approval card send failed; failing closed: ${error instanceof Error ? error.message : String(error)}`,
+        `interactive: approval card send failed: ${error instanceof Error ? error.message : String(error)}`,
       );
       return 'cancelled';
     }
 
     timer = host.clock.setTimeout(() => {
       if (host.pending.delete(entry.id) === undefined) return;
+      host.logger.info(
+        `interactive: approval timed out after ${host.config.timeoutMs}ms`,
+      );
       void host
         .updateCard(entry.cardMessageId ?? '', approvalTerminalCard(request.toolName, '已过期'))
         .catch(() => undefined);

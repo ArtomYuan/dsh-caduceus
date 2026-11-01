@@ -8,7 +8,7 @@ import type { LoggerLike } from '../logger.js';
 import { silentLogger } from '../logger.js';
 import { systemClock, type Clock } from '../render/stream.js';
 import type { CardAction, InteractiveConfig, InteractiveContext } from './types.js';
-import { isAgentScope } from './types.js';
+import { describeScope, isAgentScope, logPrefix } from './types.js';
 import { createApprovalAnswerer } from './approval.js';
 import { PendingRegistry } from './pending.js';
 import { createQuestionAnswerer } from './question.js';
@@ -42,7 +42,12 @@ export class InteractiveRuntime {
 
   /** Install the two waterfall answerers on one agent scope. */
   attach(agentCtx: unknown, contextFor: () => InteractiveContext | undefined): boolean {
-    if (!isAgentScope(agentCtx)) return false;
+    if (!isAgentScope(agentCtx)) {
+      this.logger.warn(
+        `interactive: attach skipped (not an agent scope: ${describeScope(agentCtx)})`,
+      );
+      return false;
+    }
     agentCtx.on('approval/request', (request: unknown, next: () => Promise<unknown>) =>
       createApprovalAnswerer(this.#host(), contextFor)(
         request as Parameters<ReturnType<typeof createApprovalAnswerer>>[0],
@@ -56,6 +61,7 @@ export class InteractiveRuntime {
       ),
     );
     this.#attached += 1;
+    this.logger.info(`interactive: attached to agent scope (total=${this.#attached})`);
     return true;
   }
 
@@ -70,9 +76,18 @@ export class InteractiveRuntime {
    */
   async handleCardAction(action: CardAction): Promise<void> {
     const id = typeof action.value['id'] === 'string' ? action.value['id'] : undefined;
-    if (id === undefined) return;
+    if (id === undefined) {
+      this.logger.info('card action ignored (unknown id)');
+      return;
+    }
+    this.logger.info(
+      `card action id=${id} kind=${String(action.value['kind'] ?? '?')} operator=${logPrefix(action.operatorOpenId)}`,
+    );
     const entry = this.pending.get(id);
-    if (entry === undefined) return;
+    if (entry === undefined) {
+      this.logger.info('card action ignored (unknown id)');
+      return;
+    }
     if (action.operatorOpenId !== entry.ownerOpenId) {
       this.logger.warn(
         `ignored card action from non-owner ${action.operatorOpenId} for ${entry.kind} ${id}`,
