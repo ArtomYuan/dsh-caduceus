@@ -43,7 +43,10 @@ function makeRuntime(options?: {
   updates: { messageId: string; card: FeishuCard }[];
   setFailSend(value: boolean): void;
   attach(): {
-    listeners: Map<string, (...args: any[]) => any>;
+    listeners: {
+      get(name: string): ((request: any, next?: any) => any) | undefined;
+      has(name: string): boolean;
+    };
     context: { scopeKey: string; chatId: string; ownerOpenId: string; sessionId: string };
   };
 } {
@@ -81,22 +84,39 @@ function makeRuntime(options?: {
       failSend = value;
     },
     attach: () => {
-      const listeners = new Map<string, (...args: any[]) => any>();
+      const raw = new Map<string, (...args: any[]) => any>();
       const context = {
         scopeKey: 'oc_chat\u0000ou_user',
         chatId: 'oc_chat',
         ownerOpenId: 'ou_owner',
         sessionId: 'feishu-1',
       };
-      runtime.attach(
+      runtime.registerRoot(
         {
           on(name: string, listener: (...args: any[]) => any) {
-            listeners.set(name, listener);
+            raw.set(name, listener);
             return listener;
           },
         },
-        () => context,
+        {
+          ownsSession: (sessionId) => sessionId === context.sessionId,
+          contextFor: (sessionId) => (sessionId === context.sessionId ? context : undefined),
+        },
       );
+      const listeners = {
+        has: (name: string) => raw.has(name),
+        get: (name: string) => {
+          const listener = raw.get(name);
+          if (listener === undefined) return undefined;
+          return (request: any, next?: any) =>
+            listener(
+              typeof request === 'object' && request !== null && 'agent' in request
+                ? request
+                : { ...request, agent: { session: { id: context.sessionId } } },
+              next,
+            );
+        },
+      };
       return { listeners, context };
     },
   };
@@ -306,25 +326,117 @@ test('卡片 patch 失败不影响 resolve（只 warn）', async () => {
   );
 });
 
-test('诊断日志：attach 成功与跳过（warn）', async () => {
+test('诊断日志：根 ctx 注册成功与非法 scope 跳过（warn）', async () => {
   const h = makeRuntime();
   h.attach();
   assert.ok(
     h.logger.entries.some(
       (entry) =>
         entry.level === 'info' &&
-        entry.message === 'interactive: attached to agent scope (total=1)',
+        entry.message === 'interactive: answerers registered (root scope)',
     ),
   );
 
-  assert.equal(h.runtime.attach({ foo: 1 }, () => undefined), false);
+  assert.equal(
+    h.runtime.registerRoot({ foo: 1 }, { ownsSession: () => false, contextFor: () => undefined }),
+    false,
+  );
   assert.ok(
     h.logger.entries.some(
       (entry) =>
         entry.level === 'warn' &&
-        entry.message === 'interactive: attach skipped (not an agent scope: object keys=foo)',
+        entry.message === 'interactive: register skipped (not an event scope: object keys=foo)',
     ),
   );
+});
+
+test('根 ctx：非本会话委派 next()，零卡片零 pending', async () => {
+  const h = makeRuntime();
+  const { listeners } = h.attach();
+  let nextCalls = 0;
+  const result = await listeners.get('approval/request')!(
+    { agent: { session: { id: 'feishu-other' } }, toolName: 'bash' },
+    async () => {
+      nextCalls += 1;
+      return 'unavailable';
+    },
+  );
+  assert.equal(result, 'unavailable');
+  assert.equal(nextCalls, 1);
+  assert.equal(h.sent.length, 0);
+  assert.equal(h.runtime.pending.size, 0);
+  assert.ok(
+    h.logger.entries.some(
+      (entry) =>
+        entry.level === 'info' &&
+        entry.message ===
+          'interactive: approval request agent=feishu-other not ours, delegated',
+    ),
+  );
+
+  let questionNext = 0;
+  const question = await listeners.get('user-questions/request')!(
+    { agent: { session: { id: 'feishu-other' } }, questions: [{ id: 'q', question: '?' }] },
+    async () => {
+      questionNext += 1;
+      return { answers: [] };
+    },
+  );
+  assert.deepEqual(question, { answers: [] });
+  assert.equal(questionNext, 1);
+  assert.equal(h.sent.length, 0);
+});
+
+test('根 ctx：两个不同会话并发请求互不干扰', async () => {
+  const h = makeRuntime();
+  const contexts = {
+    s1: { scopeKey: 'k1', chatId: 'c1', ownerOpenId: 'ou_1', sessionId: 's1' },
+    s2: { scopeKey: 'k2', chatId: 'c2', ownerOpenId: 'ou_2', sessionId: 's2' },
+  };
+  const raw = new Map<string, (...args: any[]) => any>();
+  h.runtime.registerRoot(
+    {
+      on(name: string, listener: (...args: any[]) => any) {
+        raw.set(name, listener);
+        return listener;
+      },
+    },
+    {
+      ownsSession: (id) => id in contexts,
+      contextFor: (id) => contexts[id as keyof typeof contexts],
+    },
+  );
+  const listener = raw.get('approval/request')!;
+  const first = listener(
+    { agent: { session: { id: 's1' } }, toolName: 'bash', reason: 'one' },
+    async () => 'unavailable',
+  );
+  const second = listener(
+    { agent: { session: { id: 's2' } }, toolName: 'bash', reason: 'two' },
+    async () => 'unavailable',
+  );
+  await tick();
+  assert.equal(h.sent.length, 2);
+  assert.equal(h.runtime.pending.size, 2);
+  const firstButtons = buttonsOf(h.sent[0]!.card);
+  const secondButtons = buttonsOf(h.sent[1]!.card);
+  assert.notEqual(firstButtons[0]!.value['id'], secondButtons[0]!.value['id']);
+  await h.runtime.handleCardAction({
+    operatorOpenId: 'ou_1',
+    messageId: h.sent[0]!.messageId,
+    chatId: 'c1',
+    value: firstButtons[0]!.value,
+  });
+  assert.equal(await first, 'allowed-once');
+  assert.equal(h.runtime.pending.size, 1);
+  await h.runtime.handleCardAction({
+    operatorOpenId: 'ou_2',
+    messageId: h.sent[1]!.messageId,
+    chatId: 'c2',
+    value: secondButtons[0]!.value,
+  });
+  assert.equal(await second, 'allowed-once');
+  assert.equal(h.runtime.pending.size, 0);
 });
 
 test('诊断日志：答者入口与 sendCard 前后', async () => {

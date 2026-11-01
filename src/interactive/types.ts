@@ -30,8 +30,8 @@ export interface InteractiveContext {
   readonly sessionId: string;
 }
 
-/** A scoped event bus (the agent's Cordis context); only `on` is needed. */
-export interface AgentScopeLike {
+/** A Cordis context (the plugin root or an agent scope); only `on` is needed. */
+export interface EventScopeLike {
   on(name: string, listener: (...args: any[]) => any): unknown;
 }
 
@@ -53,7 +53,7 @@ export function describeScope(value: unknown): string {
   return keys.length === 0 ? 'object keys=none' : `object keys=${keys.join(',')}`;
 }
 
-export function isAgentScope(value: unknown): value is AgentScopeLike {
+export function isEventScope(value: unknown): value is EventScopeLike {
   return (
     typeof value === 'object' &&
     value !== null &&

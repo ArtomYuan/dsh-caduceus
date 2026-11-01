@@ -127,6 +127,8 @@ export interface BridgeOptions {
   readonly now?: () => number;
   /** Interactive approval/question cards (wired by the gateway). */
   readonly interactive?: InteractiveRuntime;
+  /** Plugin root Cordis context; answerers register here once, not per agent. */
+  readonly rootCtx?: unknown;
   /** Lazily resolve dsh's approval service (agent-scoped setPolicy). */
   readonly approvalProvider?: () => ApprovalServiceLike | undefined;
   /** Desired session approval policy (default `ask`). */

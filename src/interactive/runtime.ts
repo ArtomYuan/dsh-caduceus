@@ -8,7 +8,7 @@ import type { LoggerLike } from '../logger.js';
 import { silentLogger } from '../logger.js';
 import { systemClock, type Clock } from '../render/stream.js';
 import type { CardAction, InteractiveConfig, InteractiveContext } from './types.js';
-import { describeScope, isAgentScope, logPrefix } from './types.js';
+import { describeScope, isEventScope, logPrefix } from './types.js';
 import { createApprovalAnswerer } from './approval.js';
 import { PendingRegistry } from './pending.js';
 import { createQuestionAnswerer } from './question.js';
@@ -30,7 +30,6 @@ export class InteractiveRuntime {
   readonly pending = new PendingRegistry();
   readonly #sendCard: InteractiveRuntimeOptions['sendCard'];
   readonly #updateCard: InteractiveRuntimeOptions['updateCard'];
-  #attached = 0;
 
   constructor(options: InteractiveRuntimeOptions) {
     this.config = options.config;
@@ -40,34 +39,61 @@ export class InteractiveRuntime {
     this.#updateCard = options.updateCard;
   }
 
-  /** Install the two waterfall answerers on one agent scope. */
-  attach(agentCtx: unknown, contextFor: () => InteractiveContext | undefined): boolean {
-    if (!isAgentScope(agentCtx)) {
+  /**
+   * Register both waterfall answerers ONCE on the plugin root context, as dsh's
+   * own ACP bridge does. Ownership is decided per request from
+   * `request.agent.session.id`; requests for other agents are delegated by
+   * calling `next()`, never claimed.
+   */
+  registerRoot(
+    rootCtx: unknown,
+    resolve: {
+      ownsSession(sessionId: string): boolean;
+      contextFor(sessionId: string): InteractiveContext | undefined;
+    },
+  ): boolean {
+    if (!isEventScope(rootCtx)) {
       this.logger.warn(
-        `interactive: attach skipped (not an agent scope: ${describeScope(agentCtx)})`,
+        `interactive: register skipped (not an event scope: ${describeScope(rootCtx)})`,
       );
       return false;
     }
-    agentCtx.on('approval/request', (request: unknown, next: () => Promise<unknown>) =>
-      createApprovalAnswerer(this.#host(), contextFor)(
+    rootCtx.on('approval/request', async (request: unknown, next: () => Promise<unknown>) => {
+      const sessionId = sessionIdOf(request);
+      if (sessionId === undefined || !resolve.ownsSession(sessionId)) {
+        this.logger.info(
+          `interactive: approval request agent=${sessionId === undefined ? '?' : logPrefix(sessionId)} not ours, delegated`,
+        );
+        return next();
+      }
+      this.logger.info(
+        `interactive: approval request agent=${logPrefix(sessionId)} claimed`,
+      );
+      const context = resolve.contextFor(sessionId);
+      return createApprovalAnswerer(this.#host(), () => context)(
         request as Parameters<ReturnType<typeof createApprovalAnswerer>>[0],
         next as () => Promise<'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'>,
-      ),
-    );
-    agentCtx.on('user-questions/request', (request: unknown) =>
-      createQuestionAnswerer(this.#host(), contextFor)(
+      );
+    });
+    rootCtx.on('user-questions/request', async (request: unknown, next: () => Promise<unknown>) => {
+      const sessionId = sessionIdOf(request);
+      if (sessionId === undefined || !resolve.ownsSession(sessionId)) {
+        this.logger.info(
+          `interactive: question request agent=${sessionId === undefined ? '?' : logPrefix(sessionId)} not ours, delegated`,
+        );
+        return next();
+      }
+      this.logger.info(
+        `interactive: question request agent=${logPrefix(sessionId)} claimed`,
+      );
+      const context = resolve.contextFor(sessionId);
+      return createQuestionAnswerer(this.#host(), () => context)(
         request as Parameters<ReturnType<typeof createQuestionAnswerer>>[0],
-        async () => ({ answers: [] }),
-      ),
-    );
-    this.#attached += 1;
-    this.logger.info(`interactive: attached to agent scope (total=${this.#attached})`);
+        next as () => Promise<{ answers: { id: string; selected: string[] }[] }>,
+      );
+    });
+    this.logger.info('interactive: answerers registered (root scope)');
     return true;
-  }
-
-  /** Number of agent scopes the answerers were attached to (diagnostics/tests). */
-  get attachedCount(): number {
-    return this.#attached;
   }
 
   /**
@@ -146,4 +172,15 @@ export class InteractiveRuntime {
       updateCard: (messageId, card) => this.#updateCard(messageId, card),
     };
   }
+}
+
+/** Extract `request.agent.session.id` structurally (dsh waterfall payloads). */
+function sessionIdOf(request: unknown): string | undefined {
+  if (typeof request !== 'object' || request === null) return undefined;
+  const agent = (request as { agent?: unknown }).agent;
+  if (typeof agent !== 'object' || agent === null) return undefined;
+  const session = (agent as { session?: unknown }).session;
+  if (typeof session !== 'object' || session === null) return undefined;
+  const id = (session as { id?: unknown }).id;
+  return typeof id === 'string' && id.length > 0 ? id : undefined;
 }

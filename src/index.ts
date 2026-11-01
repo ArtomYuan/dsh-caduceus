@@ -238,6 +238,7 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
     agentPresetsProvider: () => ctx.get('agentPresets') as AgentPresetsLike | undefined,
     selfCheck,
     interactive,
+    rootCtx: ctx,
     approvalProvider: () => ctx.get('approval') as ApprovalServiceLike | undefined,
     approvalPolicy: resolved.approvalPolicy,
     sessionPresetLookup: (sessionId) =>

@@ -183,6 +183,12 @@ export class Bridge {
       const sessionId = this.#sessionMap.get(key);
       if (sessionId !== undefined) this.#scopeBySession.set(sessionId, key);
     }
+    if (options.interactive !== undefined && options.rootCtx !== undefined) {
+      options.interactive.registerRoot(options.rootCtx, {
+        ownsSession: (sessionId) => this.ownsSession(sessionId),
+        contextFor: (sessionId) => this.#interactiveContext(sessionId),
+      });
+    }
   }
 
   /** True when a session id belongs to a scope this bridge renders. */
@@ -833,7 +839,6 @@ export class Bridge {
         setup: async (agentCtx: unknown) => {
           this.#agentCtxBySession.set(target, agentCtx);
           if (persistedPreset === undefined) await this.#mountPreset(target, agentCtx);
-          this.#attachInteractive(target, agentCtx);
         },
       });
       if (current !== undefined && current !== target) {
@@ -935,13 +940,6 @@ export class Bridge {
     }
   }
 
-  /** Register the approval/question waterfall answerers on our agent's scope. */
-  #attachInteractive(sessionId: string, agentCtx: unknown): void {
-    const interactive = this.#options.interactive;
-    if (interactive === undefined) return;
-    interactive.attach(agentCtx, () => this.#interactiveContext(sessionId));
-  }
-
   #interactiveContext(sessionId: string):
     | { scopeKey: string; chatId: string; ownerOpenId: string; sessionId: string }
     | undefined {
@@ -1008,7 +1006,6 @@ export class Bridge {
       meta: { cwd, caduceus, agentPreset },
       setup: async (agentCtx) => {
         await this.#mountPreset(sessionId, agentCtx);
-        this.#attachInteractive(sessionId, agentCtx);
       },
     });
     try {
@@ -1233,7 +1230,6 @@ export class Bridge {
           // headers (no persisted preset) actually mount.
           this.#agentCtxBySession.set(sessionId, agentCtx);
           if (persistedPreset === undefined) await this.#mountPreset(sessionId, agentCtx);
-          this.#attachInteractive(sessionId, agentCtx);
         },
       });
       this.#bindSession(state, String(agent.session.id));
