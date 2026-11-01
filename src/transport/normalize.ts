@@ -111,7 +111,10 @@ export interface RawCardActionLike {
     readonly open_message_id?: string;
     readonly open_chat_id?: string;
   };
-  readonly action?: { readonly value?: Record<string, unknown> };
+  readonly action?: {
+    readonly value?: Record<string, unknown>;
+    readonly form_value?: Record<string, unknown>;
+  };
 }
 
 /** Normalize Feishu's card click into the transport's CardAction. */
@@ -122,5 +125,20 @@ export function normalizeCardAction(raw: RawCardActionLike): CardAction | undefi
   const value = raw.action?.value;
   if (operatorOpenId.length === 0 || messageId.length === 0) return undefined;
   if (typeof value !== 'object' || value === null) return undefined;
-  return { operatorOpenId, messageId, chatId, value };
+  const rawForm = raw.action?.form_value;
+  const formValue =
+    typeof rawForm === 'object' && rawForm !== null
+      ? Object.fromEntries(
+          Object.entries(rawForm).filter(
+            (entry): entry is [string, string] => typeof entry[1] === 'string',
+          ),
+        )
+      : undefined;
+  return {
+    operatorOpenId,
+    messageId,
+    chatId,
+    value,
+    ...(formValue === undefined || Object.keys(formValue).length === 0 ? {} : { formValue }),
+  };
 }

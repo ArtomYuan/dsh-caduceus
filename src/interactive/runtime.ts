@@ -11,8 +11,8 @@ import type { CardAction, InteractiveConfig, InteractiveContext } from './types.
 import { describeScope, isEventScope, logPrefix } from './types.js';
 import { createApprovalAnswerer } from './approval.js';
 import { PendingRegistry } from './pending.js';
-import { createQuestionAnswerer } from './question.js';
-import { approvalTerminalCard, questionTerminalCard } from './cards.js';
+import { createQuestionAnswerer, type QuestionItemLike } from './question.js';
+import { approvalTerminalCard, questionCard, questionTerminalCard } from './cards.js';
 import type { FeishuCard } from '../transport/types.js';
 
 export interface InteractiveRuntimeOptions {
@@ -123,6 +123,31 @@ export class InteractiveRuntime {
       );
       return;
     }
+    if (entry.kind === 'question' && (action.formValue !== undefined || action.value['form'] === true)) {
+      const questions = entry.meta?.['questions'] as readonly QuestionItemLike[] | undefined;
+      const question = questions?.[0]?.question ?? '问题';
+      const questionId =
+        typeof action.value['questionId'] === 'string'
+          ? action.value['questionId']
+          : (questions?.[0]?.id ?? '');
+      const custom = (action.formValue?.['other'] ?? '').trim();
+      if (custom.length === 0) {
+        // Keep the pending entry and its timer: prompt again on the same card.
+        const rebuilt = questionCard({
+          requestId: entry.id,
+          sessionId: entry.sessionId,
+          ...(questions === undefined ? { questions: [] } : { questions }),
+          hint: '请填写后再提交',
+        });
+        await this.#patchTerminal(entry, rebuilt.card);
+        return;
+      }
+      this.pending.delete(id);
+      await this.#patchTerminal(entry, questionTerminalCard(question, `已填写：${custom.slice(0, 40)}`));
+      entry.resolve({ answers: [{ id: questionId, selected: [], custom }] });
+      return;
+    }
+
     this.pending.delete(id);
 
     if (entry.kind === 'approval') {

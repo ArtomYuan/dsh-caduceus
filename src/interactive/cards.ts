@@ -40,6 +40,15 @@ export function interactiveCard(
   return buildCard({ title, template, elements });
 }
 
+/** Card from pre-built elements (forms, inputs, action rows). */
+export function interactiveElementsCard(
+  title: string,
+  elements: readonly FeishuCardElement[],
+  template = 'orange',
+): FeishuCard {
+  return buildCard({ title, template, elements });
+}
+
 export function approvalCard(
   requestId: string,
   sessionId: string,
@@ -69,6 +78,8 @@ export function approvalTerminalCard(toolName: string, outcome: string): FeishuC
 export interface QuestionCardInput {
   readonly requestId: string;
   readonly sessionId: string;
+  /** Extra warning appended to the card (e.g. the empty-custom hint). */
+  readonly hint?: string;
   readonly questions: readonly {
     readonly id: string;
     readonly question: string;
@@ -92,38 +103,72 @@ export function questionCard(input: QuestionCardInput): QuestionCardResult {
     const heading = question.header === undefined ? question.question : `${question.header}：${question.question}`;
     lines.push(`**${heading}**`);
     if (question.detail !== undefined && question.detail.trim().length > 0) lines.push(question.detail);
+    if (question.multiSelect === true) lines.push('_（多选暂不支持，仅能选一项）_');
     for (const option of question.options ?? []) {
       lines.push(`- ${option.label}${option.description === undefined ? '' : ` — ${option.description}`}`);
     }
   }
+  if (input.hint !== undefined && input.hint.length > 0) lines.push(`**${input.hint}**`);
   const only = questions.length === 1 ? questions[0] : undefined;
   const options = only?.options ?? [];
   const buttons =
     only !== undefined &&
-    only.multiSelect !== true &&
     options.length > 0 &&
     options.length <= 4;
-  if (!buttons) {
+  const elements: FeishuCardElement[] = lines.map(div);
+  if (buttons) {
+    elements.push(
+      actionRow(
+        options.map((option) => ({
+          label: option.label,
+          value: {
+            kind: 'question',
+            id: input.requestId,
+            sessionId: input.sessionId,
+            questionId: only.id,
+            label: option.label,
+          },
+        })),
+      ),
+    );
+  }
+
+  if (only === undefined) {
     lines.push('_本版暂不支持在卡片内输入文字，请直接回复文本作答。_');
     return { card: interactiveCard('问题', lines), buttons: false };
   }
-  const title = only.header === undefined ? `问题 · ${only.question}` : `问题 · ${only.header}`;
-  return {
-    card: interactiveCard(
-      title,
-      lines,
-      options.map((option) => ({
-        label: option.label,
+
+  elements.push(div('或自己填：'));
+  elements.push({
+    tag: 'form',
+    name: 'question_form',
+    elements: [
+      {
+        tag: 'input',
+        name: 'other',
+        placeholder: { tag: 'plain_text', content: '输入自定义答案' },
+        max_length: 200,
+      },
+      {
+        tag: 'button',
+        name: 'submit',
+        type: 'primary',
+        action_type: 'form_submit',
+        text: { tag: 'plain_text', content: '提交' },
         value: {
           kind: 'question',
           id: input.requestId,
           sessionId: input.sessionId,
           questionId: only.id,
-          label: option.label,
+          form: true,
         },
-      })),
-    ),
-    buttons: true,
+      },
+    ],
+  });
+  const title = only.header === undefined ? `问题 · ${only.question}` : `问题 · ${only.header}`;
+  return {
+    card: interactiveElementsCard(title, elements),
+    buttons,
   };
 }
 

@@ -66,6 +66,8 @@ export interface CardAction {
   readonly messageId: string;
   readonly chatId: string;
   readonly value: Record<string, unknown>;
+  /** Feishu form fields submitted with the action (`action.form_value`). */
+  readonly formValue?: Readonly<Record<string, string>>;
 }
 
 /** A created message. */

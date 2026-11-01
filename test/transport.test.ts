@@ -234,13 +234,17 @@ test('card.action.trigger 归一化：operator/message/chat/value，缺关键字
     normalizeCardAction({
       operator: { open_id: 'ou_owner' },
       context: { open_message_id: 'om_1', open_chat_id: 'oc_1' },
-      action: { value: { kind: 'approval', id: 'abc', choice: 'allow' } },
+      action: {
+        value: { kind: 'question', id: 'abc', form: true },
+        form_value: { other: '自定义答案', ignored: 7 },
+      },
     }),
     {
       operatorOpenId: 'ou_owner',
       messageId: 'om_1',
       chatId: 'oc_1',
-      value: { kind: 'approval', id: 'abc', choice: 'allow' },
+      value: { kind: 'question', id: 'abc', form: true },
+      formValue: { other: '自定义答案' },
     },
   );
   assert.deepEqual(

@@ -29,6 +29,27 @@ function buttonsOf(card: FeishuCard): {
   }));
 }
 
+function formOf(card: FeishuCard): {
+  readonly input?: { readonly name?: string; readonly max_length?: number };
+  readonly submit?: { readonly action_type?: string; readonly value?: Record<string, unknown> };
+} {
+  const form = card.elements.find((element) => element.tag === 'form') as
+    | {
+        elements?: {
+          tag?: string;
+          name?: string;
+          max_length?: number;
+          action_type?: string;
+          value?: Record<string, unknown>;
+        }[];
+      }
+    | undefined;
+  return {
+    input: form?.elements?.find((element) => element.tag === 'input'),
+    submit: form?.elements?.find((element) => element.tag === 'button'),
+  };
+}
+
 function makeRuntime(options?: {
   approvalCard?: boolean;
   questionCard?: boolean;
@@ -551,4 +572,137 @@ test('诊断日志：config 关闭与 sendCard 失败', async () => {
         entry.message === 'interactive: approval card send failed: feishu send boom',
     ),
   );
+});
+
+test('选项自定义填写：form_value → selected 为空 + custom，终态已填写', async () => {
+  const h = makeRuntime();
+  const { listeners } = h.attach();
+  const promise = listeners.get('user-questions/request')!({
+    questions: [
+      {
+        id: 'q1',
+        question: '部署到哪个环境？',
+        options: [{ label: 'dev' }, { label: 'staging' }, { label: 'prod' }],
+      },
+    ],
+  });
+  await tick();
+  const card = h.sent[0]!.card;
+  const form = formOf(card);
+  assert.equal(form.input?.name, 'other');
+  assert.equal(form.input?.max_length, 200);
+  assert.equal(form.submit?.action_type, 'form_submit');
+  assert.ok(buttonsOf(card).length === 3, 'option buttons stay');
+
+  await h.runtime.handleCardAction({
+    operatorOpenId: 'ou_owner',
+    messageId: h.sent[0]!.messageId,
+    chatId: 'oc_chat',
+    value: form.submit!.value!,
+    formValue: { other: '  预发环境  ' },
+  });
+  assert.deepEqual(await promise, {
+    answers: [{ id: 'q1', selected: [], custom: '预发环境' }],
+  });
+  assert.match(JSON.stringify(h.updates.at(-1)?.card), /已填写：预发环境/);
+  assert.equal(h.runtime.pending.size, 0);
+});
+
+test('选项自定义填写：空文本不 resolve，patch 提示；随后可正常提交', async () => {
+  const h = makeRuntime();
+  const { listeners } = h.attach();
+  const promise = listeners.get('user-questions/request')!({
+    questions: [{ id: 'q1', question: '叫什么？', options: [{ label: 'a' }] }],
+  });
+  await tick();
+  const form = formOf(h.sent[0]!.card);
+  await h.runtime.handleCardAction({
+    operatorOpenId: 'ou_owner',
+    messageId: h.sent[0]!.messageId,
+    chatId: 'oc_chat',
+    value: form.submit!.value!,
+    formValue: { other: '   ' },
+  });
+  assert.equal(h.runtime.pending.size, 1, 'empty submit keeps waiting');
+  assert.match(JSON.stringify(h.updates.at(-1)?.card), /请填写后再提交/);
+
+  await h.runtime.handleCardAction({
+    operatorOpenId: 'ou_owner',
+    messageId: h.sent[0]!.messageId,
+    chatId: 'oc_chat',
+    value: form.submit!.value!,
+    formValue: { other: '答案' },
+  });
+  assert.deepEqual(await promise, {
+    answers: [{ id: 'q1', selected: [], custom: '答案' }],
+  });
+});
+
+test('无 options 的问题：只有输入框 + 提交按钮，可自定义回答', async () => {
+  const h = makeRuntime();
+  const { listeners } = h.attach();
+  const promise = listeners.get('user-questions/request')!({
+    questions: [{ id: 'q1', question: '还有什么要补充？' }],
+  });
+  await tick();
+  const card = h.sent[0]!.card;
+  assert.equal(buttonsOf(card).length, 0);
+  const form = formOf(card);
+  assert.equal(form.input?.name, 'other');
+  assert.equal(form.submit?.action_type, 'form_submit');
+  await h.runtime.handleCardAction({
+    operatorOpenId: 'ou_owner',
+    messageId: h.sent[0]!.messageId,
+    chatId: 'oc_chat',
+    value: form.submit!.value!,
+    formValue: { other: '补充内容' },
+  });
+  assert.deepEqual(await promise, {
+    answers: [{ id: 'q1', selected: [], custom: '补充内容' }],
+  });
+});
+
+test('multiSelect：卡片明写多选暂不支持，按钮仍只能选一项', async () => {
+  const h = makeRuntime();
+  const { listeners } = h.attach();
+  const promise = listeners.get('user-questions/request')!({
+    questions: [
+      {
+        id: 'q1',
+        question: '选哪些？',
+        options: [{ label: 'x' }, { label: 'y' }],
+        multiSelect: true,
+      },
+    ],
+  });
+  await tick();
+  const card = h.sent[0]!.card;
+  assert.match(JSON.stringify(card), /多选暂不支持，仅能选一项/);
+  const buttons = buttonsOf(card);
+  assert.equal(buttons.length, 2);
+  await h.runtime.handleCardAction(actionFor(buttons[0]!.value));
+  assert.deepEqual(await promise, { answers: [{ id: 'q1', selected: ['x'] }] });
+});
+
+test('自定义答案过长：终态只显示前 40 字，custom 保留全文', async () => {
+  const h = makeRuntime();
+  const { listeners } = h.attach();
+  const long = '一'.repeat(50);
+  const promise = listeners.get('user-questions/request')!({
+    questions: [{ id: 'q1', question: '长文本' }],
+  });
+  await tick();
+  const form = formOf(h.sent[0]!.card);
+  await h.runtime.handleCardAction({
+    operatorOpenId: 'ou_owner',
+    messageId: h.sent[0]!.messageId,
+    chatId: 'oc_chat',
+    value: form.submit!.value!,
+    formValue: { other: long },
+  });
+  const answer = (await promise) as { answers: { custom?: string }[] };
+  assert.equal(answer.answers[0]?.custom, long);
+  const terminal = JSON.stringify(h.updates.at(-1)?.card);
+  assert.ok(terminal.includes('一'.repeat(40)));
+  assert.ok(!terminal.includes('一'.repeat(41)));
 });
