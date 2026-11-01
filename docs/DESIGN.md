@@ -36,7 +36,7 @@
 | 会话日志 / 工作区记账 | ✅ | — |
 | 上下文压缩 | ✅ 自动四件套 ＋ `/compact` 命令 | 转发即可 |
 | 中断与三种投递 | ✅ `followup` / `steer` / `inject` / `cancel` | 映射成命令与忙时策略 |
-| 标题生成与存储 | ✅ `session-title` 服务 + `first-prompt-llm` 等 provider + 确定性 fallback | 只插 provider 行，不写逻辑 |
+| 标题生成与存储 | ✅ base 已挂 `session-title` + `session-title-llm`（first-prompt）+ 确定性 fallback（2026-10-31 实测） | **什么都不用插**，只调 `rename()` / `get()` |
 | 人格 | ❌（`dsh-persona` 只吃内联字符串） | L1 |
 | 会话键 | ❌（无 IM 概念） | L2 |
 | IM 渲染 / 命令入口 | ❌ | L3 |
@@ -151,9 +151,8 @@ dsh-caduceus/
       name: 'dsh-caduceus'
     - id: caduceus-persona
       name: 'dsh-caduceus/persona'
-    - id: session-title-first-prompt      # 官方，随本包一同插入
-      name: '@deepseek-ai/dsh-session-title-first-prompt-llm'
-      config: { maxTitleBytes: 120, fallbackMaxBytes: 80 }
+# 注意：不要再插 title provider —— base 已挂 session-title-llm，
+# 同 id 二次注册会在加载期直接报「provider already registered」。
 ```
 
 不碰任何 preset。
