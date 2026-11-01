@@ -328,8 +328,6 @@ test('不再依赖 tools 服务计数：SelfCheckOptions 无 toolCount 依赖也
     getAgentPresets: () => presetsOk,
     getTools: () => ({}),
   });
-  const options = checker as unknown as { toolCount?: unknown };
-  assert.equal(options.toolCount, undefined);
   await checker.runStageA();
   await checker.runStageB({});
   await checker.checkTools(37);

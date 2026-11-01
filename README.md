@@ -79,6 +79,7 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 | `/resume [id\|尾号]` | 无参恢复本 scope 上一条；带参可按完整 sessionId 或 ≥8 位不歧义**尾号**在本 chat 所有 scope 的**当前 + 全量 history** 中恢复；命中后该 id 成为当前并置于 history 首位（命中多条给歧义提示） |
 | `/adopt <id\|尾号>` | 把一条无归属的会话显式收养到**当前 scopeKey**（加入 history 并设为当前）；已在其他 scope 下会提示位置、歧义列候选、零命中给提示 |
 | `/selfcheck` | 立即重跑启动自检，逐项输出 `ok/fail/skip` 与详情 |
+| `/doctor [--json]` | 输出分段体检报告（运行时/飞书/人格/会话/存储/版本），文本或机器可读 JSON |
 | `/stop` | 中断当前正在运行的一轮（`cancel({kind:'user'})`） |
 | `/status` | 显示本会话状态、步数、工具数、起止时间与最近事件 |
 | `/persona [show\|sync]` | 查看或同步 SOUL 人格块 |

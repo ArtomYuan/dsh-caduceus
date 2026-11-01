@@ -13,6 +13,7 @@ import type { UserMessage } from '@deepseek-ai/dsh-llm';
 import type { HarnessCommandResult } from '../commands/harness.js';
 import type { LoggerLike } from '../logger.js';
 import type { Clock } from '../render/stream.js';
+import type { DoctorInputs, DoctorSessionInfo } from '../doctor.js';
 import type { SessionStore } from '../session-key.js';
 import type { Transport } from '../transport/types.js';
 
@@ -115,6 +116,10 @@ export interface BridgeOptions {
   readonly persona?: (action: 'show' | 'sync') => Promise<PersonaCommandResult>;
   /** Time source for elapsed rendering; defaults to the clock. */
   readonly now?: () => number;
+  /** `/doctor` data collector (wired by the gateway; not available in tests by default). */
+  readonly doctorInputs?: (
+    session: DoctorSessionInfo,
+  ) => DoctorInputs | Promise<DoctorInputs>;
   /** Optional self-check controller (`/status`, `/selfcheck`, stage B). */
   readonly selfCheck?: import('../selfcheck.js').SelfChecker;
   /** Owners sidecar directory (tests); defaults to `<DSH_HOME>/caduceus/owners`. */

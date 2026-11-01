@@ -41,6 +41,8 @@ export class LarkFeishuApi implements FeishuApi {
   private handler: ((message: InboundMessage) => void) | undefined;
   private running = false;
   private botOpenId: string | undefined;
+  private botName: string | undefined;
+  private startedAt: number | undefined;
 
   constructor(options: LarkFeishuApiOptions) {
     this.logger = options.logger ?? silentLogger();
@@ -90,6 +92,7 @@ export class LarkFeishuApi implements FeishuApi {
     await this.resolveBotOpenId();
     await this.ws.start({ eventDispatcher: this.dispatcher });
     this.running = true;
+    this.startedAt = Date.now();
     this.logger.info('feishu long connection started');
   }
 
@@ -99,7 +102,13 @@ export class LarkFeishuApi implements FeishuApi {
       const response = (await this.client.request({
         url: '/open-apis/bot/v3/info',
         method: 'GET',
-      })) as { bot?: { open_id?: string }; data?: { open_id?: string } };
+      })) as {
+        bot?: { open_id?: string; name?: string; app_name?: string };
+        data?: { open_id?: string; name?: string; app_name?: string };
+      };
+      const bot = response.bot ?? response.data;
+      const name = bot?.name ?? bot?.app_name;
+      if (name !== undefined && name.length > 0) this.botName = name;
       const openId = response.bot?.open_id ?? response.data?.open_id;
       if (typeof openId === 'string' && openId.length > 0) {
         this.botOpenId = openId;
@@ -117,6 +126,17 @@ export class LarkFeishuApi implements FeishuApi {
   /** The bot's own open id, or `undefined` until resolved. */
   getBotOpenId(): string | undefined {
     return this.botOpenId;
+  }
+
+  getBotName(): string | undefined {
+    return this.botName;
+  }
+
+  getConnectionStatus(): { readonly ready: boolean; readonly since?: number } {
+    return {
+      ready: this.running,
+      ...(this.startedAt === undefined ? {} : { since: this.startedAt }),
+    };
   }
 
   async stop(): Promise<void> {

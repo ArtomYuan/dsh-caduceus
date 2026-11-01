@@ -54,8 +54,9 @@ try {
 
   // 2. Command classification: nine owned commands, everything else passes
   //    through with the original bytes.
-  assert.deepEqual([...COMMAND_NAMES], ['new', 'sessions', 'rename', 'resume', 'adopt', 'selfcheck', 'stop', 'status', 'persona', 'help']);
+  assert.deepEqual([...COMMAND_NAMES], ['new', 'sessions', 'rename', 'resume', 'adopt', 'selfcheck', 'doctor', 'stop', 'status', 'persona', 'help']);
   assert.deepEqual(parseCommand('/selfcheck'), { kind: 'selfcheck' });
+  assert.deepEqual(parseCommand('/doctor --json'), { kind: 'doctor', json: true });
   assert.deepEqual(parseCommand('/adopt feishu-1793463503786'), {
     kind: 'adopt',
     sessionId: 'feishu-1793463503786',

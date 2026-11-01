@@ -10,6 +10,10 @@
  *
  * @module @artomyuan/dsh-caduceus
  */
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
+
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { SessionEvent } from '@deepseek-ai/dsh-session';
@@ -33,7 +37,7 @@ import { autoSyncPersona } from './persona/auto-sync.js';
 import { runPersonaCommand } from './persona/command.js';
 import { SelfChecker } from './selfcheck.js';
 import { hasSessionLog } from './session-files.js';
-import { SessionStore } from './session-key.js';
+import { SESSION_MAP_VERSION, SessionStore } from './session-key.js';
 import { createLarkFeishuApi } from './transport/lark.js';
 import { ReliableTransport } from './transport/reliable.js';
 
@@ -118,6 +122,39 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function packageVersionOf(specifier: string, fallback: string): string {
+  try {
+    const raw = readFileSync(specifier, 'utf8');
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    return typeof parsed.version === 'string' ? parsed.version : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/** Plugin version from this package's package.json (works from dist/). */
+function pluginVersion(): string {
+  return packageVersionOf(new URL('../package.json', import.meta.url).pathname, 'unknown');
+}
+
+/** dsh version from the installed @deepseek-ai/dsh package. */
+function dshVersion(): string {
+  try {
+    const require = createRequire(import.meta.url);
+    return packageVersionOf(require.resolve('@deepseek-ai/dsh/package.json'), 'unknown');
+  } catch {
+    return 'unknown';
+  }
+}
+
+function hasService(ctx: Context, name: string): boolean {
+  try {
+    return ctx.get(name as never) !== undefined;
+  } catch {
+    return false;
+  }
+}
+
 /** Mount the gateway entry. */
 export function apply(ctx: Context, config: GatewayConfig = {}): void {
   const resolved = resolveGatewayConfig(config);
@@ -188,6 +225,54 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
     sessionPresetLookup: (sessionId) =>
       (ctx.get('sessions') as SessionsServiceLike | undefined)?.get(sessionId)?.header
         ?.agentPreset,
+    doctorInputs: (session) => {
+      let mapWritable: boolean;
+      try {
+        const dir = dirname(sessionMap.filePath);
+        mkdirSync(dir, { recursive: true });
+        const probe = join(dir, '.doctor-write-probe');
+        writeFileSync(probe, 'ok', 'utf8');
+        rmSync(probe, { force: true });
+        mapWritable = true;
+      } catch {
+        mapWritable = false;
+      }
+      const connection = transport.getConnectionStatus?.();
+      const delivery = transport.getDeliveryStats?.();
+      return {
+        versions: { plugin: pluginVersion(), dsh: dshVersion(), node: process.version },
+        runtime: {
+          ...(session.preset === undefined ? {} : { preset: session.preset }),
+          ...(session.presetMounted === undefined
+            ? {}
+            : { presetMounted: session.presetMounted }),
+          ...(session.toolsCount === undefined ? {} : { toolsCount: session.toolsCount }),
+          sessionTitleService: hasService(ctx, 'sessionTitle'),
+          agentsService: hasService(ctx, 'agents'),
+        },
+        feishu: {
+          ...(resolved.credentials === undefined ? {} : { appId: resolved.credentials.appId }),
+          ...(transport.getBotName?.() === undefined
+            ? {}
+            : { botName: transport.getBotName?.(),
+              }),
+          connectionReady: connection?.ready,
+          ...(connection?.since === undefined ? {} : { connectedSince: connection.since }),
+          ...(delivery?.lastSuccessAt === undefined
+            ? {}
+            : { lastSendAt: delivery.lastSuccessAt }),
+          ...(delivery?.lastKind === undefined ? {} : { lastSendKind: delivery.lastKind }),
+          ...(delivery?.failures === undefined ? {} : { sendFailures: delivery.failures }),
+        },
+        persona: { env: process.env },
+        session,
+        storage: {
+          mapVersion: SESSION_MAP_VERSION,
+          mapWritable,
+          mapEntries: Object.keys(sessionMap.snapshot().entries).length,
+        },
+      };
+    },
     // Lazy per use: the service can register AFTER this plugin mounts.
     sessionTitleProvider: () => ctx.get('sessionTitle') as SessionTitleLike | undefined,
     persona: (action) => runPersonaCommand(action, { logger }),

@@ -28,6 +28,7 @@ import {
   sessionTimeLabel,
   shortSessionId,
 } from '../observability.js';
+import { buildDoctorReport, renderDoctorJson, renderDoctorText, type DoctorSessionInfo } from '../doctor.js';
 import { writeOwnership, type SessionScopeKind } from '../ownership.js';
 import {
   finalCard,
@@ -391,6 +392,23 @@ export class Bridge {
       }
       case 'adopt': {
         await this.#adopt(state, command.sessionId);
+        return;
+      }
+      case 'doctor': {
+        const provider = this.#options.doctorInputs;
+        if (provider === undefined) {
+          await this.#replyText(state, '体检未接线（doctorInputs 未注入）。');
+          return;
+        }
+        try {
+          const report = await buildDoctorReport(await provider(this.#doctorSessionInfo(state)));
+          await this.#replyText(
+            state,
+            command.json === true ? renderDoctorJson(report) : renderDoctorText(report),
+          );
+        } catch (error) {
+          await this.#replyText(state, `体检生成失败：${errorMessage(error)}`);
+        }
         return;
       }
       case 'selfcheck': {
@@ -917,6 +935,23 @@ export class Bridge {
   async #runSelfCheckStageB(sessionId: string): Promise<void> {
     if (this.#selfCheck === undefined) return;
     await this.#selfCheck.runStageB(this.#agentCtxBySession.get(sessionId));
+  }
+
+  #doctorSessionInfo(state: ScopeState): DoctorSessionInfo {
+    const sessionId = state.sessionId ?? this.#sessionMap.get(state.key);
+    const preset = this.#selfCheck?.presetId();
+    return {
+      scopeKey: state.key,
+      ...(sessionId === undefined ? {} : { sessionId }),
+      ...(preset === undefined ? {} : { preset, presetMounted: true }),
+      ...(preset === undefined && this.#selfCheck?.presetMounted() === false
+        ? { presetMounted: false }
+        : {}),
+      ...(this.#selfCheck?.toolCount() === undefined
+        ? {}
+        : { toolsCount: this.#selfCheck.toolCount() }),
+      historyLength: this.#sessionMap.history(state.key).length,
+    };
   }
 
   /** First `request/header` of a session: record the model's actual tool count. */

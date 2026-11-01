@@ -203,6 +203,28 @@ export class SelfChecker {
     return combineReports(this.#stageA, this.#stageB);
   }
 
+  /** Applied preset id from the latest stage-B report (if ok). */
+  presetId(): string | undefined {
+    const item = this.#stageB?.items.find((entry) => entry.id === 'preset:applied');
+    if (item?.status !== 'ok') return undefined;
+    return item.detail.replace(/^preset=/, '');
+  }
+
+  /** Whether stage B validated an applied preset. */
+  presetMounted(): boolean | undefined {
+    const item = this.#stageB?.items.find((entry) => entry.id === 'preset:applied');
+    if (item === undefined) return undefined;
+    return item.status === 'ok';
+  }
+
+  /** First request/header tool count (if known). */
+  toolCount(): number | undefined {
+    const item = this.#stageB?.items.find((entry) => entry.id === 'tools:count');
+    if (item?.status !== 'ok') return undefined;
+    const value = Number(item.detail.replace(/^tools=/, ''));
+    return Number.isFinite(value) ? value : undefined;
+  }
+
   /** `/status` first line. */
   statusLine(): string {
     const items = this.report();

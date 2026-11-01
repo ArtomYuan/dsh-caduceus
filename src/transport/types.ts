@@ -131,6 +131,16 @@ export interface Transport {
    * fake transports may omit it, and the real one resolves it lazily.
    */
   getBotOpenId?(): string | undefined;
+  /** Cached bot display name (resolved at startup; no extra API call). */
+  getBotName?(): string | undefined;
+  /** Long-connection status/start time, when known. */
+  getConnectionStatus?(): { readonly ready: boolean; readonly since?: number };
+  /** Best-effort delivery counters for `/doctor`. */
+  getDeliveryStats?(): {
+    readonly lastSuccessAt?: number;
+    readonly lastKind?: string;
+    readonly failures: number;
+  };
   /** Reply to an existing message; `threadId` enables `reply_in_thread`. */
   reply(
     chatId: string,

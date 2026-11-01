@@ -36,4 +36,8 @@ export interface FeishuApi {
   patchCard(messageId: string, card: FeishuCard): Promise<void>;
   /** The bot's own open id, when resolved (group @ gate). */
   getBotOpenId?(): string | undefined;
+  /** Cached bot display name, resolved once at startup. */
+  getBotName?(): string | undefined;
+  /** Long-connection status and start time, when known. */
+  getConnectionStatus?(): { readonly ready: boolean; readonly since?: number };
 }

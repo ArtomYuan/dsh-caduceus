@@ -117,6 +117,13 @@ test('denylist 至少包含 /export，且大小写不敏感', () => {
   assert.equal(isWebOnlyCommand('compact'), false);
 });
 
+test('/doctor 支持 --json，其他参数返回 usage', () => {
+  assert.deepEqual(parseCommand('/doctor'), { kind: 'doctor' });
+  assert.deepEqual(parseCommand('/doctor --json'), { kind: 'doctor', json: true });
+  assert.equal(parseCommand('/doctor now').kind, 'usage');
+  assert.ok(COMMAND_NAMES.includes('doctor'));
+});
+
 test('/selfcheck 是无参自有命令', () => {
   assert.deepEqual(parseCommand('/selfcheck'), { kind: 'selfcheck' });
   assert.equal(parseCommand('/selfcheck now').kind, 'usage');

@@ -76,6 +76,10 @@ interface HarnessOptions {
   readonly sessionPresetLookup?: (sessionId: string) => string | undefined;
   /** Self-check controller (for /status and /selfcheck tests). */
   readonly selfCheck?: import('../src/selfcheck.js').SelfChecker;
+  /** `/doctor` data collector (optional; tests inject deterministic data). */
+  readonly doctorInputs?: (
+    session: import('../src/doctor.js').DoctorSessionInfo,
+  ) => import('../src/doctor.js').DoctorInputs | Promise<import('../src/doctor.js').DoctorInputs>;
 }
 
 interface Harness {
@@ -178,6 +182,7 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
       ? {}
       : { sessionPresetLookup: options.sessionPresetLookup }),
     ...(options.selfCheck === undefined ? {} : { selfCheck: options.selfCheck }),
+    ...(options.doctorInputs === undefined ? {} : { doctorInputs: options.doctorInputs }),
   });
   return { dir, store, presets: agentPresets, transport, agents, clock, logger, titles, bridge };
 }
@@ -1766,4 +1771,65 @@ test('自检 tools:count 每会话只在首条 request/header 判一次', async 
   await h.bridge.handleSessionEvent(session, header(37));
   await h.bridge.handleSessionEvent(session, header(99));
   assert.deepEqual(checks, [37], 'only the first request/header is judged');
+});
+
+test('/doctor 输出分段文本；/doctor --json 输出可解析 JSON', async (t) => {
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const { syncSoul } = await import('../src/persona/blocks.js');
+  const base = mkdtempSync(join(tmpdir(), 'dsh-caduceus-doctor-bridge-'));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  mkdirSync(join(base, 'agents-home'), { recursive: true });
+  const env = { DSH_HOME: base, DSH_AGENTS_HOME: join(base, 'agents-home') };
+  writeFileSync(join(base, 'SOUL.md'), '体检人格\n', 'utf8');
+  await syncSoul({ env });
+
+  let seenSession: { cwd?: string } | undefined;
+  const h = makeHarness(t, {
+    doctorInputs: (session) => {
+      seenSession = session as unknown as { cwd?: string };
+      return {
+        versions: { plugin: '0.1.0', dsh: '0.2.1-rc.2', node: 'v22.23.2' },
+        runtime: {
+          preset: 'standard',
+          presetMounted: true,
+          toolsCount: 37,
+          sessionTitleService: true,
+          agentsService: true,
+        },
+        feishu: {
+          appId: 'cli_aa1b2c3d4e5f6dbc1',
+          botName: '伊冯',
+          connectionReady: true,
+          connectedSince: Date.now() - 1000,
+          lastSendAt: Date.now() - 1000,
+          lastSendKind: '卡片',
+          sendFailures: 0,
+        },
+        persona: { env },
+        session,
+        storage: { mapVersion: 5, mapWritable: true, mapEntries: 1 },
+      };
+    },
+  });
+
+  await h.bridge.handleInbound(inbound('hi'));
+  await h.bridge.handleInbound(inbound('/doctor'));
+  const text = recordedTexts(h.transport).at(-1) ?? '';
+  assert.match(text, /^大肥鱼 · 体检/);
+  for (const section of ['运行时', '飞书', '人格', '会话']) {
+    assert.ok(text.includes(`【${section}】`), text);
+  }
+  assert.match(text, /【结论】\d+ 项正常 · 0 项异常 · \d+ 项跳过/);
+  assert.ok(seenSession !== undefined);
+
+  await h.bridge.handleInbound(inbound('/doctor --json'));
+  const json = recordedTexts(h.transport).at(-1) ?? '';
+  const parsed = JSON.parse(json) as {
+    sections: { title: string; items: { id: string; mark: string }[] }[];
+    counts: { fail: number };
+  };
+  assert.deepEqual(parsed.sections.map((entry) => entry.title), ['运行时', '飞书', '人格', '会话']);
+  assert.ok(parsed.sections.flatMap((entry) => entry.items.map((item) => item.id)).includes('preset'));
+  assert.equal(parsed.counts.fail, 0);
+  assert.ok(!json.includes('appSecret'));
 });
