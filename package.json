@@ -1,7 +1,7 @@
 {
-  "name": "@artomyuan/dsh-caduceus",
+  "name": "dsh-caduceus",
   "version": "0.1.0",
-  "description": "Hermes-style Feishu surface for DeepSeek Harness (dsh): one topic = one session, SOUL persona block, streaming cards, /status. Slice 2: transport + agent bridge + status layer.",
+  "description": "Feishu/Lark surface plugin for DeepSeek Harness (dsh): one topic per session, SOUL persona sync, streaming process cards, /status and /doctor.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -36,10 +36,12 @@
   "files": [
     "dist/",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
-    "node": ">=22.13"
+    "node": ">=22.13",
+    "dsh": ">=0.2.1-rc.2"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.76.0"
@@ -47,6 +49,11 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "compatibility": {
+      "dshReleases": {
+        "0.2.1-rc.2": "compatible"
+      }
     }
   },
   "peerDependencies": {
@@ -75,7 +82,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
     "test": "tsc -p tsconfig.test.json && node --test .test-dist/test/*.test.js",
     "smoke": "node scripts/smoke.mjs",
-    "clean": "rm -rf dist .test-dist"
+    "clean": "rm -rf dist .test-dist",
+    "prepare": "tsc -p tsconfig.json"
   },
   "packageManager": "pnpm@11.7.0",
   "license": "MIT",
@@ -87,9 +95,21 @@
     "gateway",
     "surface",
     "bundle",
-    "plugin"
+    "plugin",
+    "dsh-plugin",
+    "cordis",
+    "chat"
   ],
   "publishConfig": {
     "access": "public"
+  },
+  "author": "ArtomYuan",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ArtomYuan/dsh-caduceus.git"
+  },
+  "homepage": "https://github.com/ArtomYuan/dsh-caduceus#readme",
+  "bugs": {
+    "url": "https://github.com/ArtomYuan/dsh-caduceus/issues"
   }
 }

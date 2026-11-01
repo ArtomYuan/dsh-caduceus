@@ -37,7 +37,7 @@
  * object, and v1 nests those strings under `sessions`. Loading never writes;
  * the next persist writes v5.
  *
- * @module @artomyuan/dsh-caduceus/session-key
+ * @module dsh-caduceus/session-key
  */
 import { readFileSync } from 'node:fs';
 import { writeFileAtomicSync } from './atomic-write.js';

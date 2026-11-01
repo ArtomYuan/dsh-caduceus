@@ -15,7 +15,7 @@
  * `agents.create` still receives `meta: { cwd, caduceus }` as required by the
  * integration contract; the sidecar is the part that actually survives.
  *
- * @module @artomyuan/dsh-caduceus/ownership
+ * @module dsh-caduceus/ownership
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';

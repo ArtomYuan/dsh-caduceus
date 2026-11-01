@@ -16,7 +16,7 @@
  *
  * Mention open ids are preserved so the bridge can enforce the group @ gate.
  *
- * @module @artomyuan/dsh-caduceus/transport/normalize
+ * @module dsh-caduceus/transport/normalize
  */
 import type { InboundMessage } from './types.js';
 

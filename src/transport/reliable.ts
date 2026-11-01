@@ -10,7 +10,7 @@
  *   must never be delivered twice because the thread is unsupported;
  * - interactive cards are rejected unless `config.update_multi = true`.
  *
- * @module @artomyuan/dsh-caduceus/transport/reliable
+ * @module dsh-caduceus/transport/reliable
  */
 import { randomUUID } from 'node:crypto';
 

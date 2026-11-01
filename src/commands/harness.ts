@@ -7,7 +7,7 @@
  * command". Handler errors are contained here: one bad command must not take
  * the surface down.
  *
- * @module @artomyuan/dsh-caduceus/commands/harness
+ * @module dsh-caduceus/commands/harness
  */
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { CommandRuntime } from '@deepseek-ai/dsh-commands';

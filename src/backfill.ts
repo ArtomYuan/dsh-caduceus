@@ -7,7 +7,7 @@
  * Read-only scan of `<DSH_HOME>/sessions/<bucket>/<sessionId>/`; never creates
  * agents or sessions. Session-map writes are the only side effect.
  *
- * @module @artomyuan/dsh-caduceus/backfill
+ * @module dsh-caduceus/backfill
  */
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';

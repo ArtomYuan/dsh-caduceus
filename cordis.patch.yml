@@ -9,6 +9,6 @@
 # `sessionTitle.rename()` / `.get()`.
 - insert:
     - id: caduceus-gateway
-      name: '@artomyuan/dsh-caduceus'
+      name: 'dsh-caduceus'
     - id: caduceus-persona
-      name: '@artomyuan/dsh-caduceus/persona'
+      name: 'dsh-caduceus/persona'

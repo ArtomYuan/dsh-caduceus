@@ -8,7 +8,7 @@
  * Byte-based, never character-based: the cut point must not split a multi-byte
  * UTF-8 sequence (Chinese, emoji, …). This module is pure — no I/O, no clock.
  *
- * @module @artomyuan/dsh-caduceus/render/truncate
+ * @module dsh-caduceus/render/truncate
  */
 import { Buffer } from 'node:buffer';
 

@@ -6,7 +6,7 @@
  * else talks to the {@link FeishuApi} seam, so tests never need credentials or
  * a network connection.
  *
- * @module @artomyuan/dsh-caduceus/transport/lark
+ * @module dsh-caduceus/transport/lark
  */
 import { Client, EventDispatcher, WSClient } from '@larksuiteoapi/node-sdk';
 

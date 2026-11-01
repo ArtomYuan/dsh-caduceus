@@ -10,7 +10,7 @@
  * Read-only, bounded, and tolerant: a missing root, unreadable bucket, or
  * malformed session id simply reports `false`/is skipped — never throws.
  *
- * @module @artomyuan/dsh-caduceus/session-files
+ * @module dsh-caduceus/session-files
  */
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';

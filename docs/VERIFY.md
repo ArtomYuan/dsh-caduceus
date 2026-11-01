@@ -1,6 +1,6 @@
 # 临时 profile 验证手册
 
-适用范围：`@artomyuan/dsh-caduceus` 的构建/单测自检与**临时 profile** 安装冒烟。
+适用范围：`dsh-caduceus` 的构建/单测自检与**临时 profile** 安装冒烟。
 第一刀交付了骨架与纯逻辑模块；第二刀（飞书传输 + agent 桥接 + 状态层）已完成代码与单测，**真机飞书验收（A1–A17）需要真实凭据**，清单与验证方法见 [SLICE2.md](SLICE2.md)。
 
 > **硬约束声明：本刀没有执行安装、没有启动或重启任何服务。**
@@ -65,7 +65,7 @@ dsh plugin --profile caduceus-verify add "$PKG"
 判定：
 
 - 命令退出码 0；
-- `"$VERIFY_HOME/profiles/caduceus-verify/package.json"` 的 `dsh.profile.bundles` 里出现 `@artomyuan/dsh-caduceus`；
+- `"$VERIFY_HOME/profiles/caduceus-verify/package.json"` 的 `dsh.profile.bundles` 里出现 `dsh-caduceus`；
 - 若报 pnpm 127：`PATH` 里没有 pnpm，确认已 `export PATH="/home/artom/.local/bin:$PATH"`；
 - 若报 DSH 版本不满足：确认运行时是 `0.2.1-rc.2`（`dsh -V`），本包 peer 钉的就是它。
 
@@ -83,7 +83,7 @@ export PATH="$VERIFY_HOME/bin:/home/artom/.local/bin:$PATH"
 ```bash
 dsh --profile caduceus-verify --dump-config > "$VERIFY_HOME/dump.yml"
 grep -nE '^- id: (caduceus-gateway|caduceus-persona|session-title-first-prompt)$' "$VERIFY_HOME/dump.yml"
-grep -cE "name: '@artomyuan/dsh-caduceus" "$VERIFY_HOME/dump.yml"
+grep -cE "name: 'dsh-caduceus" "$VERIFY_HOME/dump.yml"
 ```
 
 预期：

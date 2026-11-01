@@ -17,7 +17,7 @@
  * The three "user must know without asking" reasons are `error`,
  * `interrupted` and `blocked` (design doc §6 L3′ terminal push).
  *
- * @module @artomyuan/dsh-caduceus/status
+ * @module dsh-caduceus/status
  */
 
 /** Derived session states. */

@@ -5,7 +5,7 @@
  * logger and the gateway can adapt the cordis logger without a dependency
  * cycle.
  *
- * @module @artomyuan/dsh-caduceus/logger
+ * @module dsh-caduceus/logger
  */
 
 export interface LoggerLike {

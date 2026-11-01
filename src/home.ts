@@ -6,7 +6,7 @@
  * with no arguments and therefore uses `os.homedir()` — never a shell-expanded
  * `~` (the file tools do not expand tildes).
  *
- * @module @artomyuan/dsh-caduceus/home
+ * @module dsh-caduceus/home
  */
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';

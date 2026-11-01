@@ -23,7 +23,7 @@
  * exists the sync is a no-op: status `missing`, one info log line
  * `persona source missing`, and neither file is created or modified.
  *
- * @module @artomyuan/dsh-caduceus/persona/blocks
+ * @module dsh-caduceus/persona/blocks
  */
 import { readFile } from 'node:fs/promises';
 import { writeFileAtomic } from '../atomic-write.js';

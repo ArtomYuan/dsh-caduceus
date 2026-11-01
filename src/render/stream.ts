@@ -6,7 +6,7 @@
  * 5 QPS card-patch budget, design doc §6 L3). The clock is injectable so unit
  * tests advance time deterministically instead of sleeping.
  *
- * @module @artomyuan/dsh-caduceus/render/stream
+ * @module dsh-caduceus/render/stream
  */
 import type { SentMessage, FeishuCard } from '../transport/types.js';
 

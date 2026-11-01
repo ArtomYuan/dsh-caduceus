@@ -12,7 +12,7 @@
  *
  * Pure classifier + formatter; the bridge and the transport both use it.
  *
- * @module @artomyuan/dsh-caduceus/gate
+ * @module dsh-caduceus/gate
  */
 import type { LoggerLike } from './logger.js';
 import type { ChatType } from './transport/types.js';

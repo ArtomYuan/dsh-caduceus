@@ -6,7 +6,7 @@
  * with a reason. Secrets are never printed (appSecret is not part of the model
  * at all; the appId is masked).
  *
- * @module @artomyuan/dsh-caduceus/doctor
+ * @module dsh-caduceus/doctor
  */
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';

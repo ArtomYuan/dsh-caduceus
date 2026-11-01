@@ -6,7 +6,7 @@
  * is atomic on POSIX, so readers see either the old or the new file, never a
  * torn one.
  *
- * @module @artomyuan/dsh-caduceus/atomic-write
+ * @module dsh-caduceus/atomic-write
  */
 import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';

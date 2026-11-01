@@ -1,6 +1,6 @@
 /**
  * Transport public surface.
- * @module @artomyuan/dsh-caduceus/transport
+ * @module dsh-caduceus/transport
  */
 export { ReliableTransport } from './reliable.js';
 export type { ReliableTransportOptions } from './reliable.js';

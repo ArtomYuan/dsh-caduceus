@@ -7,7 +7,7 @@
  * make no sense on a chat surface. `/export` is the required minimum; the list
  * is intentionally small and explicit.
  *
- * @module @artomyuan/dsh-caduceus/commands/dispatch
+ * @module dsh-caduceus/commands/dispatch
  */
 import { parseCommand, type ParsedCommand } from './parse.js';
 

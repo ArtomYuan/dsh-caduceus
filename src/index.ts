@@ -8,7 +8,7 @@
  * tested modules; this file is the seam to the dsh runtime and therefore has no
  * unit tests (its adapters are validated on a real profile in docs/SLICE2.md).
  *
- * @module @artomyuan/dsh-caduceus
+ * @module dsh-caduceus
  */
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';

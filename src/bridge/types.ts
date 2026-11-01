@@ -6,7 +6,7 @@
  * `ctx.get('sessionTitle')` at the edge. The real dsh objects satisfy these
  * shapes structurally.
  *
- * @module @artomyuan/dsh-caduceus/bridge/types
+ * @module dsh-caduceus/bridge/types
  */
 import type { UserMessage } from '@deepseek-ai/dsh-llm';
 

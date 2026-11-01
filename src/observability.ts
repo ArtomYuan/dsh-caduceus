@@ -4,7 +4,7 @@
  * The startup line must never leak any part of `appSecret`; it is accepted as
  * an input only so tests can assert it is absent from the output.
  *
- * @module @artomyuan/dsh-caduceus/observability
+ * @module dsh-caduceus/observability
  */
 import type { BusyMode } from './bridge/types.js';
 import type { ChatType } from './transport/types.js';

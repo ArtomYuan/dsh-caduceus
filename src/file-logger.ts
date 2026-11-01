@@ -18,7 +18,7 @@
  * Write failures are contained (`onError`, default stderr-once) — logging must
  * never affect message delivery.
  *
- * @module @artomyuan/dsh-caduceus/file-logger
+ * @module dsh-caduceus/file-logger
  */
 import { appendFileSync, chmodSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';

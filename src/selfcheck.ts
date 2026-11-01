@@ -18,7 +18,7 @@
  *   `selfcheck: FAIL <items>` line when anything fails. Re-checks only log when
  *   the fail set / status changes.
  *
- * @module @artomyuan/dsh-caduceus/selfcheck
+ * @module dsh-caduceus/selfcheck
  */
 import { readFile } from 'node:fs/promises';
 

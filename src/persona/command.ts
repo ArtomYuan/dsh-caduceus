@@ -5,7 +5,7 @@
  * (dsh command registry, Web parity) call this one implementation, so the two
  * surfaces can never drift.
  *
- * @module @artomyuan/dsh-caduceus/persona/command
+ * @module dsh-caduceus/persona/command
  */
 import type { PersonaCommandResult } from '../bridge/types.js';
 import type { HomeEnv } from '../home.js';

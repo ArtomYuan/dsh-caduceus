@@ -7,7 +7,7 @@
  * `{ kind: 'passthrough', raw }` so the caller can forward it unchanged to the
  * dsh command registry or the agent (design doc §6 L3).
  *
- * @module @artomyuan/dsh-caduceus/commands/parse
+ * @module dsh-caduceus/commands/parse
  */
 
 /** Commands dsh-caduceus owns. Keep in sync with README's command table. */

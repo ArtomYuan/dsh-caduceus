@@ -6,7 +6,7 @@
  * `FEISHU_APP_SECRET`; without them the gateway mounts in "idle" mode (ready
  * log, no long connection), which keeps a fresh profile bootable.
  *
- * @module @artomyuan/dsh-caduceus/config
+ * @module dsh-caduceus/config
  */
 import { resolve } from 'node:path';
 

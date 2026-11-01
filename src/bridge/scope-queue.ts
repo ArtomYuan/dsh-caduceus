@@ -6,7 +6,7 @@
  * the same scope); different topics run in parallel so a slow agent creation in
  * one group never blocks another group.
  *
- * @module @artomyuan/dsh-caduceus/bridge/scope-queue
+ * @module dsh-caduceus/bridge/scope-queue
  */
 export class ScopeQueue {
   private readonly tails = new Map<string, Promise<void>>();

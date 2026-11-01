@@ -5,7 +5,7 @@
  * tested against this interface with fakes; the production implementation
  * ({@link LarkFeishuApi}) is the only module that imports the network SDK.
  *
- * @module @artomyuan/dsh-caduceus/transport/feishu-api
+ * @module dsh-caduceus/transport/feishu-api
  */
 import type { FeishuCard, InboundMessage } from './types.js';
 

@@ -6,7 +6,7 @@
  * (Web parity). The Feishu gateway dispatches `/persona` itself through the
  * same {@link runPersonaCommand}, so both surfaces behave identically.
  *
- * @module @artomyuan/dsh-caduceus/persona
+ * @module dsh-caduceus/persona
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { CommandDefinition, CommandRuntime } from '@deepseek-ai/dsh-commands';

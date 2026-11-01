@@ -10,7 +10,7 @@
  *   230019, which the reliable transport degrades to a plain chat_id send;
  * - `uuid` makes retries idempotent for one hour on the platform side.
  *
- * @module @artomyuan/dsh-caduceus/transport/types
+ * @module dsh-caduceus/transport/types
  */
 
 /** Feishu chat kind. */

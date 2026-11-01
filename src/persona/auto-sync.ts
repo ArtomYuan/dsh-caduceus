@@ -12,7 +12,7 @@
  * - any unexpected error is caught and logged as one warning — startup never
  *   fails because of the persona projection.
  *
- * @module @artomyuan/dsh-caduceus/persona/auto-sync
+ * @module dsh-caduceus/persona/auto-sync
  */
 import type { HomeEnv } from '../home.js';
 import { silentLogger, type LoggerLike } from '../logger.js';

@@ -14,7 +14,7 @@
  * injected, so the unit tests run against fakes with no dsh runtime and no
  * Feishu credentials.
  *
- * @module @artomyuan/dsh-caduceus/bridge/bridge
+ * @module dsh-caduceus/bridge/bridge
  */
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 

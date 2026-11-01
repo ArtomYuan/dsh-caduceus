@@ -5,7 +5,7 @@
  * requires for in-place patches (design doc §14 ⑪). Long text is truncated
  * through the slice-1 helper so a card never approaches the 30 KB payload cap.
  *
- * @module @artomyuan/dsh-caduceus/render/cards
+ * @module dsh-caduceus/render/cards
  */
 import type { FeishuCard, FeishuCardElement } from '../transport/types.js';
 import { CARD_CONTENT_LIMIT_BYTES, CARD_TAIL_BYTES, truncateCardContent } from './truncate.js';

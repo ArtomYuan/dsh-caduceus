@@ -1,6 +1,6 @@
 /**
  * Bridge public surface.
- * @module @artomyuan/dsh-caduceus/bridge
+ * @module dsh-caduceus/bridge
  */
 export { Bridge, assistantTextFromEvent, progressCardForSnapshot, turnEndReasonKind } from './bridge.js';
 export { ScopeQueue } from './scope-queue.js';
