@@ -13,10 +13,15 @@ import { Client, EventDispatcher, WSClient } from '@larksuiteoapi/node-sdk';
 import type { LoggerLike } from '../logger.js';
 import { silentLogger } from '../logger.js';
 import type { CreateMessageInput, FeishuApi, ReplyMessageInput } from './feishu-api.js';
-import { normalizeMessageEvent, type RawMessageEventLike } from './normalize.js';
+import {
+  normalizeCardAction,
+  normalizeMessageEvent,
+  type RawCardActionLike,
+  type RawMessageEventLike,
+} from './normalize.js';
 import { formatGateLine } from '../gate.js';
 import { FeishuApiError } from './types.js';
-import type { FeishuCard, InboundMessage } from './types.js';
+import type { CardAction, FeishuCard, InboundMessage } from './types.js';
 
 export interface LarkFeishuApiOptions {
   readonly appId: string;
@@ -39,6 +44,7 @@ export class LarkFeishuApi implements FeishuApi {
   private readonly dispatcher: EventDispatcher;
   private readonly logger: LoggerLike;
   private handler: ((message: InboundMessage) => void) | undefined;
+  private cardActionHandler: ((action: CardAction) => void) | undefined;
   private running = false;
   private botOpenId: string | undefined;
   private botName: string | undefined;
@@ -49,6 +55,10 @@ export class LarkFeishuApi implements FeishuApi {
     this.client = new Client({ appId: options.appId, appSecret: options.appSecret });
     this.dispatcher = new EventDispatcher({});
     this.dispatcher.register({
+      'card.action.trigger': (data: unknown) => {
+        const action = normalizeCardAction(data as RawCardActionLike);
+        if (action !== undefined) this.cardActionHandler?.(action);
+      },
       'im.message.receive_v1': (data: unknown) => {
         const raw = data as RawMessageEventLike;
         const senderType = raw.sender?.sender_type;
@@ -85,6 +95,10 @@ export class LarkFeishuApi implements FeishuApi {
 
   onMessage(handler: (message: InboundMessage) => void): void {
     this.handler = handler;
+  }
+
+  onCardAction(handler: (action: CardAction) => void): void {
+    this.cardActionHandler = handler;
   }
 
   async start(): Promise<void> {

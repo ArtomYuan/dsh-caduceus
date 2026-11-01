@@ -24,6 +24,7 @@ import {
   textPayload,
 } from './types.js';
 import type {
+  CardAction,
   FeishuCard,
   InboundMessage,
   ReplyOptions,
@@ -64,6 +65,10 @@ export class ReliableTransport implements Transport {
 
   onMessage(handler: (message: InboundMessage) => void): void {
     this.api.onMessage(handler);
+  }
+
+  onCardAction(handler: (action: CardAction) => void): void {
+    this.api.onCardAction?.(handler);
   }
 
   /** Forward the bot open id when the underlying API resolved one. */

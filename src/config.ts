@@ -31,6 +31,12 @@ export interface GatewayConfig {
   readonly personaAutoSync?: boolean;
   /** Agent preset mounted for caduceus-created sessions (default `standard`). */
   readonly agentPreset?: string;
+  /** Send interactive approval cards (default true). */
+  readonly approvalCard?: boolean;
+  /** Send interactive question cards (default true). */
+  readonly questionCard?: boolean;
+  /** Interactive card timeout in ms (default 300000). */
+  readonly interactiveTimeoutMs?: number;
 }
 
 /** Schemastery schema for the `caduceus-gateway` entry. */
@@ -46,6 +52,9 @@ export const Config = z.object({
   logLevel: z.union([z.const('info'), z.const('debug')]).required(false),
   personaAutoSync: z.boolean().required(false),
   agentPreset: z.string().required(false),
+  approvalCard: z.boolean().required(false),
+  questionCard: z.boolean().required(false),
+  interactiveTimeoutMs: z.natural().min(1).required(false),
 });
 
 /** Default card patch throttle: half of Feishu's 5 QPS budget. */
@@ -66,6 +75,11 @@ export const DEFAULT_PERSONA_AUTO_SYNC = true;
 /** Default agent preset for caduceus sessions. */
 export const DEFAULT_AGENT_PRESET = 'standard';
 
+/** Default interactive-card switches/timeout. */
+export const DEFAULT_APPROVAL_CARD = true;
+export const DEFAULT_QUESTION_CARD = true;
+export const DEFAULT_INTERACTIVE_TIMEOUT_MS = 300_000;
+
 export interface ResolvedGatewayConfig {
   readonly credentials?: {
     readonly appId: string;
@@ -75,6 +89,9 @@ export interface ResolvedGatewayConfig {
   readonly logLevel: 'info' | 'debug';
   readonly personaAutoSync: boolean;
   readonly agentPreset: string;
+  readonly approvalCard: boolean;
+  readonly questionCard: boolean;
+  readonly interactiveTimeoutMs: number;
 }
 
 export interface ConfigEnv {
@@ -120,5 +137,8 @@ export function resolveGatewayConfig(
     logLevel: config.logLevel ?? DEFAULT_LOG_LEVEL,
     personaAutoSync: config.personaAutoSync ?? DEFAULT_PERSONA_AUTO_SYNC,
     agentPreset: config.agentPreset ?? DEFAULT_AGENT_PRESET,
+    approvalCard: config.approvalCard ?? DEFAULT_APPROVAL_CARD,
+    questionCard: config.questionCard ?? DEFAULT_QUESTION_CARD,
+    interactiveTimeoutMs: config.interactiveTimeoutMs ?? DEFAULT_INTERACTIVE_TIMEOUT_MS,
   };
 }

@@ -78,6 +78,9 @@ onlyBuiltDependencies:
 | `personaAutoSync` | `true` | Sync SOUL into `$DSH_HOME/AGENTS.md` at startup |
 | `agentPreset` | `standard` | dsh agent preset mounted for new sessions |
 | `logLevel` | `info` | File log level: `info` / `debug` |
+| `approvalCard` | `true` | Send interactive approval cards (`allow once` / `reject`) |
+| `questionCard` | `true` | Send interactive question cards; single-select ≤4 options get buttons |
+| `interactiveTimeoutMs` | `300000` | How long an approval/question card waits before it expires |
 
 ## Commands
 

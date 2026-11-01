@@ -72,3 +72,22 @@ test('resolveGatewayConfig: agentPreset 默认 standard，可配置 other', () =
     'other',
   );
 });
+
+test('交互卡片配置默认开启、超时 300s；显式关闭生效', async () => {
+  const { DEFAULT_APPROVAL_CARD, DEFAULT_QUESTION_CARD, DEFAULT_INTERACTIVE_TIMEOUT_MS } =
+    await import('../src/config.js');
+  assert.equal(DEFAULT_APPROVAL_CARD, true);
+  assert.equal(DEFAULT_QUESTION_CARD, true);
+  assert.equal(DEFAULT_INTERACTIVE_TIMEOUT_MS, 300_000);
+
+  const { resolveGatewayConfig } = await import('../src/config.js');
+  const defaults = resolveGatewayConfig({});
+  assert.equal(defaults.approvalCard, true);
+  assert.equal(defaults.questionCard, true);
+  assert.equal(defaults.interactiveTimeoutMs, 300_000);
+
+  const off = resolveGatewayConfig({ approvalCard: false, questionCard: false, interactiveTimeoutMs: 5 });
+  assert.equal(off.approvalCard, false);
+  assert.equal(off.questionCard, false);
+  assert.equal(off.interactiveTimeoutMs, 5);
+});

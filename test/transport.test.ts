@@ -227,3 +227,39 @@ test('normalize: bot 消息即使 @ 了机器人也不进入会话', () => {
   assert.equal(message, undefined);
 });
 
+
+test('card.action.trigger 归一化：operator/message/chat/value，缺关键字段返回 undefined', async () => {
+  const { normalizeCardAction } = await import('../src/transport/normalize.js');
+  assert.deepEqual(
+    normalizeCardAction({
+      operator: { open_id: 'ou_owner' },
+      context: { open_message_id: 'om_1', open_chat_id: 'oc_1' },
+      action: { value: { kind: 'approval', id: 'abc', choice: 'allow' } },
+    }),
+    {
+      operatorOpenId: 'ou_owner',
+      messageId: 'om_1',
+      chatId: 'oc_1',
+      value: { kind: 'approval', id: 'abc', choice: 'allow' },
+    },
+  );
+  assert.deepEqual(
+    normalizeCardAction({
+      open_id: 'ou_owner',
+      open_message_id: 'om_2',
+      open_chat_id: 'oc_2',
+      action: { value: { kind: 'question' } },
+    }),
+    {
+      operatorOpenId: 'ou_owner',
+      messageId: 'om_2',
+      chatId: 'oc_2',
+      value: { kind: 'question' },
+    },
+  );
+  assert.equal(normalizeCardAction({ action: { value: {} } }), undefined);
+  assert.equal(
+    normalizeCardAction({ operator: { open_id: 'ou' }, open_message_id: 'om' }),
+    undefined,
+  );
+});

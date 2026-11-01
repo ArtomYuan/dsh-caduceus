@@ -14,6 +14,7 @@ import type { HarnessCommandResult } from '../commands/harness.js';
 import type { LoggerLike } from '../logger.js';
 import type { Clock } from '../render/stream.js';
 import type { DoctorInputs, DoctorSessionInfo } from '../doctor.js';
+import type { InteractiveRuntime } from '../interactive/runtime.js';
 import type { SessionStore } from '../session-key.js';
 import type { Transport } from '../transport/types.js';
 
@@ -116,6 +117,8 @@ export interface BridgeOptions {
   readonly persona?: (action: 'show' | 'sync') => Promise<PersonaCommandResult>;
   /** Time source for elapsed rendering; defaults to the clock. */
   readonly now?: () => number;
+  /** Interactive approval/question cards (wired by the gateway). */
+  readonly interactive?: InteractiveRuntime;
   /** `/doctor` data collector (wired by the gateway; not available in tests by default). */
   readonly doctorInputs?: (
     session: DoctorSessionInfo,

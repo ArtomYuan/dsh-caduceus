@@ -23,6 +23,7 @@ import type {
 } from '../../src/transport/feishu-api.js';
 import {
   FeishuApiError,
+  type CardAction,
   type FeishuCard,
   type InboundMessage,
   type ReplyOptions,
@@ -76,6 +77,7 @@ export class FakeTransport implements Transport {
   failUpdateCardWith: Error | undefined;
   readonly #botOpenId: string | undefined;
   private handler: ((message: InboundMessage) => void) | undefined;
+  private cardActionHandler: ((action: CardAction) => void) | undefined;
   private seq = 0;
 
   constructor(options: FakeTransportOptions = {}) {
@@ -96,6 +98,15 @@ export class FakeTransport implements Transport {
 
   onMessage(handler: (message: InboundMessage) => void): void {
     this.handler = handler;
+  }
+
+  onCardAction(handler: (action: CardAction) => void): void {
+    this.cardActionHandler = handler;
+  }
+
+  /** Deliver one card button click through the registered handler (test seam). */
+  deliverCardAction(action: CardAction): void {
+    this.cardActionHandler?.(action);
   }
 
   async sendText(
@@ -297,6 +308,11 @@ export class FakeAgents implements AgentsLike {
     };
   }[] = [];
   readonly setupCalls: unknown[] = [];
+  readonly setupScopes: {
+    readonly sessionId: string;
+    readonly phase: 'create' | 'resume';
+    readonly listeners: Map<string, (...args: any[]) => any>;
+  }[] = [];
   readonly resumed: string[] = [];
   readonly failResume = new Set<string>();
   /** When set, the next create rejects once (for /new failure tests). */
@@ -324,7 +340,7 @@ export class FakeAgents implements AgentsLike {
     const agent = new FakeAgent(options.sessionId);
     if (options.setup !== undefined) {
       this.setupCalls.push({ sessionId: options.sessionId, phase: 'create' });
-      await options.setup({ sessionId: options.sessionId, phase: 'create' });
+      await options.setup(this.#setupScope(options.sessionId, 'create'));
     }
     this.live.set(options.sessionId, agent);
     return { agent };
@@ -342,10 +358,30 @@ export class FakeAgents implements AgentsLike {
     const agent = new FakeAgent(options.resumeSessionId);
     if (options.setup !== undefined) {
       this.setupCalls.push({ sessionId: options.resumeSessionId, phase: 'resume' });
-      await options.setup({ sessionId: options.resumeSessionId, phase: 'resume' });
+      await options.setup(this.#setupScope(options.resumeSessionId, 'resume'));
     }
     this.live.set(options.resumeSessionId, agent);
     return { agent };
+  }
+
+  #setupScope(sessionId: string, phase: 'create' | 'resume'): {
+    readonly sessionId: string;
+    readonly phase: 'create' | 'resume';
+    readonly on: (name: string, listener: (...args: any[]) => any) => unknown;
+    readonly listeners: Map<string, (...args: any[]) => any>;
+  } {
+    const listeners = new Map<string, (...args: any[]) => any>();
+    const scope = {
+      sessionId,
+      phase,
+      listeners,
+      on: (name: string, listener: (...args: any[]) => any) => {
+        listeners.set(name, listener);
+        return listener;
+      },
+    };
+    this.setupScopes.push(scope);
+    return scope;
   }
 
   get(sessionId: string): FakeAgent | undefined {

@@ -60,6 +60,14 @@ export interface InboundMessage {
   readonly createdAt: number;
 }
 
+/** One interactive-card button click, normalized for the bridge. */
+export interface CardAction {
+  readonly operatorOpenId: string;
+  readonly messageId: string;
+  readonly chatId: string;
+  readonly value: Record<string, unknown>;
+}
+
 /** A created message. */
 export interface SentMessage {
   readonly messageId: string;

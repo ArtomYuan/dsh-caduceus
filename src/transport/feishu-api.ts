@@ -7,7 +7,7 @@
  *
  * @module dsh-caduceus/transport/feishu-api
  */
-import type { FeishuCard, InboundMessage } from './types.js';
+import type { CardAction, FeishuCard, InboundMessage } from './types.js';
 
 export interface CreateMessageInput {
   readonly chatId: string;
@@ -31,6 +31,8 @@ export interface FeishuApi {
   start(): Promise<void>;
   stop(): Promise<void>;
   onMessage(handler: (message: InboundMessage) => void): void;
+  /** Register the card.action.trigger callback. */
+  onCardAction?(handler: (action: CardAction) => void): void;
   createMessage(input: CreateMessageInput): Promise<{ messageId: string }>;
   replyMessage(input: ReplyMessageInput): Promise<{ messageId: string }>;
   patchCard(messageId: string, card: FeishuCard): Promise<void>;

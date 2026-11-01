@@ -18,7 +18,7 @@
  *
  * @module dsh-caduceus/transport/normalize
  */
-import type { InboundMessage } from './types.js';
+import type { CardAction, InboundMessage } from './types.js';
 
 /** Structural subset of the SDK's `RawMessageEvent` (no SDK import needed). */
 export interface RawMessageEventLike {
@@ -99,4 +99,28 @@ function firstNonEmpty(...values: readonly (string | undefined)[]): string | und
     if (value !== undefined && value.length > 0) return value;
   }
   return undefined;
+}
+
+/** Raw `card.action.trigger` payload fields used by the surface. */
+export interface RawCardActionLike {
+  readonly open_id?: string;
+  readonly operator?: { readonly open_id?: string };
+  readonly open_message_id?: string;
+  readonly open_chat_id?: string;
+  readonly context?: {
+    readonly open_message_id?: string;
+    readonly open_chat_id?: string;
+  };
+  readonly action?: { readonly value?: Record<string, unknown> };
+}
+
+/** Normalize Feishu's card click into the transport's CardAction. */
+export function normalizeCardAction(raw: RawCardActionLike): CardAction | undefined {
+  const operatorOpenId = raw.operator?.open_id ?? raw.open_id ?? '';
+  const messageId = raw.context?.open_message_id ?? raw.open_message_id ?? '';
+  const chatId = raw.context?.open_chat_id ?? raw.open_chat_id ?? '';
+  const value = raw.action?.value;
+  if (operatorOpenId.length === 0 || messageId.length === 0) return undefined;
+  if (typeof value !== 'object' || value === null) return undefined;
+  return { operatorOpenId, messageId, chatId, value };
 }

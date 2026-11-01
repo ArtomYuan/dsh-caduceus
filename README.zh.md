@@ -77,6 +77,9 @@ onlyBuiltDependencies:
 | `personaAutoSync` | `true` | 启动时把 SOUL 同步到 `$DSH_HOME/AGENTS.md` |
 | `agentPreset` | `standard` | 新会话挂载的 dsh agent preset |
 | `logLevel` | `info` | 文件日志级别：`info` / `debug` |
+| `approvalCard` | `true` | 发交互审批卡（允许一次 / 拒绝） |
+| `questionCard` | `true` | 发交互选项卡；单选且 ≤4 个选项时显示按钮 |
+| `interactiveTimeoutMs` | `300000` | 审批/选项卡等待多久后过期 |
 
 ## 命令
 

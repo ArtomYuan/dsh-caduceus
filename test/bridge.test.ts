@@ -76,6 +76,8 @@ interface HarnessOptions {
   readonly sessionPresetLookup?: (sessionId: string) => string | undefined;
   /** Self-check controller (for /status and /selfcheck tests). */
   readonly selfCheck?: import('../src/selfcheck.js').SelfChecker;
+  /** Interactive approval/question runtime (optional). */
+  readonly interactive?: import('../src/interactive/runtime.js').InteractiveRuntime;
   /** `/doctor` data collector (optional; tests inject deterministic data). */
   readonly doctorInputs?: (
     session: import('../src/doctor.js').DoctorSessionInfo,
@@ -182,6 +184,7 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
       ? {}
       : { sessionPresetLookup: options.sessionPresetLookup }),
     ...(options.selfCheck === undefined ? {} : { selfCheck: options.selfCheck }),
+    ...(options.interactive === undefined ? {} : { interactive: options.interactive }),
     ...(options.doctorInputs === undefined ? {} : { doctorInputs: options.doctorInputs }),
   });
   return { dir, store, presets: agentPresets, transport, agents, clock, logger, titles, bridge };
@@ -1962,4 +1965,33 @@ test('自检提示发送失败：不抛错、不重试、日志 warn', async (t)
     entry.message.startsWith('reply failed'),
   );
   assert.equal(replyAttempts.length >= 1, true);
+});
+
+test('交互监听在 caduceus 的 create/resume agent scope 上注册', async (t) => {
+  const { InteractiveRuntime } = await import('../src/interactive/runtime.js');
+  const runtime = new InteractiveRuntime({
+    config: { approvalCard: true, questionCard: true, timeoutMs: 300_000 },
+    logger: new FakeLogger(),
+    clock: new FakeClock(),
+    sendCard: async () => ({ messageId: 'm' }),
+    updateCard: async () => undefined,
+  });
+  const h = makeHarness(t, { interactive: runtime });
+  await h.bridge.handleInbound(inbound('hi'));
+  assert.equal(runtime.attachedCount, 1);
+  const created = h.agents.setupScopes.at(-1);
+  assert.equal(created?.phase, 'create');
+  assert.ok(created?.listeners.has('approval/request'));
+  assert.ok(created?.listeners.has('user-questions/request'));
+
+  const firstId = liveAgent(h).session.id;
+  await h.bridge.handleInbound(inbound('/new'));
+  assert.equal(runtime.attachedCount, 2);
+
+  // Simulate a restart: forget the live agent so /resume really resumes it.
+  h.agents.live.delete(firstId);
+  await h.bridge.handleInbound(inbound(`/resume ${firstId.slice(-8)}`));
+  assert.equal(runtime.attachedCount, 3);
+  assert.equal(h.agents.setupScopes.at(-1)?.phase, 'resume');
+  assert.ok(h.agents.setupScopes.at(-1)?.listeners.has('approval/request'));
 });

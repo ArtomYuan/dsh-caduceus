@@ -75,6 +75,8 @@ interface ScopeState {
   readonly chatType: ChatType;
   readonly threadId?: string;
   lastInboundMessageId?: string;
+  /** Latest sender; owner of interactive approval/question cards. */
+  ownerOpenId?: string;
   sessionId?: string;
   previousSessionId?: string;
   /** Unix epoch ms of the previous session's last known activity. */
@@ -295,6 +297,7 @@ export class Bridge {
   async #processInbound(message: InboundMessage): Promise<void> {
     const state = this.#stateFor(message);
     state.lastInboundMessageId = message.messageId;
+    state.ownerOpenId = message.senderOpenId;
     // Startup-stage failures have no session to notify yet; the first message
     // with a session catches up here (once per fail combination).
     await this.#maybeNotifySelfCheck(state);
@@ -823,7 +826,15 @@ export class Bridge {
   async #switchSession(state: ScopeState, target: string, verb = '已恢复会话'): Promise<void> {
     const current = state.sessionId ?? this.#sessionMap.get(state.key);
     try {
-      const { agent } = await this.#agents.resume({ resumeSessionId: target });
+      const persistedPreset = this.#sessionPresetLookup?.(target);
+      const { agent } = await this.#agents.resume({
+        resumeSessionId: target,
+        setup: async (agentCtx: unknown) => {
+          this.#agentCtxBySession.set(target, agentCtx);
+          if (persistedPreset === undefined) await this.#mountPreset(target, agentCtx);
+          this.#attachInteractive(target, agentCtx);
+        },
+      });
       if (current !== undefined && current !== target) {
         state.previousSessionId = current;
         state.previousSessionAt = this.#lastActivityAt(state) ?? this.#now();
@@ -896,6 +907,28 @@ export class Bridge {
     return service;
   }
 
+  /** Register the approval/question waterfall answerers on our agent's scope. */
+  #attachInteractive(sessionId: string, agentCtx: unknown): void {
+    const interactive = this.#options.interactive;
+    if (interactive === undefined) return;
+    interactive.attach(agentCtx, () => this.#interactiveContext(sessionId));
+  }
+
+  #interactiveContext(sessionId: string):
+    | { scopeKey: string; chatId: string; ownerOpenId: string; sessionId: string }
+    | undefined {
+    const key = this.#scopeBySession.get(sessionId);
+    if (key === undefined) return undefined;
+    const state = this.#states.get(key);
+    if (state === undefined || state.ownerOpenId === undefined) return undefined;
+    return {
+      scopeKey: state.key,
+      chatId: state.chatId,
+      ownerOpenId: state.ownerOpenId,
+      sessionId,
+    };
+  }
+
   /**
    * Mount the configured agent preset in the unpublished agent scope.
    * Idempotent for resumes: a context that already reports a composed preset is
@@ -947,6 +980,7 @@ export class Bridge {
       meta: { cwd, caduceus, agentPreset },
       setup: async (agentCtx) => {
         await this.#mountPreset(sessionId, agentCtx);
+        this.#attachInteractive(sessionId, agentCtx);
       },
     });
     try {
@@ -1170,6 +1204,7 @@ export class Bridge {
           // headers (no persisted preset) actually mount.
           this.#agentCtxBySession.set(sessionId, agentCtx);
           if (persistedPreset === undefined) await this.#mountPreset(sessionId, agentCtx);
+          this.#attachInteractive(sessionId, agentCtx);
         },
       });
       this.#bindSession(state, String(agent.session.id));

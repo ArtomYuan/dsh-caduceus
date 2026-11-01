@@ -35,6 +35,7 @@ import { adaptLogger, teeLoggers, type LoggerLike } from './logger.js';
 import { formatStartupLine } from './observability.js';
 import { autoSyncPersona } from './persona/auto-sync.js';
 import { runPersonaCommand } from './persona/command.js';
+import { InteractiveRuntime } from './interactive/runtime.js';
 import { SelfChecker } from './selfcheck.js';
 import { hasSessionLog } from './session-files.js';
 import { SESSION_MAP_VERSION, SessionStore } from './session-key.js';
@@ -210,6 +211,19 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
     logger,
   });
   const transport = new ReliableTransport(api, { logger });
+  const interactive = new InteractiveRuntime({
+    config: {
+      approvalCard: resolved.approvalCard,
+      questionCard: resolved.questionCard,
+      timeoutMs: resolved.interactiveTimeoutMs,
+    },
+    logger,
+    sendCard: (chatId, card) => transport.sendCard(chatId, card),
+    updateCard: (messageId, card) => transport.updateCard(messageId, card),
+  });
+  transport.onCardAction?.((action) => {
+    void interactive.handleCardAction(action);
+  });
 
   const bridge = new Bridge({
     transport,
@@ -222,6 +236,7 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
     // Lazy per use: the preset registry can register AFTER this plugin mounts.
     agentPresetsProvider: () => ctx.get('agentPresets') as AgentPresetsLike | undefined,
     selfCheck,
+    interactive,
     sessionPresetLookup: (sessionId) =>
       (ctx.get('sessions') as SessionsServiceLike | undefined)?.get(sessionId)?.header
         ?.agentPreset,
