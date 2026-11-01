@@ -55,6 +55,7 @@ function reportOf(stage: 'A' | 'B', items: readonly SelfCheckItem[]): SelfCheckR
 export interface SelfCheckOptions {
   readonly env?: HomeEnv;
   readonly logger?: LoggerLike;
+  readonly now?: () => number;
   /** `ctx.get('agentPresets')` (lazy, may be undefined early). */
   readonly getAgentPresets?: () => AgentPresetsLike | undefined;
   /** `ctx.get('tools')` (lazy). */
@@ -121,6 +122,8 @@ export class SelfChecker {
   #lastSession: unknown;
   #hasLastSession = false;
   #lastToolCount: number | undefined;
+  #lastFailureAt: number | undefined;
+  #lastFailureIds: readonly string[] = [];
 
   constructor(options: SelfCheckOptions = {}) {
     this.#options = options;
@@ -136,6 +139,7 @@ export class SelfChecker {
     items.push(this.#checkToolsService());
     const report = reportOf('A', items);
     this.#stageA = report;
+    this.#recordFailures();
     this.#maybeLog();
     return report;
   }
@@ -161,6 +165,7 @@ export class SelfChecker {
     }
     const report = reportOf('B', items);
     this.#stageB = report;
+    this.#recordFailures();
     this.#maybeLog();
     return report;
   }
@@ -194,6 +199,7 @@ export class SelfChecker {
     const items = baseItems.map((entry) => (entry.id === 'tools:count' ? toolsItem : entry));
     const report = reportOf('B', items);
     this.#stageB = report;
+    this.#recordFailures();
     this.#maybeLog();
     return report;
   }
@@ -201,6 +207,35 @@ export class SelfChecker {
   /** Combined report for display. */
   report(): readonly SelfCheckItem[] {
     return combineReports(this.#stageA, this.#stageB);
+  }
+
+  /** Current failing item ids, sorted (dedup signature source). */
+  failureIds(): readonly string[] {
+    return this.report()
+      .filter((entry) => entry.status === 'fail')
+      .map((entry) => entry.id)
+      .sort();
+  }
+
+  /** Current failing items, for notification text. */
+  failureItems(): readonly SelfCheckItem[] {
+    return this.report().filter((entry) => entry.status === 'fail');
+  }
+
+  /** When the most recent failing report was observed. */
+  lastFailureAt(): number | undefined {
+    return this.#lastFailureAt;
+  }
+
+  lastFailureIds(): readonly string[] {
+    return this.#lastFailureIds;
+  }
+
+  #recordFailures(): void {
+    const fails = this.failureItems();
+    if (fails.length === 0) return;
+    this.#lastFailureAt = (this.#options.now ?? Date.now)();
+    this.#lastFailureIds = fails.map((entry) => entry.id).sort();
   }
 
   /** Applied preset id from the latest stage-B report (if ok). */
@@ -366,7 +401,7 @@ export class SelfChecker {
       const key = `FAIL:${failed.map((entry) => entry.id).join(',')}`;
       if (key === this.#lastLogged) return;
       this.#lastLogged = key;
-      logger.warn(failLine(items));
+      logger.error(failLine(items));
       return;
     }
     if (this.#stageA !== undefined && this.#stageA.status === 'degraded' && this.#stageB === undefined) {

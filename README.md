@@ -79,7 +79,7 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 | `/resume [id\|尾号]` | 无参恢复本 scope 上一条；带参可按完整 sessionId 或 ≥8 位不歧义**尾号**在本 chat 所有 scope 的**当前 + 全量 history** 中恢复；命中后该 id 成为当前并置于 history 首位（命中多条给歧义提示） |
 | `/adopt <id\|尾号>` | 把一条无归属的会话显式收养到**当前 scopeKey**（加入 history 并设为当前）；已在其他 scope 下会提示位置、歧义列候选、零命中给提示 |
 | `/selfcheck` | 立即重跑启动自检，逐项输出 `ok/fail/skip` 与详情 |
-| `/doctor [--json]` | 输出分段体检报告（运行时/飞书/人格/会话/存储/版本），文本或机器可读 JSON |
+| `/doctor [--json]` | 输出分段体检报告（运行时/飞书/人格/会话/存储/版本），文本或机器可读 JSON；跑完记一行 `doctor: N ok / M fail / K skip` |
 | `/stop` | 中断当前正在运行的一轮（`cancel({kind:'user'})`） |
 | `/status` | 显示本会话状态、步数、工具数、起止时间与最近事件 |
 | `/persona [show\|sync]` | 查看或同步 SOUL 人格块 |
@@ -119,7 +119,7 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 - 门禁每条判定一行：`gate accept: p2p|mentioned …` / `gate drop: no-mention|bot-sender|not-allowed-chat|not-allowed-user|empty-text …`，附 `chat=`/`thread=`/`sender=` 前 12 位；
 - 命令分发：`command: /status`、`command: unknown passthrough /xxx`、`command: parse-fail <原文前 40>`；
 - 归属补录：启动一行 `backfill: scanned=N adopted=M skipped=K`；
-- 启动自检：全过打 `selfcheck: ok preset=<id> tools=<n> persona=<bytes>B`；启动时服务尚未注册（惰性）打 `selfcheck: ok (skipped: preset:service, tools:service; deferred to first session)`；任一失败打 `selfcheck: FAIL <items>`。`/status` 顶部三态：`自检 ✓` / `自检 ○（待首会话验证）` / `自检 ✗ <fail 项>`；`/selfcheck` 输出逐项 ok/fail/skip 与原因；工具数只取该会话首条 `request/header.tools`（模型实际收到的清单），未收到时显示 pending，不误报；
+- 启动自检：全过打 `selfcheck: ok preset=<id> tools=<n> persona=<bytes>B`；启动时服务尚未注册（惰性）打 `selfcheck: ok (skipped: preset:service, tools:service; deferred to first session)`；任一失败打 **ERROR** `selfcheck: FAIL <items>`。**自检 fail 会同时在出问题的会话里发一条文本**：`⚠ 自检异常 preset:applied — agent 无工具无人格（详情 /doctor）`（同组去重、组合变化再提示、恢复发 `✓ 自检已恢复` 一次）；ready 阶段 fail 无会话可发，等首条消息补发。`/status` 顶部三态：`自检 ✓` / `自检 ○（待首会话验证）` / `自检 ✗ <fail 项>`，有 fail 时追加 `最近异常：<项> @ <相对时间>`；`/selfcheck` 输出逐项 ok/fail/skip 与原因；工具数只取该会话首条 `request/header.tools`（模型实际收到的清单），未收到时显示 pending，不误报；
 - 会话键：`scope: kind=p2p|topic|group-user|group-shared key=<前 16 位> session=<后 8 位>`。
 
 ## 存储

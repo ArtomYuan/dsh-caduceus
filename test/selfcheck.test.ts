@@ -38,21 +38,29 @@ async function syncedHome(dir: string): Promise<{
 }
 
 function recordingLogger(): {
-  logger: { info(message: string): void; warn(message: string): void; error(): void; debug(): void };
+  logger: {
+    info(message: string): void;
+    warn(message: string): void;
+    error(message: string): void;
+    debug(): void;
+  };
   lines: string[];
   warnings: string[];
+  errors: string[];
 } {
   const lines: string[] = [];
   const warnings: string[] = [];
+  const errors: string[] = [];
   return {
     logger: {
       info: (message: string) => lines.push(message),
       warn: (message: string) => warnings.push(message),
-      error: () => {},
+      error: (message: string) => { errors.push(message); },
       debug: () => {},
     },
     lines,
     warnings,
+    errors,
   };
 }
 
@@ -198,10 +206,10 @@ test('阶段 B：composedPreset 为空 → preset:applied fail，/status 显示 
   assert.match(checker.statusLine(), /^自检 ✗ preset:applied/);
 });
 
-test('阶段 B：工具数 0 → tools:count fail；连续两次同 fail 只 warn 一次', async (t) => {
+test('阶段 B：工具数 0 → tools:count fail；连续两次同 fail 只 ERROR 一次', async (t) => {
   const dir = makeDir(t);
   const { env } = await syncedHome(dir);
-  const { logger, warnings } = recordingLogger();
+  const { logger, errors } = recordingLogger();
   const checker = new SelfChecker({
     env,
     logger,
@@ -213,8 +221,8 @@ test('阶段 B：工具数 0 → tools:count fail；连续两次同 fail 只 war
   await checker.checkTools(0);
   await checker.checkTools(0);
   assert.equal(checker.statusLine(), '自检 ✗ tools:count');
-  assert.equal(warnings.length, 1);
-  assert.match(warnings[0] as string, /^selfcheck: FAIL tools:count\(fail\)/);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0] as string, /^selfcheck: FAIL tools:count\(fail\)/);
 });
 
 test('阶段 B：全 ok 连续两次只打一次 ok 日志；fail→ok 时再打', async (t) => {
@@ -300,7 +308,7 @@ test('首条 request/header 带 37 个工具 → tools=37，状态 ok', async (t
 test('request/header.tools 为空数组 → tools:count fail', async (t) => {
   const dir = makeDir(t);
   const { env } = await syncedHome(dir);
-  const { logger, warnings } = recordingLogger();
+  const { logger, errors } = recordingLogger();
   const checker = new SelfChecker({
     env,
     logger,
@@ -315,7 +323,7 @@ test('request/header.tools 为空数组 → tools:count fail', async (t) => {
   assert.equal(toolsItem?.status, 'fail');
   assert.match(toolsItem?.detail ?? '', /request\/header\.tools 为空/);
   assert.equal(checker.statusLine(), '自检 ✗ tools:count');
-  const failLine = warnings.find((line) => line.startsWith('selfcheck: FAIL'));
+  const failLine = errors.find((line) => line.startsWith('selfcheck: FAIL'));
   assert.ok(failLine !== undefined);
   assert.match(failLine, /tools:count\(fail\): request\/header\.tools 为空/);
 });

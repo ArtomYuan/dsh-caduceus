@@ -136,6 +136,8 @@ export class Bridge {
   readonly #selfCheck: import('../selfcheck.js').SelfChecker | undefined;
   readonly #agentCtxBySession = new Map<string, unknown>();
   readonly #toolsCheckedSessions = new Set<string>();
+  /** Last fail-id set already notified into the conversation. */
+  #selfCheckNotifiedSignature: string | undefined;
   /** Session ids whose preset mount failed (shown as `（preset 未挂载）`). */
   readonly #presetFailures = new Set<string>();
   readonly #sessionTitleProvider: () => SessionTitleLike | undefined;
@@ -248,7 +250,7 @@ export class Bridge {
           | { readonly header?: { readonly tools?: readonly unknown[] } }
           | undefined;
         const toolCount = Array.isArray(data?.header?.tools) ? data.header.tools.length : 0;
-        await this.#maybeSelfCheckTools(session, toolCount);
+        await this.#maybeSelfCheckTools(state, session, toolCount);
         break;
       }
       case 'assistant/message': {
@@ -278,6 +280,9 @@ export class Bridge {
   async #processInbound(message: InboundMessage): Promise<void> {
     const state = this.#stateFor(message);
     state.lastInboundMessageId = message.messageId;
+    // Startup-stage failures have no session to notify yet; the first message
+    // with a session catches up here (once per fail combination).
+    await this.#maybeNotifySelfCheck(state);
     const text = message.text.trim();
     if (text.startsWith('/')) {
       await this.#handleSlash(state, message.text);
@@ -368,13 +373,20 @@ export class Bridge {
       }
       case 'status': {
         const title = this.#titleOf(state);
-        const selfLine = this.#selfCheck?.statusLine();
+        const checker = this.#selfCheck;
+        const selfLine = checker?.statusLine();
+        const fails = checker?.failureIds() ?? [];
+        const failAt = checker?.lastFailureAt();
+        const anomaly =
+          fails.length > 0 && failAt !== undefined
+            ? `\n最近异常：${fails.join(',')} @ ${sessionTimeLabel(failAt, this.#now())}`
+            : '';
         await this.#replyText(
           state,
           `${selfLine === undefined ? '' : `${selfLine}\n`}${statusText(state.status.get(), {
             ...(title === undefined ? {} : { title }),
             ...(state.sessionId === undefined ? {} : { sessionId: state.sessionId }),
-          })}`,
+          })}${anomaly}`,
         );
         return;
       }
@@ -402,6 +414,9 @@ export class Bridge {
         }
         try {
           const report = await buildDoctorReport(await provider(this.#doctorSessionInfo(state)));
+          this.#logger.info(
+            `doctor: ${report.counts.normal} ok / ${report.counts.fail} fail / ${report.counts.skip} skip`,
+          );
           await this.#replyText(
             state,
             command.json === true ? renderDoctorJson(report) : renderDoctorText(report),
@@ -418,6 +433,7 @@ export class Bridge {
           return;
         }
         await checker.runAll();
+        await this.#maybeNotifySelfCheck(state);
         await this.#replyText(state, checker.detailText());
         return;
       }
@@ -927,14 +943,52 @@ export class Bridge {
     } catch (error) {
       this.#logger.warn(`ownership write failed for ${sessionId}: ${errorMessage(error)}`);
     }
-    await this.#runSelfCheckStageB(sessionId);
+    await this.#runSelfCheckStageB(state, sessionId);
     return { agent };
   }
 
   /** Stage B runs after every create/resume; logging is de-duplicated inside. */
-  async #runSelfCheckStageB(sessionId: string): Promise<void> {
+  async #runSelfCheckStageB(state: ScopeState, sessionId: string): Promise<void> {
     if (this.#selfCheck === undefined) return;
     await this.#selfCheck.runStageB(this.#agentCtxBySession.get(sessionId));
+    await this.#maybeNotifySelfCheck(state);
+  }
+
+  /**
+   * Mirror self-check failures into the conversation (one text, not a card).
+   * Deduped by the SORTED fail-id set: same set -> silent; changed set -> new
+   * message; back to no failures -> one `✓ 自检已恢复`. Send errors are logged
+   * and never retried or propagated.
+   */
+  async #maybeNotifySelfCheck(state: ScopeState): Promise<void> {
+    const checker = this.#selfCheck;
+    if (checker === undefined) return;
+    const fails = checker.failureIds();
+    const signature = fails.join(',');
+    if (signature.length > 0) {
+      if (signature === this.#selfCheckNotifiedSignature) return;
+      this.#selfCheckNotifiedSignature = signature;
+      const items = checker
+        .failureItems()
+        .slice(0, 3)
+        .map((item) => `${item.id} — ${item.consequence ?? item.detail}`);
+      const extra = fails.length > 3 ? ` 等 ${fails.length - 3} 项` : '';
+      const text = `⚠ 自检异常 ${items.join('；')}${extra}（详情 /doctor）`;
+      try {
+        await this.#replyText(state, text);
+      } catch (error) {
+        this.#logger.warn(`selfcheck notification failed: ${errorMessage(error)}`);
+      }
+      return;
+    }
+    if (this.#selfCheckNotifiedSignature === undefined) return;
+    this.#selfCheckNotifiedSignature = undefined;
+    this.#logger.info('selfcheck recovered');
+    try {
+      await this.#replyText(state, '✓ 自检已恢复');
+    } catch (error) {
+      this.#logger.warn(`selfcheck recovery notification failed: ${errorMessage(error)}`);
+    }
   }
 
   #doctorSessionInfo(state: ScopeState): DoctorSessionInfo {
@@ -956,6 +1010,7 @@ export class Bridge {
 
   /** First `request/header` of a session: record the model's actual tool count. */
   async #maybeSelfCheckTools(
+    state: ScopeState,
     session: { readonly id: string },
     toolCount: number,
   ): Promise<void> {
@@ -965,6 +1020,7 @@ export class Bridge {
     if (this.#toolsCheckedSessions.has(sessionId)) return;
     this.#toolsCheckedSessions.add(sessionId);
     await checker.checkTools(toolCount);
+    await this.#maybeNotifySelfCheck(state);
   }
 
   /**
@@ -1101,7 +1157,7 @@ export class Bridge {
         },
       });
       this.#bindSession(state, String(agent.session.id));
-      await this.#runSelfCheckStageB(sessionId);
+      await this.#runSelfCheckStageB(state, sessionId);
       return { agent, sessionId, cwd };
     } catch (error) {
       // The mapped session has no persisted log (or is stale): remint rather

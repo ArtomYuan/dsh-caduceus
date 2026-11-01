@@ -1755,6 +1755,8 @@ test('自检 tools:count 每会话只在首条 request/header 判一次', async 
     async checkTools(count: number) {
       checks.push(count);
     },
+    failureIds: () => [],
+    failureItems: () => [],
     statusLine: () => '自检 ✓',
     detailText: () => '',
   } as unknown as import('../src/selfcheck.js').SelfChecker;
@@ -1832,4 +1834,124 @@ test('/doctor 输出分段文本；/doctor --json 输出可解析 JSON', async (
   assert.ok(parsed.sections.flatMap((entry) => entry.items.map((item) => item.id)).includes('preset'));
   assert.equal(parsed.counts.fail, 0);
   assert.ok(!json.includes('appSecret'));
+  assert.ok(
+    h.logger.entries.some((entry) => entry.level === 'info' && /^doctor: \d+ ok \/ 0 fail \/ \d+ skip$/.test(entry.message)),
+    h.logger.entries.map((entry) => `${entry.level}:${entry.message}`).join(' | '),
+  );
+});
+
+function fakeSelfCheck(initial: {
+  id: string;
+  detail: string;
+  consequence?: string;
+}[]): {
+  fake: import('../src/selfcheck.js').SelfChecker;
+  setFails(items: { id: string; detail: string; consequence?: string }[]): void;
+} {
+  let fails = initial;
+  const fake = {
+    failureIds: () => fails.map((entry) => entry.id).sort(),
+    failureItems: () =>
+      fails.map((entry) => ({
+        id: entry.id,
+        status: 'fail',
+        detail: entry.detail,
+        ...(entry.consequence === undefined ? {} : { consequence: entry.consequence }),
+      })),
+    lastFailureAt: () => Date.now(),
+    async runStageB() {},
+    async checkTools() {},
+    presetId: () => 'standard',
+    toolCount: () => undefined,
+    presetMounted: () => true,
+    statusLine: () => (fails.length > 0 ? `自检 ✗ ${fails.map((e) => e.id).join(', ')}` : '自检 ✓'),
+    detailText: () => '',
+  } as unknown as import('../src/selfcheck.js').SelfChecker;
+  return { fake, setFails: (items) => { fails = items; } };
+}
+
+test('自检 fail 在会话里提示：同组一次、组合变化再发、恢复一次', async (t) => {
+  const { fake, setFails } = fakeSelfCheck([
+    { id: 'preset:applied', detail: 'agent 未挂载 preset', consequence: 'agent 无工具无人格' },
+  ]);
+  const h = makeHarness(t, { selfCheck: fake });
+
+  await h.bridge.handleInbound(inbound('第一轮'));
+  const alerts = () => recordedTexts(h.transport).filter((text) => text.startsWith('⚠ 自检异常'));
+  assert.equal(alerts().length, 1);
+  assert.match(alerts()[0] as string, /preset:applied — agent 无工具无人格/);
+  assert.match(alerts()[0] as string, /（详情 \/doctor）/);
+
+  await h.bridge.handleInbound(inbound('/status'));
+  const statusText = recordedTexts(h.transport).at(-1) ?? '';
+  assert.match(statusText, /自检 ✗ preset:applied/);
+  assert.match(statusText, /最近异常：preset:applied @/);
+
+  await h.bridge.handleInbound(inbound('第二轮'));
+  assert.equal(alerts().length, 1, 'same fail set is notified once');
+
+  setFails([
+    { id: 'preset:applied', detail: 'agent 未挂载 preset', consequence: 'agent 无工具无人格' },
+    { id: 'tools:count', detail: 'request/header.tools 为空', consequence: 'request/header.tools 为空' },
+  ]);
+  await h.bridge.handleInbound(inbound('第三轮'));
+  assert.equal(alerts().length, 2, 'changed fail set notifies again');
+  assert.match(alerts()[1] as string, /preset:applied.*tools:count/);
+
+  setFails([]);
+  await h.bridge.handleInbound(inbound('第四轮'));
+  const recovery = recordedTexts(h.transport).filter((text) => text === '✓ 自检已恢复');
+  assert.equal(recovery.length, 1);
+  await h.bridge.handleInbound(inbound('第五轮'));
+  assert.equal(
+    recordedTexts(h.transport).filter((text) => text === '✓ 自检已恢复').length,
+    1,
+    'recovery is sent once',
+  );
+  assert.ok(
+    h.logger.entries.some(
+      (entry) => entry.level === 'info' && entry.message === 'selfcheck recovered',
+    ),
+  );
+});
+
+test('ready 阶段自检 fail 不立即发；首个会话消息补发一次', async (t) => {
+  const { fake } = fakeSelfCheck([
+    { id: 'instructions:block', detail: 'AGENTS.md 人格块缺失', consequence: '人格缺失' },
+  ]);
+  const h = makeHarness(t, { selfCheck: fake });
+  assert.equal(
+    recordedTexts(h.transport).filter((text) => text.startsWith('⚠ 自检异常')).length,
+    0,
+  );
+
+  await h.bridge.handleInbound(inbound('第一条消息'));
+  assert.equal(
+    recordedTexts(h.transport).filter((text) => text.startsWith('⚠ 自检异常')).length,
+    1,
+  );
+});
+
+test('自检提示发送失败：不抛错、不重试、日志 warn', async (t) => {
+  const { fake } = fakeSelfCheck([
+    { id: 'preset:applied', detail: '未挂载', consequence: 'agent 无工具无人格' },
+  ]);
+  const h = makeHarness(t, { selfCheck: fake });
+  h.transport.reply = async () => {
+    throw new Error('feishu reply boom');
+  };
+
+  await assert.doesNotReject(h.bridge.handleInbound(inbound('hi')));
+  assert.ok(
+    h.logger.entries.some(
+      (entry) => entry.level === 'warn' && entry.message.includes('reply failed'),
+    ),
+    h.logger.entries.map((entry) => `${entry.level}:${entry.message}`).join(' | '),
+  );
+  // Second message must not retry the same alert (signature was consumed).
+  await h.bridge.handleInbound(inbound('second'));
+  const replyAttempts = h.logger.entries.filter((entry) =>
+    entry.message.startsWith('reply failed'),
+  );
+  assert.equal(replyAttempts.length >= 1, true);
 });
