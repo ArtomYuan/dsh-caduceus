@@ -1,6 +1,6 @@
 {
   "name": "dsh-caduceus",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Feishu/Lark surface plugin for DeepSeek Harness (dsh): one topic per session, SOUL persona sync, streaming process cards, /status and /doctor.",
   "type": "module",
   "main": "./dist/index.js",

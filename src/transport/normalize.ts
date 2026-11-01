@@ -18,6 +18,7 @@
  *
  * @module dsh-caduceus/transport/normalize
  */
+import { stripLeadingMentions } from '../mentions.js';
 import type { CardAction, InboundMessage } from './types.js';
 
 /** Structural subset of the SDK's `RawMessageEvent` (no SDK import needed). */
@@ -74,6 +75,8 @@ export function normalizeMessageEvent(raw: RawMessageEventLike): InboundMessage 
   }
 
   text = text.replace(MENTION_PATTERN, ' ').replace(/\r\n?/g, '\n').trim();
+  // Strip Feishu placeholder mentions only at the start; body @-mentions stay.
+  text = stripLeadingMentions(text).trim();
   if (text.length === 0) return undefined;
 
   const threadId = firstNonEmpty(message.thread_id, message.root_id);

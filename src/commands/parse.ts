@@ -9,6 +9,7 @@
  *
  * @module dsh-caduceus/commands/parse
  */
+import { stripLeadingMentions } from '../mentions.js';
 
 /** Commands dsh-caduceus owns. Keep in sync with README's command table. */
 export const COMMAND_NAMES = ['new', 'sessions', 'rename', 'resume', 'adopt', 'selfcheck', 'doctor', 'stop', 'status', 'persona', 'help'] as const;
@@ -67,7 +68,10 @@ function usageResult(command: CommandName, reason: string): ParsedCommand {
  * never rewrites a user's text.
  */
 export function parseCommand(raw: string): ParsedCommand {
-  const trimmed = raw.trim();
+  // A topic/group message may arrive as "@_user_1 /stop" (Feishu's mention
+  // placeholder). Strip only the leading mentions before command detection;
+  // passthrough still forwards the ORIGINAL bytes.
+  const trimmed = stripLeadingMentions(raw).trim();
   if (!trimmed.startsWith('/')) return { kind: 'passthrough', raw };
 
   const match = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(trimmed);

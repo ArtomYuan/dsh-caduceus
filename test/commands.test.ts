@@ -168,3 +168,21 @@ test('/sessions 支持 --all；带其他参数仍返回 usage', () => {
   assert.deepEqual(parseCommand('/SESSIONS --ALL'), { kind: 'sessions', all: true });
   assert.equal(parseCommand('/sessions --other').kind, 'usage');
 });
+
+test('前导 @提及：@_user_N / 昵称 + 命令仍被识别，普通文本不误判', () => {
+  assert.deepEqual(parseCommand('@_user_1 /stop'), { kind: 'stop' });
+  assert.deepEqual(parseCommand('@_user_1 @_user_2 /doctor --json'), {
+    kind: 'doctor',
+    json: true,
+  });
+  assert.deepEqual(parseCommand('@_user_1 /rename 新标题'), {
+    kind: 'rename',
+    title: '新标题',
+  });
+  assert.deepEqual(parseCommand('@张三 /status'), { kind: 'status' });
+
+  const plain = '随便说 /stop';
+  assert.deepEqual(parseCommand(plain), { kind: 'passthrough', raw: plain });
+  const mentioned = '@_user_1 随便说 /stop';
+  assert.deepEqual(parseCommand(mentioned), { kind: 'passthrough', raw: mentioned });
+});

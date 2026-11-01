@@ -267,3 +267,16 @@ test('card.action.trigger 归一化：operator/message/chat/value，缺关键字
     undefined,
   );
 });
+
+test('正文归一化：只剥前导 @_user_N，保留正文里的 @', () => {
+  const leading = normalizeMessageEvent(raw({ content: JSON.stringify({ text: '@_user_1 你好' }) }));
+  assert.equal(leading?.text, '你好');
+  const body = normalizeMessageEvent(
+    raw({ content: JSON.stringify({ text: '你好 @_user_1 再见' }) }),
+  );
+  assert.equal(body?.text, '你好 @_user_1 再见');
+  const multi = normalizeMessageEvent(
+    raw({ content: JSON.stringify({ text: '@_user_1 @_user_2 请继续' }) }),
+  );
+  assert.equal(multi?.text, '请继续');
+});
