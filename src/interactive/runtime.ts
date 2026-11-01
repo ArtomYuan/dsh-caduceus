@@ -19,7 +19,10 @@ export interface InteractiveRuntimeOptions {
   readonly config: InteractiveConfig;
   readonly logger?: LoggerLike;
   readonly clock?: Clock;
-  sendCard(chatId: string, card: FeishuCard): Promise<{ readonly messageId: string }>;
+  sendCard(
+    sessionId: string,
+    card: FeishuCard,
+  ): Promise<{ readonly messageId: string; readonly threadId?: string }>;
   updateCard(messageId: string, card: FeishuCard): Promise<void>;
 }
 
@@ -160,7 +163,10 @@ export class InteractiveRuntime {
     logger: LoggerLike;
     clock: Clock;
     pending: PendingRegistry;
-    sendCard(chatId: string, card: FeishuCard): Promise<{ readonly messageId: string }>;
+    sendCard(
+      sessionId: string,
+      card: FeishuCard,
+    ): Promise<{ readonly messageId: string; readonly threadId?: string }>;
     updateCard(messageId: string, card: FeishuCard): Promise<void>;
   } {
     return {
@@ -168,7 +174,7 @@ export class InteractiveRuntime {
       logger: this.logger,
       clock: this.clock,
       pending: this.pending,
-      sendCard: (chatId, card) => this.#sendCard(chatId, card),
+      sendCard: (sessionId, card) => this.#sendCard(sessionId, card),
       updateCard: (messageId, card) => this.#updateCard(messageId, card),
     };
   }

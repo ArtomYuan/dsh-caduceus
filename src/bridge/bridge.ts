@@ -154,6 +154,7 @@ export class Bridge {
   readonly #sessionTitleProvider: () => SessionTitleLike | undefined;
   readonly #queue = new ScopeQueue();
   readonly #states = new Map<string, ScopeState>();
+  readonly #chatIdBySession = new Map<string, string>();
   readonly #scopeBySession = new Map<string, string>();
 
   constructor(options: BridgeOptions) {
@@ -1260,7 +1261,33 @@ export class Bridge {
       if (key === state.key && id !== sessionId) this.#scopeBySession.delete(id);
     }
     this.#scopeBySession.set(sessionId, state.key);
+    this.#chatIdBySession.set(sessionId, state.chatId);
     state.sessionId = sessionId;
+  }
+
+  /**
+   * Send an interactive card the same way process cards go out: reply into the
+   * originating topic/thread when the session still has a live scope. Falls
+   * back to a chat send only when the scope state is gone.
+   */
+  async sendInteractiveCard(
+    sessionId: string,
+    card: FeishuCard,
+  ): Promise<{ readonly messageId: string; readonly threadId?: string }> {
+    const key = this.#scopeBySession.get(sessionId);
+    const state = key === undefined ? undefined : this.#states.get(key);
+    if (state === undefined) {
+      const chatId = this.#chatIdBySession.get(sessionId) ?? '';
+      this.#logger.warn(
+        `interactive: no scope state for ${sessionId}; falling back to chat send`,
+      );
+      return this.#transport.sendCard(chatId, card);
+    }
+    const sent = await this.#sendNewCard(state, card);
+    return {
+      ...sent,
+      ...(state.threadId === undefined ? {} : { threadId: state.threadId }),
+    };
   }
 
   #stateFor(message: InboundMessage): ScopeState {
@@ -1307,7 +1334,7 @@ export class Bridge {
         state.chatId,
         state.lastInboundMessageId,
         { kind: 'card', card },
-        { threadId: state.threadId },
+        state.threadId === undefined ? {} : { threadId: state.threadId },
       );
     }
     return this.#transport.sendCard(state.chatId, card);

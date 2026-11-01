@@ -95,9 +95,10 @@ export function createQuestionAnswerer(
 
     host.logger.info(`interactive: question card sending chat=${logPrefix(context.chatId)}`);
     try {
-      entry.cardMessageId = (await host.sendCard(context.chatId, rendered.card)).messageId;
+      const sent = await host.sendCard(context.sessionId, rendered.card);
+      entry.cardMessageId = sent.messageId;
       host.logger.info(
-        `interactive: question card sent messageId=${logPrefix(entry.cardMessageId)}`,
+        `interactive: question card sent messageId=${logPrefix(entry.cardMessageId)} thread=${logPrefix(sent.threadId ?? '-', 8)}`,
       );
     } catch (error) {
       host.pending.delete(entry.id);

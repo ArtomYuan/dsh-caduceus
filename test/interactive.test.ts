@@ -458,7 +458,7 @@ test('诊断日志：答者入口与 sendCard 前后', async () => {
   );
   assert.ok(
     h.logger.entries.some(
-      (entry) => entry.level === 'info' && entry.message === 'interactive: approval card sent messageId=m-1',
+      (entry) => entry.level === 'info' && entry.message === 'interactive: approval card sent messageId=m-1 thread=-',
     ),
   );
 

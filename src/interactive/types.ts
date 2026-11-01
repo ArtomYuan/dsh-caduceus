@@ -67,7 +67,10 @@ export interface InteractiveHost {
   readonly logger: LoggerLike;
   readonly clock: Clock;
   readonly pending: PendingRegistry;
-  sendCard(chatId: string, card: FeishuCard): Promise<{ readonly messageId: string }>;
+  sendCard(
+    sessionId: string,
+    card: FeishuCard,
+  ): Promise<{ readonly messageId: string; readonly threadId?: string }>;
   updateCard(messageId: string, card: FeishuCard): Promise<void>;
 }
 

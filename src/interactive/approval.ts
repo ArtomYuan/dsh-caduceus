@@ -82,9 +82,10 @@ export function createApprovalAnswerer(
 
     host.logger.info(`interactive: approval card sending chat=${logPrefix(context.chatId)}`);
     try {
-      entry.cardMessageId = (await host.sendCard(context.chatId, card)).messageId;
+      const sent = await host.sendCard(context.sessionId, card);
+      entry.cardMessageId = sent.messageId;
       host.logger.info(
-        `interactive: approval card sent messageId=${logPrefix(entry.cardMessageId)}`,
+        `interactive: approval card sent messageId=${logPrefix(entry.cardMessageId)} thread=${logPrefix(sent.threadId ?? '-', 8)}`,
       );
     } catch (error) {
       host.pending.delete(entry.id);

@@ -39,6 +39,7 @@ import {
   recordedCards,
   recordedTexts,
   tick,
+  type TransportCall,
   userMessageText,
 } from './support/fakes.js';
 
@@ -206,6 +207,19 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
     ...(options.doctorInputs === undefined ? {} : { doctorInputs: options.doctorInputs }),
   });
   return { dir, store, presets: agentPresets, transport, agents, clock, logger, titles, bridge };
+}
+
+function buttonsOf(card: FeishuCard): {
+  readonly label: string;
+  readonly value: Record<string, unknown>;
+}[] {
+  const action = card.elements.find((element) => element.tag === 'action') as
+    | { actions?: { text?: { content?: string }; value?: Record<string, unknown> }[] }
+    | undefined;
+  return (action?.actions ?? []).map((button) => ({
+    label: button.text?.content ?? '',
+    value: button.value ?? {},
+  }));
 }
 
 function event(type: string, data: unknown, time = 0): StatusEventLike {
@@ -2084,4 +2098,139 @@ test('审批策略：resume 路径同样调用 setPolicy', async (t) => {
   assert.equal(calls.length, 3);
   assert.deepEqual(calls.map((call) => call.policy), ['ask', 'ask', 'ask']);
   assert.equal(calls.at(-1)?.agent.session.id, firstId);
+});
+
+test('交互卡：话题会话走 reply + threadId，不走 createMessage', async (t) => {
+  const { InteractiveRuntime } = await import('../src/interactive/runtime.js');
+  const runtime = new InteractiveRuntime({
+    config: { approvalCard: true, questionCard: true, timeoutMs: 300_000 },
+    logger: new FakeLogger(),
+    clock: new FakeClock(),
+    sendCard: (sessionId, card) => h.bridge.sendInteractiveCard(sessionId, card),
+    updateCard: async () => undefined,
+  });
+  const listeners = new Map<string, (...args: any[]) => any>();
+  const rootCtx = {
+    on(name: string, listener: (...args: any[]) => any) {
+      listeners.set(name, listener);
+      return listener;
+    },
+  };
+  const h = makeHarness(t, {
+    interactive: runtime,
+    rootCtx,
+    botOpenId: 'ou_bot',
+    prebindTopic: true,
+  });
+  const topicMessage = inbound('hi', {
+    chatType: 'group',
+    chatId: 'oc_g',
+    threadId: 'omt_t',
+    senderOpenId: 'ou_me',
+    mentions: ['ou_bot'],
+  });
+  await h.bridge.handleInbound(topicMessage);
+  const sessionId = liveAgent(h).session.id;
+  const promise = listeners.get('approval/request')!(
+    { agent: { session: { id: sessionId } }, toolName: 'bash', reason: '需要执行命令' },
+    async () => 'unavailable',
+  );
+  await tick();
+  const cardReplies = h.transport.calls.filter(
+    (call) =>
+      call.op === 'reply' &&
+      call.threadId === 'omt_t' &&
+      JSON.stringify(call.payload).includes('审批请求'),
+  );
+  assert.equal(cardReplies.length, 1);
+  assert.ok(
+    !h.transport.calls.some(
+      (call) => call.op === 'sendCard' && JSON.stringify(call.card).includes('审批请求'),
+    ),
+    'interactive card must not use createMessage/chat send',
+  );
+  const buttons = buttonsOf((cardReplies[0] as { payload: { card: FeishuCard } }).payload.card);
+  await h.bridge.handleInbound(
+    inbound('/status', {
+      chatType: 'group',
+      chatId: 'oc_g',
+      threadId: 'omt_t',
+      senderOpenId: 'ou_me',
+      mentions: ['ou_bot'],
+    }),
+  );
+  await runtime.handleCardAction({
+    operatorOpenId: 'ou_me',
+    messageId: (cardReplies[0] as { messageId: string }).messageId,
+    chatId: 'oc_g',
+    value: buttons[0]!.value,
+  });
+  assert.equal(await promise, 'allowed-once');
+});
+
+test('交互卡：私聊会话 reply 不传 threadId', async (t) => {
+  const { InteractiveRuntime } = await import('../src/interactive/runtime.js');
+  const runtime = new InteractiveRuntime({
+    config: { approvalCard: true, questionCard: true, timeoutMs: 300_000 },
+    logger: new FakeLogger(),
+    clock: new FakeClock(),
+    sendCard: (sessionId, card) => h.bridge.sendInteractiveCard(sessionId, card),
+    updateCard: async () => undefined,
+  });
+  const listeners = new Map<string, (...args: any[]) => any>();
+  const h = makeHarness(t, {
+    interactive: runtime,
+    rootCtx: {
+      on(name: string, listener: (...args: any[]) => any) {
+        listeners.set(name, listener);
+        return listener;
+      },
+    },
+  });
+  const message = inbound('hi');
+  await h.bridge.handleInbound(message);
+  const sessionId = liveAgent(h).session.id;
+  const promise = listeners.get('approval/request')!(
+    { agent: { session: { id: sessionId } }, toolName: 'bash' },
+    async () => 'unavailable',
+  );
+  await tick();
+  const cardReply = h.transport.calls.find(
+    (call): call is Extract<TransportCall, { op: 'reply' }> =>
+      call.op === 'reply' && JSON.stringify(call.payload).includes('审批请求'),
+  );
+  assert.ok(cardReply !== undefined);
+  assert.equal(cardReply.threadId, undefined);
+  assert.equal(cardReply.replyTo, message.messageId);
+  const buttons = buttonsOf((cardReply as { payload: { card: FeishuCard } }).payload.card);
+  await runtime.handleCardAction({
+    operatorOpenId: message.senderOpenId,
+    messageId: cardReply.messageId,
+    chatId: message.chatId,
+    value: buttons[0]!.value,
+  });
+  assert.equal(await promise, 'allowed-once');
+});
+
+test('交互卡：无 scope state 时回退 chat send 并 warn', async (t) => {
+  const h = makeHarness(t);
+  const card: FeishuCard = {
+    config: { update_multi: true },
+    elements: [{ tag: 'div', text: { tag: 'lark_md', content: 'fallback' } }],
+  };
+  await h.bridge.sendInteractiveCard('missing-session', card);
+  assert.ok(
+    h.logger.entries.some(
+      (entry) =>
+        entry.level === 'warn' &&
+        entry.message ===
+          'interactive: no scope state for missing-session; falling back to chat send',
+    ),
+  );
+  assert.equal(
+    h.transport.calls.filter(
+      (call) => call.op === 'sendCard' && JSON.stringify(call.card).includes('fallback'),
+    ).length,
+    1,
+  );
 });

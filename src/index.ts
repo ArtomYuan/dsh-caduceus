@@ -212,6 +212,7 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
     logger,
   });
   const transport = new ReliableTransport(api, { logger });
+  let bridge!: Bridge;
   const interactive = new InteractiveRuntime({
     config: {
       approvalCard: resolved.approvalCard,
@@ -219,14 +220,14 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
       timeoutMs: resolved.interactiveTimeoutMs,
     },
     logger,
-    sendCard: (chatId, card) => transport.sendCard(chatId, card),
+    sendCard: (sessionId, card) => bridge.sendInteractiveCard(sessionId, card),
     updateCard: (messageId, card) => transport.updateCard(messageId, card),
   });
   transport.onCardAction?.((action) => {
     void interactive.handleCardAction(action);
   });
 
-  const bridge = new Bridge({
+  bridge = new Bridge({
     transport,
     sessionMap,
     agents: makeAgents(ctx),
