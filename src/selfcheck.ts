@@ -61,6 +61,8 @@ export interface SelfCheckOptions {
   readonly getTools?: () => unknown;
   /** Count the tools visible to one agent context; undefined = API unavailable. */
   readonly toolCount?: (agentCtx: unknown) => number | undefined;
+  /** Length of the first request's `request/header.tools`; undefined = unavailable. */
+  readonly requestHeaderTools?: (session: unknown) => number | undefined;
 }
 
 function errorMessage(error: unknown): string {
@@ -120,6 +122,8 @@ export class SelfChecker {
   #personaBytes = 0;
   #lastLogged: string | undefined;
   #lastAgentCtx: unknown;
+  #lastSession: unknown;
+  #hasLastSession = false;
 
   constructor(options: SelfCheckOptions = {}) {
     this.#options = options;
@@ -142,7 +146,12 @@ export class SelfChecker {
   /** Stage B: applied preset + tool count for one created/resumed agent. */
   async runStageB(agentCtx?: unknown): Promise<SelfCheckReport> {
     if (agentCtx !== undefined) this.#lastAgentCtx = agentCtx;
-    const items: SelfCheckItem[] = [this.#checkPresetApplied(), this.#checkToolsCount()];
+    // tools:count is deliberately deferred to the session's first step/start:
+    // create() returns before the async preset mount has registered every tool.
+    const items: SelfCheckItem[] = [
+      this.#checkPresetApplied(),
+      item('tools:count', 'skip', '等待首次 step/start 后判定（create 时工具注册未完成）'),
+    ];
     // First-touch validation: if a service was skipped during startup, refresh
     // its stage-A item now that a real create/resume succeeded.
     if (this.#stageA !== undefined) {
@@ -162,9 +171,59 @@ export class SelfChecker {
   /** `/selfcheck`: rerun both stages (stage B only if an agent context exists). */
   async runAll(): Promise<SelfCheckReport> {
     await this.runStageA();
-    await this.runStageB();
+    await this.runStageB(this.#lastAgentCtx);
+    if (this.#hasLastSession || this.#lastAgentCtx !== undefined) {
+      await this.checkTools(this.#lastAgentCtx, this.#lastSession);
+    }
     const items = combineReports(this.#stageA, this.#stageB);
     return reportOf('B', items);
+  }
+
+  /**
+   * Decide `tools:count` from the session's first step/start.
+   * Prefer the live agent tools snapshot; fall back to the request header tool
+   * list. When both are available they MUST agree, otherwise this is a fail
+   * with both numbers (a partial/async registration is a stronger signal).
+   */
+  async checkTools(agentCtx?: unknown, session?: unknown): Promise<SelfCheckReport> {
+    if (agentCtx !== undefined) this.#lastAgentCtx = agentCtx;
+    if (session !== undefined) {
+      this.#lastSession = session;
+      this.#hasLastSession = true;
+    }
+    const actual = this.#safeCount(() => this.#options.toolCount?.(this.#lastAgentCtx));
+    const header = this.#safeCount(() => this.#options.requestHeaderTools?.(this.#lastSession));
+    let toolsItem: SelfCheckItem;
+    if (actual !== undefined && header !== undefined && actual !== header) {
+      const detail = `自检 ${actual} ≠ 实际 ${header}`;
+      toolsItem = item('tools:count', 'fail', detail, detail);
+    } else {
+      const effective = actual ?? header;
+      if (effective === undefined) {
+        toolsItem = item('tools:count', 'skip', '工具快照与 request/header 均不可用');
+      } else if (effective === 0) {
+        toolsItem = item('tools:count', 'fail', 'agent 无可用工具', 'agent 无法执行任何操作');
+      } else {
+        toolsItem = item('tools:count', 'ok', `tools=${effective}`);
+      }
+    }
+    const baseItems = this.#stageB?.items ?? [
+      this.#checkPresetApplied(),
+      item('tools:count', 'skip', '等待 step/start'),
+    ];
+    const items = baseItems.map((entry) => (entry.id === 'tools:count' ? toolsItem : entry));
+    const report = reportOf('B', items);
+    this.#stageB = report;
+    this.#maybeLog();
+    return report;
+  }
+
+  #safeCount(read: () => number | undefined): number | undefined {
+    try {
+      return read();
+    } catch {
+      return undefined;
+    }
   }
 
   /** Combined report for display. */
@@ -302,22 +361,6 @@ export class SelfChecker {
       return item('preset:applied', 'ok', `preset=${preset}`);
     } catch (error) {
       return item('preset:applied', 'skip', `检查失败：${errorMessage(error)}`);
-    }
-  }
-
-  #checkToolsCount(): SelfCheckItem {
-    if (this.#options.toolCount === undefined) {
-      return item('tools:count', 'skip', '工具计数接口未接线');
-    }
-    try {
-      const count = this.#options.toolCount(this.#lastAgentCtx);
-      if (count === undefined) return item('tools:count', 'skip', '工具数不可用');
-      if (count === 0) {
-        return item('tools:count', 'fail', 'agent 无可用工具', 'agent 无法执行任何操作');
-      }
-      return item('tools:count', 'ok', `tools=${count}`);
-    } catch (error) {
-      return item('tools:count', 'skip', `检查失败：${errorMessage(error)}`);
     }
   }
 

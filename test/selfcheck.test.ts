@@ -75,6 +75,7 @@ test('阶段 A 全过 + 阶段 B 全过：只打一行 selfcheck: ok', async (t)
     getAgentPresets: () => presetsOk,
     getTools: () => ({}),
     toolCount: () => 3,
+    requestHeaderTools: () => 3,
   });
 
   const a = await checker.runStageA();
@@ -86,8 +87,10 @@ test('阶段 A 全过 + 阶段 B 全过：只打一行 selfcheck: ok', async (t)
   assert.equal(checker.statusLine(), '自检 …', 'stage B has not run yet');
 
   const b = await checker.runStageB({ sessionId: 's1' });
+  assert.equal(b.items.find((entry) => entry.id === 'tools:count')?.status, 'skip');
+  const counted = await checker.checkTools({ sessionId: 's1' }, { sessionId: 's1' });
   assert.deepEqual(
-    b.items.map((entry) => `${entry.id}:${entry.status}`),
+    counted.items.map((entry) => `${entry.id}:${entry.status}`),
     ['preset:applied:ok', 'tools:count:ok'],
   );
   assert.equal(checker.statusLine(), '自检 ✓');
@@ -176,7 +179,8 @@ test('阶段 A 服务 skip 后首会话验证成功：A 服务项刷新，/statu
   assert.equal(checker.statusLine(), '自检 ○（待首会话验证）');
 
   available = true;
-  const b = await checker.runStageB({});
+  await checker.runStageB({});
+  const b = await checker.checkTools({}, {});
   assert.equal(b.status, 'ok');
   assert.equal(checker.statusLine(), '自检 ✓');
   // No failures at any point: the startup skip was not a fake alarm.
@@ -211,7 +215,8 @@ test('阶段 B：工具数 0 → tools:count fail；连续两次同 fail 只 war
   });
   await checker.runStageA();
   await checker.runStageB({});
-  await checker.runStageB({});
+  await checker.checkTools({}, {});
+  await checker.checkTools({}, {});
   assert.equal(checker.statusLine(), '自检 ✗ tools:count');
   assert.equal(warnings.length, 1);
   assert.match(warnings[0] as string, /^selfcheck: FAIL tools:count\(fail\)/);
@@ -232,7 +237,8 @@ test('阶段 B：全 ok 连续两次只打一次 ok 日志；fail→ok 时再打
   await checker.runStageA();
   composed = 'standard';
   await checker.runStageB({});
-  await checker.runStageB({});
+  await checker.checkTools({}, {});
+  await checker.checkTools({}, {});
   assert.equal(lines.filter((line) => line.startsWith('selfcheck: ok')).length, 1);
 });
 
@@ -247,4 +253,64 @@ test('阶段 B：API 不可用（toolCount 未接线）→ skip，不假报 fail
   const report = await checker.runStageB({});
   assert.equal(report.items.find((entry) => entry.id === 'tools:count')?.status, 'skip');
   assert.equal(checker.statusLine(), '自检 ○（待首会话验证）');
+});
+
+test('异步 mount：create 时只见 2 不定案，首次 step/start 后读 37 → tools=37', async (t) => {
+  const dir = makeDir(t);
+  const { env } = await syncedHome(dir);
+  const { logger, lines } = recordingLogger();
+  let snapshot = 2;
+  const checker = new SelfChecker({
+    env,
+    logger,
+    getAgentPresets: () => presetsOk,
+    getTools: () => ({}),
+    toolCount: () => snapshot,
+    requestHeaderTools: () => 37,
+  });
+  await checker.runStageA();
+  await checker.runStageB({});
+
+  // create() returned: the deferral must NOT have decided 2.
+  const before = checker.report().find((entry) => entry.id === 'tools:count');
+  assert.equal(before?.status, 'skip');
+  assert.equal(lines.filter((line) => line.startsWith('selfcheck: ok')).length, 0);
+
+  snapshot = 37;
+  const counted = await checker.checkTools({}, {});
+  assert.equal(counted.items.find((entry) => entry.id === 'tools:count')?.status, 'ok');
+  assert.match(
+    checker.report().find((entry) => entry.id === 'tools:count')?.detail ?? '',
+    /tools=37/,
+  );
+  assert.equal(checker.statusLine(), '自检 ✓');
+  assert.ok(
+    lines.some((line) => /selfcheck: ok preset=standard tools=37/.test(line)),
+    lines.join(' | '),
+  );
+});
+
+test('tools 快照与 request/header 不一致 → FAIL 行带两个数字', async (t) => {
+  const dir = makeDir(t);
+  const { env } = await syncedHome(dir);
+  const { logger, warnings } = recordingLogger();
+  const checker = new SelfChecker({
+    env,
+    logger,
+    getAgentPresets: () => presetsOk,
+    getTools: () => ({}),
+    toolCount: () => 2,
+    requestHeaderTools: () => 37,
+  });
+  await checker.runStageA();
+  await checker.runStageB({});
+  const report = await checker.checkTools({}, {});
+
+  const toolsItem = report.items.find((entry) => entry.id === 'tools:count');
+  assert.equal(toolsItem?.status, 'fail');
+  assert.match(toolsItem?.detail ?? '', /自检 2 ≠ 实际 37/);
+  assert.equal(checker.statusLine(), '自检 ✗ tools:count');
+  const failLine = warnings.find((line) => line.startsWith('selfcheck: FAIL'));
+  assert.ok(failLine !== undefined);
+  assert.match(failLine, /tools:count\(fail\): 自检 2 ≠ 实际 37/);
 });

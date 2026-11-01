@@ -134,6 +134,7 @@ export class Bridge {
   readonly #sessionPresetLookup: ((sessionId: string) => string | undefined) | undefined;
   readonly #selfCheck: import('../selfcheck.js').SelfChecker | undefined;
   readonly #agentCtxBySession = new Map<string, unknown>();
+  readonly #toolsCheckedSessions = new Set<string>();
   /** Session ids whose preset mount failed (shown as `（preset 未挂载）`). */
   readonly #presetFailures = new Set<string>();
   readonly #sessionTitleProvider: () => SessionTitleLike | undefined;
@@ -229,7 +230,13 @@ export class Bridge {
         await this.#renderProgress(state);
         break;
       }
-      case 'step/start':
+      case 'step/start': {
+        await this.#renderProgress(state);
+        // tools:count is only meaningful after the preset mount finished and
+        // the first request was assembled; do it once per session.
+        await this.#maybeSelfCheckTools(session);
+        break;
+      }
       case 'step/end':
       case 'tool/call':
       case 'tool/result': {
@@ -903,6 +910,16 @@ export class Bridge {
   async #runSelfCheckStageB(sessionId: string): Promise<void> {
     if (this.#selfCheck === undefined) return;
     await this.#selfCheck.runStageB(this.#agentCtxBySession.get(sessionId));
+  }
+
+  /** First `step/start` of a session: count tools from the live snapshot/header. */
+  async #maybeSelfCheckTools(session: { readonly id: string }): Promise<void> {
+    const checker = this.#selfCheck;
+    if (checker === undefined) return;
+    const sessionId = String(session.id);
+    if (this.#toolsCheckedSessions.has(sessionId)) return;
+    this.#toolsCheckedSessions.add(sessionId);
+    await checker.checkTools(this.#agentCtxBySession.get(sessionId), session);
   }
 
   /**

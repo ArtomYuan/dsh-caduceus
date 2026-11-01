@@ -1706,6 +1706,8 @@ test('/status 顶部显示自检行；/selfcheck 输出六项明细', async (t) 
   await checker.runStageA();
 
   await h.bridge.handleInbound(inbound('hi'));
+  const live = liveAgent(h).session;
+  await h.bridge.handleSessionEvent(live, event('step/start', { turn: 1, step: 1 }, 150));
   await h.bridge.handleInbound(inbound('/status'));
   assert.match(recordedTexts(h.transport).at(-1) ?? '', /^自检 ✓/);
 
@@ -1737,4 +1739,23 @@ test('/status 在 preset:applied 失败时显示自检 ✗', async (t) => {
   await h.bridge.handleInbound(inbound('hi'));
   await h.bridge.handleInbound(inbound('/status'));
   assert.match(recordedTexts(h.transport).at(-1) ?? '', /^自检 ✗ preset:applied/);
+});
+
+test('自检 tools:count 每会话只在首次 step/start 判一次', async (t) => {
+  let checks = 0;
+  const fake = {
+    async runStageB() {},
+    async checkTools() {
+      checks += 1;
+    },
+    statusLine: () => '自检 ✓',
+    detailText: () => '',
+  } as unknown as import('../src/selfcheck.js').SelfChecker;
+  const h = makeHarness(t, { selfCheck: fake });
+  await h.bridge.handleInbound(inbound('hi'));
+  const session = liveAgent(h).session;
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 100));
+  await h.bridge.handleSessionEvent(session, event('step/start', { turn: 1, step: 1 }, 110));
+  await h.bridge.handleSessionEvent(session, event('step/start', { turn: 1, step: 2 }, 120));
+  assert.equal(checks, 1, 'tools count must be judged once per session');
 });
