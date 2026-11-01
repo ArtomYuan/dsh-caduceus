@@ -2,7 +2,7 @@
  * Slash-command parser tests, plus the README command-table consistency guard.
  */
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
@@ -67,20 +67,37 @@ test('COMMAND_SPECS 与 COMMAND_NAMES 一致，helpText 覆盖全部命令', () 
   for (const name of COMMAND_NAMES) assert.match(help, new RegExp(`/${name}\\b`));
 });
 
-test('README/README.zh.md 命令表与 parse.ts 实际支持的命令完全一致', () => {
-  for (const file of ['README.md', 'README.zh.md']) {
+test('README.md / README.zh.md 命令表与 parse.ts 实际支持的命令完全一致', () => {
+  const parseCommands = (file: string, heading: string): string[] => {
+    assert.ok(existsSync(join(process.cwd(), file)), `${file} 不存在`);
     const readme = readFileSync(join(process.cwd(), file), 'utf8');
-    const heading = /^## (?:命令|Commands).*$/m.exec(readme);
-    assert.ok(heading !== null, `${file} 缺少命令表段落（## Commands / ## 命令）`);
-    const start = heading.index;
-    const rest = readme.slice(start);
+    const marker = new RegExp(`^## ${heading}$`, 'm');
+    const found = marker.exec(readme);
+    assert.ok(found !== null, `${file} 缺少 \`## ${heading}\` 段落`);
+    const rest = readme.slice(found.index);
     const nextHeading = rest.indexOf('\n## ', 1);
     const section = nextHeading === -1 ? rest : rest.slice(0, nextHeading);
+    return [...section.matchAll(/^\|\s*`\/([a-z]+)/gm)].map((match) => match[1] as string);
+  };
 
-    const documented = [...section.matchAll(/^\|\s*`\/([a-z]+)/gm)].map(
-      (match) => match[1] as string,
+  for (const [file, heading] of [
+    ['README.md', 'Commands'],
+    ['README.zh.md', '命令'],
+  ] as const) {
+    const documented = parseCommands(file, heading);
+    const expected = new Set<string>(COMMAND_NAMES);
+    const missing = [...expected].filter((name) => !documented.includes(name));
+    const extra = documented.filter((name) => !expected.has(name));
+    assert.deepEqual(
+      missing,
+      [],
+      `${file} 缺 ${missing.map((name) => `/${name}`).join(', ')}`,
     );
-    assert.ok(documented.length > 0, `${file} 命令表里没有解析到任何命令行`);
+    assert.deepEqual(
+      extra,
+      [],
+      `${file} 多 ${extra.map((name) => `/${name}`).join(', ')}`,
+    );
     assert.deepEqual([...documented].sort(), [...COMMAND_NAMES].sort(), file);
   }
 });

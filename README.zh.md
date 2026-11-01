@@ -78,7 +78,7 @@ onlyBuiltDependencies:
 | `agentPreset` | `standard` | 新会话挂载的 dsh agent preset |
 | `logLevel` | `info` | 文件日志级别：`info` / `debug` |
 
-## Commands（命令）
+## 命令
 
 | 命令 | 说明 |
 |:--|:--|
