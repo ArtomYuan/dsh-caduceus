@@ -4,23 +4,49 @@
 
 ## 安装
 
-先构建并打包（发布到 npm 后可直接装包名）：
+### 路径 1：一次性命令行（推荐）
+
+发布到 npm 后，装包时直接放行依赖构建脚本：
 
 ```bash
-npm install
-npm run build
+dsh plugin --profile web add dsh-caduceus --allow-build=protobufjs
+```
+
+### 路径 2：先授权再装（不带 flag 也能装）
+
+在目标 profile 目录的 `pnpm-workspace.yaml` 里加：
+
+```yaml
+onlyBuiltDependencies:
+  - protobufjs
+```
+
+然后正常安装即可：
+
+```bash
+dsh plugin --profile web add dsh-caduceus
+```
+
+### 路径 3：本地 tgz
+
+```bash
 npm pack
+dsh plugin --profile web add ./dsh-caduceus-0.1.0.tgz --allow-build=protobufjs
 ```
 
-两种安装方式：
+### 安装坑（实测 pnpm 11.7.0）
 
-```bash
-# 1) npm 包（发布后）
-dsh plugin --profile <profile> add dsh-caduceus
+- **flag 必须用等号**：`--allow-build=protobufjs` 可以；`--allow-build protobufjs`（空格）会报
+  `ERR_PNPM_ALLOW_BUILD_MISSING_PACKAGE` 并安装失败。
+- **为什么需要放行**：`protobufjs` 是飞书 SDK 的传递依赖；pnpm ≥10 默认不执行依赖包的安装/构建脚本，
+  未放行时安装会以 `ERR_PNPM_IGNORED_BUILDS: Ignored build scripts: protobufjs@7.6.6` 失败。
+- **确认装上了**：安装后执行
 
-# 2) 本地 tgz
-dsh plugin --profile <profile> add ./dsh-caduceus-0.1.0.tgz
-```
+  ```bash
+  dsh --profile web --dump-config | grep dsh-caduceus
+  ```
+
+  应至少输出 2 行（两条 caduceus entry）。
 
 安装/启用后由宿主统一重启 dsh；本包不控制服务。
 
@@ -59,6 +85,7 @@ dsh plugin --profile <profile> add ./dsh-caduceus-0.1.0.tgz
 
 ## 故障排查
 
+- 启动日志里没有 `feishu long connection started`：先发 `/doctor` 看飞书凭证/长连接状态，再查文件日志。
 - 先发 `/doctor`：逐项看到 preset、工具数、人格投影、飞书连接、存储等状态；`/doctor --json` 可给脚本或他人排查。
 - 文件日志：`$DSH_HOME/caduceus/caduceus.log`（自动轮转，默认保留 3 份）。
 - 自检异常会同时在对话里发一条 `⚠ 自检异常 …（详情 /doctor）`；恢复后会发 `✓ 自检已恢复`。
