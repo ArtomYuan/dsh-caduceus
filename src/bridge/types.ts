@@ -25,6 +25,12 @@ export type BusyMode = 'queue' | 'steer' | 'interrupt';
 /** Session approval policy understood by dsh's approval service. */
 export type ApprovalPolicy = 'ask' | 'never';
 
+/** The slice of dsh's permissionPresets service the bridge needs. */
+export interface PermissionPresetsLike {
+  readonly names: readonly string[];
+  current(session: unknown): string;
+}
+
 /** The slice of dsh's attachment service the bridge needs. */
 export interface AttachmentStoreLike {
   admitPromptContent(content: readonly unknown[]): Promise<readonly unknown[]>;
@@ -164,6 +170,8 @@ export interface BridgeOptions {
   readonly attachmentProvider?: () => AttachmentStoreLike | undefined;
   /** Optional session-log provider; falls back to reading $DSH_HOME on disk. */
   readonly exportProvider?: SessionExportProvider;
+  /** Lazily resolve dsh's permissionPresets service. */
+  readonly permissionPresetsProvider?: () => PermissionPresetsLike | undefined;
   /** Lazily resolve dsh's approval service (agent-scoped setPolicy). */
   readonly approvalProvider?: () => ApprovalServiceLike | undefined;
   /** Desired session approval policy (default `ask`). */

@@ -15,7 +15,7 @@
 - **一个 scope 一个会话** — 私聊、话题、普通群按发送者隔离。
 - **标题可见** — 由第一条 prompt 生成，显示在回合卡上。
 - **每回合一张卡** — 状态与答案在同一张卡里，原地编辑；终稿不再另发一条消息。
-- **13 条命令** — `/new`、`/sessions`、`/rename`、`/resume`、`/adopt`、`/status`、`/stop`、`/doctor`、`/selfcheck`、`/persona`、`/whoami`、`/export`、`/help`。
+- **14 条命令** — `/new`、`/sessions`、`/rename`、`/resume`、`/adopt`、`/status`、`/stop`、`/doctor`、`/selfcheck`、`/persona`、`/whoami`、`/export`、`/permission`、`/help`。
 - **人格** — `SOUL.md` 同步到 `AGENTS.md` 的标记块，启动时自动执行。
 - **可观测性** — 两阶段自检、`/doctor`、对话内的降级提示。
 
@@ -111,6 +111,7 @@ onlyBuiltDependencies:
 | `/persona [show\|sync]` | 查看或同步 SOUL 人格块 |
 | `/whoami` | 显示你的 open_id、当前会话与身份 |
 | `/export [--json]` | 把当前会话导出为 markdown 或原始 JSONL 并发回文件 |
+| `/permission [档位]` | 查看或切换当前会话权限档位（中文） |
 | `/help` | 命令表 |
 
 ## Troubleshooting（故障排查）

@@ -110,6 +110,7 @@ interface HarnessOptions {
   readonly mediaRoots?: readonly string[];
   readonly admins?: readonly string[];
   readonly exportProvider?: import('../src/export.js').SessionExportProvider;
+  readonly permissionPresetsProvider?: () => import('../src/bridge/types.js').PermissionPresetsLike | undefined;
   /** `/doctor` data collector (optional; tests inject deterministic data). */
   readonly doctorInputs?: (
     session: import('../src/doctor.js').DoctorSessionInfo,
@@ -252,6 +253,9 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
     ...(options.exportProvider === undefined
       ? {}
       : { exportProvider: options.exportProvider }),
+    ...(options.permissionPresetsProvider === undefined
+      ? {}
+      : { permissionPresetsProvider: options.permissionPresetsProvider }),
   });
   return { dir, store, presets: agentPresets, transport, agents, clock, logger, titles, bridge };
 }
@@ -2958,4 +2962,87 @@ test('/export：超过 5MB 截断并注明', async (t) => {
   const content = readFileSync(path, 'utf8');
   assert.ok(Buffer.byteLength(content, 'utf8') <= 5 * 1024 * 1024);
   assert.match(content, /已截断/);
+});
+
+test('/permission 无参：中文当前档位 + 档位列表 + 用法', async (t) => {
+  const h = makeHarness(t, {
+    permissionPresetsProvider: () => ({
+      names: ['read-only', 'workspace-write', 'danger-full-access'],
+      current: () => 'workspace-write',
+    }),
+  });
+  await h.bridge.handleInbound(inbound('/permission'));
+  const text = recordedTexts(h.transport).at(-1) ?? '';
+  assert.match(text, /当前档位：workspace-write/);
+  assert.match(text, /可用档位：/);
+  assert.match(text, /- read-only：只读，不能写文件/);
+  assert.match(text, /- workspace-write：可写会话工作区，越界需审批/);
+  assert.match(text, /- danger-full-access：沙箱全开，审批 never（慎用）/);
+  assert.match(text, /用法：\/permission <档位>/);
+});
+
+test('/permission 切换：调用底层命令一次并翻译为中文', async (t) => {
+  const forwarded: string[] = [];
+  const h = makeHarness(t, {
+    permissionPresetsProvider: () => ({
+      names: ['read-only', 'workspace-write'],
+      current: () => 'read-only',
+    }),
+    commandRunner: async (_agent, line) => {
+      forwarded.push(line);
+      return { kind: 'success', text: 'preset workspace-write' };
+    },
+  });
+  await h.bridge.handleInbound(inbound('/permission workspace-write'));
+  assert.deepEqual(forwarded, ['/permission workspace-write']);
+  assert.match(
+    recordedTexts(h.transport).at(-1) ?? '',
+    /已切换到 workspace-write（可写会话工作区，越界需审批）/,
+  );
+});
+
+test('/permission 未知档位：中文提示且不调用底层命令', async (t) => {
+  const forwarded: string[] = [];
+  const h = makeHarness(t, {
+    permissionPresetsProvider: () => ({
+      names: ['read-only', 'workspace-write'],
+      current: () => 'workspace-write',
+    }),
+    commandRunner: async (_agent, line) => {
+      forwarded.push(line);
+      return { kind: 'success', text: 'preset workspace-write' };
+    },
+  });
+  await h.bridge.handleInbound(inbound('/permission nope'));
+  assert.deepEqual(forwarded, []);
+  assert.match(recordedTexts(h.transport).at(-1) ?? '', /未知档位 nope，可用：read-only, workspace-write/);
+});
+
+test('/permission 服务缺失：透传英文并标注（dsh 原文）', async (t) => {
+  const h = makeHarness(t, {
+    commandRunner: async (_agent, line) => {
+      if (line === '/permission') {
+        return { kind: 'success', text: 'current preset workspace-write (available: read-only, workspace-write)' };
+      }
+      return undefined;
+    },
+  });
+  await h.bridge.handleInbound(inbound('/permission'));
+  const text = recordedTexts(h.transport).at(-1) ?? '';
+  assert.match(text, /（dsh 原文）/);
+  assert.match(text, /current preset workspace-write/);
+});
+
+test('/permission 服务缺失 + 带参：透传英文并标注（dsh 原文）', async (t) => {
+  const h = makeHarness(t, {
+    commandRunner: async (_agent, line) => ({
+      kind: 'success',
+      text: line.endsWith('read-only') ? 'preset read-only' : 'current preset workspace-write',
+    }),
+  });
+  await h.bridge.handleInbound(inbound('/permission read-only'));
+  const text = recordedTexts(h.transport).at(-1) ?? '';
+  assert.match(text, /（dsh 原文）/);
+  assert.match(text, /preset read-only/);
+  assert.ok(!text.includes('已切换到'));
 });

@@ -190,7 +190,10 @@ test('/help 分两段：自有命令 + dsh 原生命令透传', () => {
   const help = helpText();
   assert.ok(help.includes('dsh-caduceus 命令：'));
   assert.ok(help.includes('dsh 原生命令（透传）：'));
-  for (const name of ['compact', 'goal', 'plan', 'permission', 'feedback']) {
+  for (const name of ['compact', 'goal', 'plan', 'feedback']) {
     assert.match(help, new RegExp(`/${name}`));
   }
+  assert.ok(help.includes('dsh-caduceus 命令：'));
+  assert.ok(help.includes('/permission'));
+  assert.ok(!help.slice(help.indexOf('dsh 原生命令')).includes('/permission'));
 });

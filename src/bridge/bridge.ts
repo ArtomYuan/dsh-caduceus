@@ -557,6 +557,10 @@ export class Bridge {
         await this.#exportSession(state, command.json === true);
         return;
       }
+      case 'permission': {
+        await this.#handlePermission(state, command.preset);
+        return;
+      }
       case 'whoami': {
         const openId = state.ownerOpenId ?? '';
         const identity = this.#isAdmin(openId) ? '管理员' : '访客';
@@ -741,6 +745,66 @@ export class Bridge {
         agent.steer(message);
         return;
     }
+  }
+
+  /** `/permission`: Chinese overview; switches still go through dsh's command. */
+  async #handlePermission(state: ScopeState, preset: string | undefined): Promise<void> {
+    const resolved = await this.#tryResolve(state);
+    if (resolved === undefined) {
+      await this.#replyText(state, '当前没有可用会话。');
+      return;
+    }
+    const service = this.#options.permissionPresetsProvider?.();
+    if (service === undefined) {
+      // No service to validate/translate against: keep dsh's original output,
+      // explicitly labelled so the user knows it is the upstream text.
+      const raw = await this.#runDshCommandLine(
+        resolved.agent,
+        preset === undefined ? '/permission' : `/permission ${preset}`,
+      );
+      await this.#replyText(state, `（dsh 原文）\n${raw}`);
+      return;
+    }
+    if (preset === undefined) {
+      await this.#replyText(
+        state,
+        renderPermissionOverview(
+          service.current(resolved.agent.session),
+          service.names,
+        ),
+      );
+      return;
+    }
+
+    if (!service.names.includes(preset)) {
+      await this.#replyText(
+        state,
+        `未知档位 ${preset}，可用：${service.names.join(', ')}`,
+      );
+      return;
+    }
+
+    const result = await this.#options.runHarnessCommand?.(
+      resolved.agent,
+      `/permission ${preset}`,
+    );
+    if (result === undefined) {
+      await this.#replyText(
+        state,
+        service === undefined
+          ? '（dsh 原文）\n权限服务不可用，dsh 命令未返回结果。'
+          : '切换失败：dsh 命令未返回结果。',
+      );
+      return;
+    }
+    await this.#replyText(state, translatePermissionOutput(result.text, preset));
+  }
+
+  async #runDshCommandLine(agent: AgentLike, line: string): Promise<string> {
+    const result = await this.#options.runHarnessCommand?.(agent, line);
+    return result === undefined
+      ? '权限服务不可用，dsh 命令未返回结果。'
+      : result.text;
   }
 
   /** `/export`: write a local markdown/JSONL file and hand it to the MEDIA chain. */
@@ -1831,4 +1895,34 @@ function imageMediaType(contentType: string | undefined): string {
     return normalized;
   }
   return 'image/jpeg';
+}
+
+const PRESET_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  'read-only': '只读，不能写文件',
+  'workspace-write': '可写会话工作区，越界需审批',
+  'danger-full-access': '沙箱全开，审批 never（慎用）',
+};
+
+function permissionDescription(name: string): string {
+  return PRESET_DESCRIPTIONS[name] ?? name;
+}
+
+function renderPermissionOverview(current: string, names: readonly string[]): string {
+  const lines = [`当前档位：${current}`, '可用档位：'];
+  for (const name of names) lines.push(`- ${name}：${permissionDescription(name)}`);
+  lines.push('用法：/permission <档位>');
+  return lines.join('\n');
+}
+
+function translatePermissionOutput(text: string, requested: string): string {
+  const success = /^preset\s+(\S+)\s*$/.exec(text.trim());
+  if (success !== null) {
+    const name = success[1] as string;
+    return `已切换到 ${name}（${permissionDescription(name)}）`;
+  }
+  const unknown = /^unknown preset "([^"]+)" \(available: ([^)]*)\)\s*$/.exec(text.trim());
+  if (unknown !== null) {
+    return `未知档位 ${unknown[1] as string}，可用：${unknown[2] as string}`;
+  }
+  return `已执行 /permission ${requested}（dsh 原文：${text}）`;
 }

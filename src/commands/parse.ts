@@ -12,7 +12,7 @@
 import { stripLeadingMentions } from '../mentions.js';
 
 /** Commands dsh-caduceus owns. Keep in sync with README's command table. */
-export const COMMAND_NAMES = ['new', 'sessions', 'rename', 'resume', 'adopt', 'selfcheck', 'doctor', 'stop', 'status', 'persona', 'whoami', 'export', 'help'] as const;
+export const COMMAND_NAMES = ['new', 'sessions', 'rename', 'resume', 'adopt', 'selfcheck', 'doctor', 'stop', 'status', 'persona', 'whoami', 'export', 'permission', 'help'] as const;
 
 export type CommandName = (typeof COMMAND_NAMES)[number];
 
@@ -37,6 +37,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   { name: 'persona', usage: '/persona [show|sync]', description: '查看或同步 SOUL 人格块' },
   { name: 'whoami', usage: '/whoami', description: '显示你的 open_id、当前会话与身份' },
   { name: 'export', usage: '/export [--json]', description: '把当前会话导出为 markdown 或 JSONL 并发回文件' },
+  { name: 'permission', usage: '/permission [档位]', description: '查看或切换当前会话的权限档位（中文）' },
   { name: 'help', usage: '/help', description: '显示命令表' },
 ];
 
@@ -55,6 +56,7 @@ export type ParsedCommand =
   | { readonly kind: 'persona'; readonly action: PersonaAction }
   | { readonly kind: 'whoami' }
   | { readonly kind: 'export'; readonly json?: boolean }
+  | { readonly kind: 'permission'; readonly preset?: string }
   | { readonly kind: 'help' }
   | { readonly kind: 'usage'; readonly command: string; readonly usage: string; readonly reason: string }
   | { readonly kind: 'passthrough'; readonly raw: string };
@@ -103,6 +105,12 @@ export function parseCommand(raw: string): ParsedCommand {
       if (rest === '--json') return { kind: 'export', json: true };
       return usageResult('export', '用法：/export [--json]');
     }
+    case 'permission': {
+      if (rest === '') return { kind: 'permission' };
+      const parts = rest.split(/\s+/);
+      if (parts.length > 1) return usageResult('permission', '用法：/permission [档位]');
+      return { kind: 'permission', preset: parts[0] as string };
+    }
     case 'help':
       return { kind: 'help' };
     case 'rename':
@@ -143,7 +151,6 @@ export const DSH_NATIVE_COMMANDS: readonly { readonly name: string; readonly des
   { name: 'compact', description: '压缩当前会话上下文' },
   { name: 'goal', description: '查看/管理当前目标' },
   { name: 'plan', description: '查看/切换计划模式' },
-  { name: 'permission', description: '查看/切换审批策略' },
   { name: 'feedback', description: '提交反馈' },
 ];
 

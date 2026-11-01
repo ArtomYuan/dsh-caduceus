@@ -21,7 +21,11 @@ import type { CommandRuntime } from '@deepseek-ai/dsh-commands';
 
 import { backfillSessionOwnership, scanSessionDirs } from './backfill.js';
 import { Bridge } from './bridge/bridge.js';
-import type { ApprovalServiceLike, AttachmentStoreLike } from './bridge/types.js';
+import type {
+  ApprovalServiceLike,
+  AttachmentStoreLike,
+  PermissionPresetsLike,
+} from './bridge/types.js';
 import type {
   AgentLike,
   AgentPresetsLike,
@@ -250,6 +254,8 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
     rootCtx: ctx,
     approvalProvider: () => ctx.get('approval') as ApprovalServiceLike | undefined,
     attachmentProvider: () => ctx.get('attachments') as AttachmentStoreLike | undefined,
+    permissionPresetsProvider: () =>
+      ctx.get('permissionPresets') as PermissionPresetsLike | undefined,
     exportProvider: async (sessionId) => {
       const query = ctx.get('sessionQuery') as
         | { readSession?: (id: string) => Promise<{ events?: readonly unknown[] }> }
