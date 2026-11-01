@@ -179,3 +179,77 @@ test('/doctor 无数据时用 ○ 且结论统计 skip', async (t) => {
   assert.match(text, /○ 工具 · pending/);
   assert.match(text, /【结论】/);
 });
+
+test('结论四段计数：有 ! 项时独立统计「P 项提示」，无提示则省略', async (t) => {
+  const dir = makeDir(t);
+  const env = await personaHome(dir);
+  // Legacy block at the old location -> warn item, not an abnormal one.
+  writeFileSync(
+    join(env.DSH_AGENTS_HOME, 'AGENTS.md'),
+    '<!-- dsh-caduceus:soul:start -->\n旧人格\n<!-- dsh-caduceus:soul:end -->\n',
+    'utf8',
+  );
+  const withWarn = await buildDoctorReport(healthyInputs(env));
+  assert.equal(withWarn.counts.warn, 1);
+  assert.equal(withWarn.counts.fail, 0);
+  assert.equal(withWarn.counts.normal, withWarn.items.filter((item) => item.mark === 'ok').length);
+  const warnText = renderDoctorText(withWarn);
+  assert.match(warnText, /【结论】\d+ 项正常 · 0 项异常 · 1 项提示 · 0 项跳过/);
+  assert.match(warnText, /! 遗留块 · .*可删除/);
+
+  rmSync(join(env.DSH_AGENTS_HOME, 'AGENTS.md'), { force: true });
+  const without = await buildDoctorReport(healthyInputs(env));
+  assert.equal(without.counts.warn, 0);
+  const plain = renderDoctorText(without);
+  assert.ok(!plain.includes('项提示'), 'no warning segment when there are zero warnings');
+  assert.ok(!plain.includes('遗留块'));
+});
+
+test('命令回合：preset/工具/当前会话工具数 显示 pending 原因，不显示上一回合', async (t) => {
+  const dir = makeDir(t);
+  const env = await personaHome(dir);
+  const inputs = healthyInputs(env);
+  const report = await buildDoctorReport({
+    ...inputs,
+    runtime: { sessionTitleService: true, agentsService: true },
+    session: { scopeKey: 'oc_chat', sessionId: 'feishu-1', historyLength: 0 },
+  });
+  for (const id of ['preset', 'tools', 'session-tools']) {
+    const item = report.items.find((entry) => entry.id === id);
+    assert.equal(item?.mark, 'skip', id);
+    assert.match(item?.detail ?? '', /命令回合未经 agent；发一句话后可知/, id);
+  }
+  assert.equal(report.items.find((entry) => entry.id === 'last-turn'), undefined);
+  assert.equal(report.lastTurn, undefined);
+});
+
+test('有缓存回合：显示「上一回合」行，且不计入跳过；JSON 带 lastTurn', async (t) => {
+  const dir = makeDir(t);
+  const env = await personaHome(dir);
+  const inputs = healthyInputs(env);
+  const report = await buildDoctorReport({
+    ...inputs,
+    session: {
+      ...inputs.session,
+      lastTurn: { preset: 'standard', toolsCount: 37, at: NOW - 2 * 60 * 1000 },
+    },
+  });
+  const row = report.items.find((entry) => entry.id === 'last-turn');
+  assert.equal(row?.mark, 'ok');
+  assert.match(row?.detail ?? '', /preset=standard，工具 37，2m 前/);
+  assert.equal(report.counts.skip, 0);
+  const text = renderDoctorText(report);
+  assert.match(text, /✓ 上一回合 · preset=standard，工具 37，2m 前/);
+  assert.ok(!text.includes('○ 上一回合'));
+
+  const parsed = JSON.parse(renderDoctorJson(report)) as {
+    lastTurn: { preset: string; toolsCount: number; relative: string } | null;
+    warnings: unknown[];
+  };
+  assert.deepEqual(
+    { preset: parsed.lastTurn?.preset, toolsCount: parsed.lastTurn?.toolsCount },
+    { preset: 'standard', toolsCount: 37 },
+  );
+  assert.match(parsed.lastTurn?.relative ?? '', /2m 前/);
+  assert.deepEqual(parsed.warnings, []);
+});

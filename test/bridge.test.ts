@@ -1757,6 +1757,7 @@ test('自检 tools:count 每会话只在首条 request/header 判一次', async 
     },
     failureIds: () => [],
     failureItems: () => [],
+    presetId: () => undefined,
     statusLine: () => '自检 ✓',
     detailText: () => '',
   } as unknown as import('../src/selfcheck.js').SelfChecker;
@@ -1815,6 +1816,12 @@ test('/doctor 输出分段文本；/doctor --json 输出可解析 JSON', async (
   });
 
   await h.bridge.handleInbound(inbound('hi'));
+  const session = liveAgent(h).session;
+  await h.bridge.handleSessionEvent(session, {
+    type: 'request/header',
+    data: { header: { tools: [{ name: 'a' }, { name: 'b' }] }, reason: 'initial' },
+    time: Date.now() - 2 * 60 * 1000,
+  });
   await h.bridge.handleInbound(inbound('/doctor'));
   const text = recordedTexts(h.transport).at(-1) ?? '';
   assert.match(text, /^大肥鱼 · 体检/);
@@ -1822,6 +1829,7 @@ test('/doctor 输出分段文本；/doctor --json 输出可解析 JSON', async (
     assert.ok(text.includes(`【${section}】`), text);
   }
   assert.match(text, /【结论】\d+ 项正常 · 0 项异常 · \d+ 项跳过/);
+  assert.match(text, /✓ 上一回合 · .*工具 2，/);
   assert.ok(seenSession !== undefined);
 
   await h.bridge.handleInbound(inbound('/doctor --json'));

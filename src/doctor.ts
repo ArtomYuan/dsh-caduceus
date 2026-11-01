@@ -28,6 +28,18 @@ export interface DoctorItem {
 export interface DoctorSection {
   readonly title: string;
   readonly items: readonly DoctorItem[];
+  readonly lastTurn?: {
+    readonly preset?: string;
+    readonly toolsCount?: number;
+    readonly at: number;
+    readonly relative: string;
+  };
+}
+
+export interface DoctorLastTurn {
+  readonly preset?: string;
+  readonly toolsCount?: number;
+  readonly at: number;
 }
 
 export interface DoctorSessionInfo {
@@ -37,6 +49,8 @@ export interface DoctorSessionInfo {
   readonly presetMounted?: boolean;
   readonly toolsCount?: number;
   readonly historyLength?: number;
+  /** Cached most recent agent turn (commands like /doctor skip the agent). */
+  readonly lastTurn?: DoctorLastTurn;
 }
 
 export interface DoctorInputs {
@@ -77,6 +91,12 @@ export interface DoctorReport {
     readonly warn: number;
   };
   readonly items: readonly DoctorItem[];
+  readonly lastTurn?: {
+    readonly preset?: string;
+    readonly toolsCount?: number;
+    readonly at: number;
+    readonly relative: string;
+  };
 }
 
 const MARK_TEXT: Record<DoctorMark, string> = { ok: '✓', fail: '✗', skip: '○', warn: '!' };
@@ -152,21 +172,42 @@ export async function buildDoctorReport(inputs: DoctorInputs): Promise<DoctorRep
     const id = inputs.runtime.preset;
     if (inputs.runtime.presetMounted === true) return { mark: 'ok', detail: `${id ?? '?'}（已挂载）` };
     if (id === undefined && inputs.runtime.presetMounted === undefined) {
-      return { mark: 'skip', detail: '未知（尚未 create/resume）' };
+      return {
+        mark: 'skip',
+        detail: 'pending（命令回合未经 agent；发一句话后可知）',
+      };
     }
     return { mark: 'fail', detail: `${id ?? '?'}（未挂载）` };
   });
   const tools = await safeItem('runtime', 'tools', '工具', () => {
     const count = inputs.runtime.toolsCount;
-    if (count === undefined) return { mark: 'skip', detail: 'pending（尚未收到首条 request/header）' };
+    if (count === undefined) {
+      return { mark: 'skip', detail: 'pending（命令回合未经 agent；发一句话后可知）' };
+    }
     if (count === 0) return { mark: 'fail', detail: '0 个（request/header.tools 为空）' };
     return { mark: 'ok', detail: `${count} 个（来自首条请求）` };
   });
   const sessionTools = await safeItem('runtime', 'session-tools', '当前会话工具数', () => {
     const count = inputs.runtime.toolsCount;
-    if (count === undefined) return { mark: 'skip', detail: 'pending（本会话尚未发起请求）' };
+    if (count === undefined) {
+      return { mark: 'skip', detail: 'pending（命令回合未经 agent；发一句话后可知）' };
+    }
     return { mark: 'ok', detail: `${count} 个` };
   });
+  const lastTurnInput = inputs.session.lastTurn;
+  const lastTurnItem =
+    lastTurnInput === undefined
+      ? undefined
+      : await safeItem('runtime', 'last-turn', '上一回合', () => {
+          const presetText =
+            lastTurnInput.preset === undefined ? '?' : lastTurnInput.preset;
+          const toolsText =
+            lastTurnInput.toolsCount === undefined ? '?' : String(lastTurnInput.toolsCount);
+          return {
+            mark: 'ok',
+            detail: `preset=${presetText}，工具 ${toolsText}，${relativeAge(lastTurnInput.at, now)}`,
+          };
+        });
   const titleService = await safeItem('runtime', 'session-title', '标题服务', () => {
     if (inputs.runtime.sessionTitleService === undefined) return { mark: 'skip', detail: '不可用' };
     return inputs.runtime.sessionTitleService
@@ -281,19 +322,42 @@ export async function buildDoctorReport(inputs: DoctorInputs): Promise<DoctorRep
   // Absent legacy blocks are not a check result; only surface them when found.
   if (legacy.mark !== 'skip') personaItems.push(legacy);
   const sections: DoctorSection[] = [
-    { title: '运行时', items: [versions, preset, tools, sessionTools, titleService, agentsService] },
+    {
+      title: '运行时',
+      items: [
+        versions,
+        preset,
+        tools,
+        sessionTools,
+        ...(lastTurnItem === undefined ? [] : [lastTurnItem]),
+        titleService,
+        agentsService,
+      ],
+    },
     { title: '飞书', items: [credentials, connection, delivery] },
     { title: '人格', items: personaItems },
     { title: '会话', items: [session, storage] },
   ];
   const items = sections.flatMap((section) => section.items);
   const counts = {
-    normal: items.filter((entry) => entry.mark === 'ok' || entry.mark === 'warn').length,
+    normal: items.filter((entry) => entry.mark === 'ok').length,
     fail: items.filter((entry) => entry.mark === 'fail').length,
     skip: items.filter((entry) => entry.mark === 'skip').length,
     warn: items.filter((entry) => entry.mark === 'warn').length,
   };
   return {
+    ...(lastTurnInput === undefined
+      ? {}
+      : {
+          lastTurn: {
+            ...(lastTurnInput.preset === undefined ? {} : { preset: lastTurnInput.preset }),
+            ...(lastTurnInput.toolsCount === undefined
+              ? {}
+              : { toolsCount: lastTurnInput.toolsCount }),
+            at: lastTurnInput.at,
+            relative: relativeAge(lastTurnInput.at, now),
+          },
+        }),
     title: `大肥鱼 · 体检（插件 ${inputs.versions.plugin}，dsh ${inputs.versions.dsh}，node ${inputs.versions.node}）`,
     sections,
     counts,
@@ -310,10 +374,13 @@ export function renderDoctorText(report: DoctorReport): string {
       lines.push(` ${MARK_TEXT[item.mark]} ${item.name} · ${item.detail}`);
     }
   }
-  lines.push(
-    '',
-    `【结论】${report.counts.normal} 项正常 · ${report.counts.fail} 项异常 · ${report.counts.skip} 项跳过`,
-  );
+  const conclusion = [
+    `${report.counts.normal} 项正常`,
+    `${report.counts.fail} 项异常`,
+    ...(report.counts.warn > 0 ? [`${report.counts.warn} 项提示`] : []),
+    `${report.counts.skip} 项跳过`,
+  ].join(' · ');
+  lines.push('', `【结论】${conclusion}`);
   return lines.join('\n');
 }
 
@@ -323,6 +390,8 @@ export function renderDoctorJson(report: DoctorReport): string {
     {
       title: report.title,
       counts: report.counts,
+      warnings: report.items.filter((item) => item.mark === 'warn'),
+      lastTurn: report.lastTurn ?? null,
       sections: report.sections.map((section) => ({
         title: section.title,
         items: section.items.map((item) => ({

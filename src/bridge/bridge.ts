@@ -28,7 +28,13 @@ import {
   sessionTimeLabel,
   shortSessionId,
 } from '../observability.js';
-import { buildDoctorReport, renderDoctorJson, renderDoctorText, type DoctorSessionInfo } from '../doctor.js';
+import {
+  buildDoctorReport,
+  renderDoctorJson,
+  renderDoctorText,
+  type DoctorLastTurn,
+  type DoctorSessionInfo,
+} from '../doctor.js';
 import { writeOwnership, type SessionScopeKind } from '../ownership.js';
 import {
   finalCard,
@@ -79,6 +85,8 @@ interface ScopeState {
   readonly status: StatusTracker;
   progress?: CardStream;
   lastOutput: string;
+  /** Cached most recent agent request (used by /doctor on command turns). */
+  lastAgentTurn?: DoctorLastTurn;
   /** Latest session title (from a `session/title` event or `/rename`). */
   title?: string;
 }
@@ -250,6 +258,13 @@ export class Bridge {
           | { readonly header?: { readonly tools?: readonly unknown[] } }
           | undefined;
         const toolCount = Array.isArray(data?.header?.tools) ? data.header.tools.length : 0;
+        state.lastAgentTurn = {
+          ...(this.#selfCheck?.presetId() === undefined
+            ? {}
+            : { preset: this.#selfCheck?.presetId() }),
+          toolsCount: toolCount,
+          at: event.time ?? this.#now(),
+        };
         await this.#maybeSelfCheckTools(state, session, toolCount);
         break;
       }
@@ -1005,6 +1020,7 @@ export class Bridge {
         ? {}
         : { toolsCount: this.#selfCheck.toolCount() }),
       historyLength: this.#sessionMap.history(state.key).length,
+      ...(state.lastAgentTurn === undefined ? {} : { lastTurn: state.lastAgentTurn }),
     };
   }
 
