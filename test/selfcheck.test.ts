@@ -131,19 +131,56 @@ test('阶段 A：指令块缺失 / 多对 / 人格不一致 → 对应 fail，�
   );
 });
 
-test('阶段 A：agentPresets / tools 服务缺失 → fail（不是 skip）', async (t) => {
+test('阶段 A：服务尚未注册 → skip/degraded，不得含 fail，/status 显示 ○', async (t) => {
   const dir = makeDir(t);
   const { env } = await syncedHome(dir);
+  const { logger, lines } = recordingLogger();
   const checker = new SelfChecker({
     env,
+    logger,
     getAgentPresets: () => undefined,
     getTools: () => undefined,
   });
   const report = await checker.runStageA();
-  const status = new Map(report.items.map((entry) => [entry.id, entry.status]));
-  assert.equal(status.get('preset:service'), 'fail');
-  assert.equal(status.get('tools:service'), 'fail');
-  assert.equal(status.get('instructions:block'), 'ok');
+  assert.equal(report.status, 'degraded');
+  assert.ok(!report.items.some((entry) => entry.status === 'fail'), 'services must not be fake failures');
+  const status = new Map(report.items.map((entry) => [entry.id, entry]));
+  assert.equal(status.get('preset:service')?.status, 'skip');
+  assert.match(status.get('preset:service')?.detail ?? '', /尚未注册/);
+  assert.equal(status.get('tools:service')?.status, 'skip');
+  assert.equal(status.get('instructions:block')?.status, 'ok');
+  assert.equal(status.get('persona:fresh')?.status, 'ok');
+  assert.equal(checker.statusLine(), '自检 ○（待首会话验证）');
+  assert.deepEqual(lines, [
+    'selfcheck: ok (skipped: preset:service, tools:service; deferred to first session)',
+  ]);
+});
+
+test('阶段 A 服务 skip 后首会话验证成功：A 服务项刷新，/status 转 ✓', async (t) => {
+  const dir = makeDir(t);
+  const { env } = await syncedHome(dir);
+  const { logger, warnings } = recordingLogger();
+  let available = false;
+  const presets = {
+    async mount() {},
+    composedPreset: () => (available ? 'standard' : undefined),
+  };
+  const checker = new SelfChecker({
+    env,
+    logger,
+    getAgentPresets: () => (available ? presets : undefined),
+    getTools: () => (available ? {} : undefined),
+    toolCount: () => 4,
+  });
+  await checker.runStageA();
+  assert.equal(checker.statusLine(), '自检 ○（待首会话验证）');
+
+  available = true;
+  const b = await checker.runStageB({});
+  assert.equal(b.status, 'ok');
+  assert.equal(checker.statusLine(), '自检 ✓');
+  // No failures at any point: the startup skip was not a fake alarm.
+  assert.deepEqual(warnings, []);
 });
 
 test('阶段 B：composedPreset 为空 → preset:applied fail，/status 显示 ✗', async (t) => {
@@ -209,5 +246,5 @@ test('阶段 B：API 不可用（toolCount 未接线）→ skip，不假报 fail
   });
   const report = await checker.runStageB({});
   assert.equal(report.items.find((entry) => entry.id === 'tools:count')?.status, 'skip');
-  assert.match(checker.statusLine(), /^自检 …/);
+  assert.equal(checker.statusLine(), '自检 ○（待首会话验证）');
 });

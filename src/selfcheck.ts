@@ -37,9 +37,19 @@ export interface SelfCheckItem {
   readonly consequence?: string;
 }
 
+export type SelfCheckOutcome = 'ok' | 'degraded' | 'fail';
+
 export interface SelfCheckReport {
   readonly stage: 'A' | 'B';
   readonly items: readonly SelfCheckItem[];
+  /** fail if any item failed; degraded if only skips; ok when everything ran ok. */
+  readonly status: SelfCheckOutcome;
+}
+
+function reportOf(stage: 'A' | 'B', items: readonly SelfCheckItem[]): SelfCheckReport {
+  if (items.some((entry) => entry.status === 'fail')) return { stage, items, status: 'fail' };
+  if (items.some((entry) => entry.status === 'skip')) return { stage, items, status: 'degraded' };
+  return { stage, items, status: 'ok' };
 }
 
 export interface SelfCheckOptions {
@@ -123,7 +133,7 @@ export class SelfChecker {
     items.push(block.blockItem);
     items.push(await this.#checkPersonaFresh(block));
     items.push(this.#checkToolsService());
-    const report: SelfCheckReport = { stage: 'A', items };
+    const report = reportOf('A', items);
     this.#stageA = report;
     this.#maybeLog();
     return report;
@@ -133,7 +143,17 @@ export class SelfChecker {
   async runStageB(agentCtx?: unknown): Promise<SelfCheckReport> {
     if (agentCtx !== undefined) this.#lastAgentCtx = agentCtx;
     const items: SelfCheckItem[] = [this.#checkPresetApplied(), this.#checkToolsCount()];
-    const report: SelfCheckReport = { stage: 'B', items };
+    // First-touch validation: if a service was skipped during startup, refresh
+    // its stage-A item now that a real create/resume succeeded.
+    if (this.#stageA !== undefined) {
+      const refreshed = this.#stageA.items.map((entry) => {
+        if (entry.id === 'preset:service' && entry.status === 'skip') return this.#checkPresetService();
+        if (entry.id === 'tools:service' && entry.status === 'skip') return this.#checkToolsService();
+        return entry;
+      });
+      this.#stageA = reportOf('A', refreshed);
+    }
+    const report = reportOf('B', items);
     this.#stageB = report;
     this.#maybeLog();
     return report;
@@ -143,7 +163,8 @@ export class SelfChecker {
   async runAll(): Promise<SelfCheckReport> {
     await this.runStageA();
     await this.runStageB();
-    return { stage: 'B', items: combineReports(this.#stageA, this.#stageB) };
+    const items = combineReports(this.#stageA, this.#stageB);
+    return reportOf('B', items);
   }
 
   /** Combined report for display. */
@@ -156,8 +177,17 @@ export class SelfChecker {
     const items = this.report();
     const failed = items.filter((entry) => entry.status === 'fail').map((entry) => entry.id);
     if (failed.length > 0) return `自检 ✗ ${failed.join(', ')}`;
-    if (this.#stageA === undefined || this.#stageB === undefined) return '自检 …';
-    if (items.every((entry) => entry.status === 'ok')) return '自检 ✓';
+    const b = this.#stageB;
+    const a = this.#stageA;
+    // Stage B is the authoritative runtime validation; A's service skips are
+    // downgraded to skip precisely so they never mask a real session check.
+    if (b !== undefined && b.status === 'ok' && (a === undefined || a.status !== 'fail')) {
+      return '自检 ✓';
+    }
+    if (a !== undefined && a.status === 'degraded' && b === undefined) {
+      return '自检 ○（待首会话验证）';
+    }
+    if (items.some((entry) => entry.status === 'skip')) return '自检 ○（待首会话验证）';
     return '自检 …';
   }
 
@@ -171,7 +201,13 @@ export class SelfChecker {
   #checkPresetService(): SelfCheckItem {
     try {
       const service = this.#options.getAgentPresets?.();
-      if (service === undefined) return item('preset:service', 'fail', 'agentPresets 服务未注册');
+      if (service === undefined) {
+        return item(
+          'preset:service',
+          'skip',
+          '尚未注册（惰性解析，首次建会话时判定）',
+        );
+      }
       return item('preset:service', 'ok', '服务可用');
     } catch (error) {
       return item('preset:service', 'skip', `检查失败：${errorMessage(error)}`);
@@ -237,7 +273,13 @@ export class SelfChecker {
   #checkToolsService(): SelfCheckItem {
     try {
       const service = this.#options.getTools?.();
-      if (service === undefined) return item('tools:service', 'fail', 'tools 服务未注册');
+      if (service === undefined) {
+        return item(
+          'tools:service',
+          'skip',
+          '尚未注册（惰性解析，首次建会话时判定）',
+        );
+      }
       return item('tools:service', 'ok', '服务可用');
     } catch (error) {
       return item('tools:service', 'skip', `检查失败：${errorMessage(error)}`);
@@ -288,6 +330,18 @@ export class SelfChecker {
       if (key === this.#lastLogged) return;
       this.#lastLogged = key;
       logger.warn(failLine(items));
+      return;
+    }
+    if (this.#stageA !== undefined && this.#stageA.status === 'degraded' && this.#stageB === undefined) {
+      const skipped = this.#stageA.items
+        .filter((entry) => entry.status === 'skip')
+        .map((entry) => entry.id);
+      const key = `deferred:${skipped.join(',')}`;
+      if (key === this.#lastLogged) return;
+      this.#lastLogged = key;
+      logger.info(
+        `selfcheck: ok (skipped: ${skipped.join(', ')}; deferred to first session)`,
+      );
       return;
     }
     if (this.#stageA === undefined || this.#stageB === undefined) return;

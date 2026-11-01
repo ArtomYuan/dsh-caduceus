@@ -118,7 +118,7 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 - 门禁每条判定一行：`gate accept: p2p|mentioned …` / `gate drop: no-mention|bot-sender|not-allowed-chat|not-allowed-user|empty-text …`，附 `chat=`/`thread=`/`sender=` 前 12 位；
 - 命令分发：`command: /status`、`command: unknown passthrough /xxx`、`command: parse-fail <原文前 40>`；
 - 归属补录：启动一行 `backfill: scanned=N adopted=M skipped=K`；
-- 启动自检：全过打 `selfcheck: ok preset=<id> tools=<n> persona=<bytes>B`，任一失败打 `selfcheck: FAIL <items>`；`/status` 顶部与 `/selfcheck` 明细可见；
+- 启动自检：全过打 `selfcheck: ok preset=<id> tools=<n> persona=<bytes>B`；启动时服务尚未注册（惰性）打 `selfcheck: ok (skipped: preset:service, tools:service; deferred to first session)`；任一失败打 `selfcheck: FAIL <items>`。`/status` 顶部三态：`自检 ✓` / `自检 ○（待首会话验证）` / `自检 ✗ <fail 项>`；`/selfcheck` 输出逐项 ok/fail/skip 与原因；
 - 会话键：`scope: kind=p2p|topic|group-user|group-shared key=<前 16 位> session=<后 8 位>`。
 
 ## 存储
