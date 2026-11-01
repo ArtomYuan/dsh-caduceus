@@ -85,11 +85,15 @@ test('门禁六种判定各有一条可追行（记录型 logger）', () => {
   }
 });
 
-test('门禁：bot open id 未知时带 mention 放行，空 mention 仍丢弃', () => {
+test('门禁：bot open id 未知时 fail-closed；显式关闭后才放行', () => {
   assert.deepEqual(evaluateGate(input({ botOpenId: undefined, mentions: ['ou_any'] })), {
-    accept: true,
-    reason: 'mentioned',
+    accept: false,
+    reason: 'bot-identity-unknown',
   });
+  assert.deepEqual(
+    evaluateGate(input({ botOpenId: undefined, mentions: ['ou_any'], requireBotIdentity: false })),
+    { accept: true, reason: 'mentioned' },
+  );
   assert.deepEqual(evaluateGate(input({ botOpenId: undefined, mentions: [] })), {
     accept: false,
     reason: 'no-mention',

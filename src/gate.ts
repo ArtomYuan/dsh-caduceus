@@ -23,7 +23,8 @@ export type GateDropReason =
   | 'not-allowed-chat'
   | 'not-allowed-user'
   | 'empty-text'
-  | 'no-mention';
+  | 'no-mention'
+  | 'bot-identity-unknown';
 
 export type GateDecision =
   | { readonly accept: true; readonly reason: GateAcceptReason }
@@ -39,6 +40,8 @@ export interface GateInput {
   readonly text: string;
   readonly mentions?: readonly string[];
   readonly botOpenId?: string;
+  /** Default true: fail closed when the bot's own open id is unknown. */
+  readonly requireBotIdentity?: boolean;
   readonly allowedChats: readonly string[];
   readonly allowedUsers: readonly string[];
 }
@@ -66,12 +69,12 @@ export function evaluateGate(input: GateInput): GateDecision {
   const botOpenId = input.botOpenId;
   if (botOpenId !== undefined && botOpenId.length > 0) {
     if (mentions.includes(botOpenId)) return { accept: true, reason: 'mentioned' };
-  } else if (mentions.length > 0) {
-    // bot/v3/info unavailable: accept any mention rather than dropping every
-    // group message; the line still records the decision for diagnosis.
-    return { accept: true, reason: 'mentioned' };
+    return { accept: false, reason: 'no-mention' };
   }
-  return { accept: false, reason: 'no-mention' };
+  // Identity unknown: fail closed by default (never let an arbitrary @ through).
+  if (mentions.length === 0) return { accept: false, reason: 'no-mention' };
+  if (input.requireBotIdentity === false) return { accept: true, reason: 'mentioned' };
+  return { accept: false, reason: 'bot-identity-unknown' };
 }
 
 export interface GateLogInfo {

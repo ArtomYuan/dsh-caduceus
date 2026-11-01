@@ -76,6 +76,10 @@ export class ReliableTransport implements Transport {
     return this.api.getBotOpenId?.();
   }
 
+  refreshBotOpenId(): Promise<string | undefined> {
+    return this.api.refreshBotOpenId?.() ?? Promise.resolve(this.api.getBotOpenId?.());
+  }
+
   getBotName(): string | undefined {
     return this.api.getBotName?.();
   }

@@ -294,3 +294,41 @@ test('reaction：reliable 透传 add/remove 并返回 reaction_id', async () => 
     { action: 'remove', messageId: 'om_1', reactionId: 'api-reaction-1' },
   ]);
 });
+
+test('mention 还原：key → @名字，正文里的也替换；机器人自己的提及被剔除', () => {
+  const body = normalizeMessageEvent(
+    raw({
+      content: JSON.stringify({ text: '@_user_2 你好' }),
+      mentions: [{ key: '@_user_2', name: '张三', id: { open_id: 'ou_zhang' } }],
+    }),
+  );
+  assert.equal(body?.text, '@张三 你好');
+
+  const botOpenId = 'ou_bot';
+  const leading = normalizeMessageEvent(
+    raw({
+      content: JSON.stringify({ text: '@_user_1 帮我看看' }),
+      mentions: [{ key: '@_user_1', name: '机器人', id: { open_id: botOpenId } }],
+    }),
+    botOpenId,
+  );
+  assert.equal(leading?.text, '帮我看看');
+
+  const mixed = normalizeMessageEvent(
+    raw({
+      content: JSON.stringify({ text: '@_user_1 请 @_user_2 看' }),
+      mentions: [
+        { key: '@_user_1', name: '机器人', id: { open_id: botOpenId } },
+        { key: '@_user_2', name: '张三', id: { open_id: 'ou_zhang' } },
+      ],
+    }),
+    botOpenId,
+  );
+  assert.equal(mixed?.text, '请 @张三 看');
+
+  // No mention metadata: old placeholder-stripping behaviour is unchanged.
+  const noMetadata = normalizeMessageEvent(
+    raw({ content: JSON.stringify({ text: '@_user_1 你好' }) }),
+  );
+  assert.equal(noMetadata?.text, '你好');
+});

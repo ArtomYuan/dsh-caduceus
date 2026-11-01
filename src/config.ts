@@ -47,6 +47,8 @@ export interface GatewayConfig {
   readonly reactionOnDone?: string;
   /** Emoji added on failed/interrupted turn (default `CROSS_MARK`). */
   readonly reactionOnFail?: string;
+  /** Require the bot's own open id for the group @ gate (default true). */
+  readonly gateRequireBotIdentity?: boolean;
 }
 
 /** Schemastery schema for the `caduceus-gateway` entry. */
@@ -70,6 +72,7 @@ export const Config = z.object({
   reactionOnStart: z.string().required(false),
   reactionOnDone: z.string().required(false),
   reactionOnFail: z.string().required(false),
+  gateRequireBotIdentity: z.boolean().required(false),
 });
 
 /** Default card patch throttle: half of Feishu's 5 QPS budget. */
@@ -159,6 +162,7 @@ export function resolveGatewayConfig(
     reactionOnStart: config.reactionOnStart ?? DEFAULT_REACTION_ON_START,
     reactionOnDone: config.reactionOnDone ?? DEFAULT_REACTION_ON_DONE,
     reactionOnFail: config.reactionOnFail ?? DEFAULT_REACTION_ON_FAIL,
+    gateRequireBotIdentity: config.gateRequireBotIdentity ?? true,
   };
   return {
     ...(appId === undefined || appSecret === undefined ? {} : { credentials: { appId, appSecret } }),

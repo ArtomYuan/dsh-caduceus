@@ -97,6 +97,8 @@ interface HarnessOptions {
   readonly reactionOnStart?: string;
   readonly reactionOnDone?: string;
   readonly reactionOnFail?: string;
+  /** Default true; false restores the old fail-open group gate. */
+  readonly gateRequireBotIdentity?: boolean;
   /** `/doctor` data collector (optional; tests inject deterministic data). */
   readonly doctorInputs?: (
     session: import('../src/doctor.js').DoctorSessionInfo,
@@ -169,6 +171,9 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
       : { reactionOnStart: options.reactionOnStart }),
     ...(options.reactionOnDone === undefined ? {} : { reactionOnDone: options.reactionOnDone }),
     ...(options.reactionOnFail === undefined ? {} : { reactionOnFail: options.reactionOnFail }),
+    ...(options.gateRequireBotIdentity === undefined
+      ? {}
+      : { gateRequireBotIdentity: options.gateRequireBotIdentity }),
   };
   // Ownership sidecars must never escape into the real ~/.dsh during tests.
   const ownershipDir = join(dir, 'owners');
@@ -618,10 +623,37 @@ test('话题语义：新话题首条仍需 @，加 @ 后才建档', async (t) =>
   assert.equal(liveAgent(h).followups.length, 1);
 });
 
-test('@ 门禁：bot open id 未知时，带 mention 的群消息放行（避免全丢）', async (t) => {
+test('@ 门禁：bot open id 未知 fail-closed，ERROR 仅一次；恢复身份后放行', async (t) => {
   const h = makeHarness(t);
   await h.bridge.handleInbound(
     inbound('@某人', { chatType: 'group', mentions: ['ou_anyone'] }),
+  );
+  assert.equal(h.agents.live.size, 0, 'unknown bot identity must reject group @ messages');
+  assert.equal(
+    h.logger.entries.filter(
+      (entry) =>
+        entry.level === 'error' && entry.message.includes('bot identity unknown'),
+    ).length,
+    1,
+  );
+
+  await h.bridge.handleInbound(
+    inbound('@某人 再来', { chatType: 'group', mentions: ['ou_anyone'] }),
+  );
+  assert.equal(h.agents.live.size, 0);
+  assert.equal(
+    h.logger.entries.filter(
+      (entry) =>
+        entry.level === 'error' && entry.message.includes('bot identity unknown'),
+    ).length,
+    1,
+    'identity-unknown ERROR is logged once per process',
+  );
+
+  // bot/v3/info succeeds later: the next group message refreshes and accepts.
+  h.transport.setBotOpenId('ou_bot');
+  await h.bridge.handleInbound(
+    inbound('@机器人', { chatType: 'group', mentions: ['ou_bot'] }),
   );
   assert.equal(liveAgent(h).followups.length, 1);
 });
@@ -2333,4 +2365,12 @@ test('表情反馈：连续两轮各自 reaction_id，不串号', async (t) => {
       ['add', second.messageId, 'DONE'],
     ],
   );
+});
+
+test('@ 门禁：gateRequireBotIdentity=false 时保留旧 fail-open 行为', async (t) => {
+  const h = makeHarness(t, { gateRequireBotIdentity: false });
+  await h.bridge.handleInbound(
+    inbound('@某人', { chatType: 'group', mentions: ['ou_anyone'] }),
+  );
+  assert.equal(liveAgent(h).followups.length, 1);
 });

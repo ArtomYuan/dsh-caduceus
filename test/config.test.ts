@@ -132,3 +132,12 @@ test('reactions 默认开启，四个配置项可覆盖', async () => {
   assert.equal(custom.bridge.reactionOnDone, 'THUMBSUP');
   assert.equal(custom.bridge.reactionOnFail, 'SMILE');
 });
+
+test('gateRequireBotIdentity 默认 true，可显式关闭', async () => {
+  const { resolveGatewayConfig } = await import('../src/config.js');
+  assert.equal(resolveGatewayConfig({}).bridge.gateRequireBotIdentity, true);
+  assert.equal(
+    resolveGatewayConfig({ gateRequireBotIdentity: false }).bridge.gateRequireBotIdentity,
+    false,
+  );
+});

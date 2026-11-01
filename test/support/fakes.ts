@@ -85,7 +85,7 @@ export class FakeTransport implements Transport {
   failAddReactionWith: Error | undefined;
   failRemoveReactionWith: Error | undefined;
   #reactionSeq = 0;
-  readonly #botOpenId: string | undefined;
+  #botOpenId: string | undefined;
   private handler: ((message: InboundMessage) => void) | undefined;
   private cardActionHandler: ((action: CardAction) => void) | undefined;
   private seq = 0;
@@ -96,6 +96,15 @@ export class FakeTransport implements Transport {
 
   getBotOpenId(): string | undefined {
     return this.#botOpenId;
+  }
+
+  refreshBotOpenId(): Promise<string | undefined> {
+    return Promise.resolve(this.#botOpenId);
+  }
+
+  /** Test seam: simulate bot/v3/info succeeding later. */
+  setBotOpenId(openId: string | undefined): void {
+    this.#botOpenId = openId;
   }
 
   async start(): Promise<void> {

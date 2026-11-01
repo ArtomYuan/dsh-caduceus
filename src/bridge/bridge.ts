@@ -151,6 +151,7 @@ export class Bridge {
   readonly #agentCtxBySession = new Map<string, unknown>();
   readonly #toolsCheckedSessions = new Set<string>();
   #approvalMissingWarned = false;
+  #botIdentityErrorLogged = false;
   /** Last fail-id set already notified into the conversation. */
   #selfCheckNotifiedSignature: string | undefined;
   /** Session ids whose preset mount failed (shown as `（preset 未挂载）`). */
@@ -203,6 +204,16 @@ export class Bridge {
 
   /** Process one inbound message (serialized per scope). */
   async handleInbound(message: InboundMessage): Promise<void> {
+    // Bot identity may have failed at startup; retry on the next group message
+    // before deciding, so a late bot/v3/info success restores normal gating.
+    if (message.chatType === 'group' && (this.#transport.getBotOpenId?.() ?? '').length === 0) {
+      try {
+        await this.#transport.refreshBotOpenId?.();
+      } catch (error) {
+        this.#logger.warn(`bot identity refresh failed: ${errorMessage(error)}`);
+      }
+    }
+    const botOpenId = this.#transport.getBotOpenId?.();
     const decision = evaluateGate({
       chatType: message.chatType,
       chatId: message.chatId,
@@ -210,9 +221,8 @@ export class Bridge {
       senderOpenId: message.senderOpenId,
       text: message.text,
       ...(message.mentions === undefined ? {} : { mentions: message.mentions }),
-      ...(this.#transport.getBotOpenId?.() === undefined
-        ? {}
-        : { botOpenId: this.#transport.getBotOpenId?.() }),
+      ...(botOpenId === undefined ? {} : { botOpenId }),
+      requireBotIdentity: this.#config.gateRequireBotIdentity !== false,
       allowedChats: this.#config.allowedChats,
       allowedUsers: this.#config.allowedUsers,
     });
@@ -221,6 +231,14 @@ export class Bridge {
       ...(message.threadId === undefined ? {} : { threadId: message.threadId }),
       senderOpenId: message.senderOpenId,
     });
+    if (!decision.accept && decision.reason === 'bot-identity-unknown') {
+      if (!this.#botIdentityErrorLogged) {
+        this.#botIdentityErrorLogged = true;
+        this.#logger.error(
+          'gate: bot identity unknown; group @ messages are rejected until resolved',
+        );
+      }
+    }
     if (!decision.accept) return;
     await this.#queue.run(
       scopeKey(

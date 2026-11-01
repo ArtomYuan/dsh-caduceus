@@ -145,6 +145,8 @@ export interface Transport {
    * fake transports may omit it, and the real one resolves it lazily.
    */
   getBotOpenId?(): string | undefined;
+  /** Retry bot identity resolution (group @ gate). */
+  refreshBotOpenId?(): Promise<string | undefined>;
   /** Cached bot display name (resolved at startup; no extra API call). */
   getBotName?(): string | undefined;
   /** Long-connection status/start time, when known. */

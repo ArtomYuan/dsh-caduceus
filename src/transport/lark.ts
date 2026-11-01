@@ -90,7 +90,7 @@ export class LarkFeishuApi implements FeishuApi {
           );
           return;
         }
-        const message = normalizeMessageEvent(raw);
+        const message = normalizeMessageEvent(raw, this.botOpenId);
         if (message === undefined) {
           this.logger.debug('ignoring unsupported Feishu message event');
           return;
@@ -116,6 +116,12 @@ export class LarkFeishuApi implements FeishuApi {
     this.running = true;
     this.startedAt = Date.now();
     this.logger.info('feishu long connection started');
+  }
+
+  /** Retry bot identity resolution (called again on the next group message). */
+  async refreshBotOpenId(): Promise<string | undefined> {
+    await this.resolveBotOpenId();
+    return this.botOpenId;
   }
 
   /** Resolve the bot's own open id once, best-effort (group @ gate). */

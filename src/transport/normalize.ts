@@ -41,12 +41,13 @@ export interface RawMessageEventLike {
     readonly parent_id?: string;
     readonly mentions?: readonly {
       readonly key?: string;
+      readonly name?: string;
       readonly id?: { readonly open_id?: string };
     }[];
   };
 }
 
-const MENTION_PATTERN = /<at[^>]*>.*?<\/at>/g;
+const AT_TAG_PATTERN = /<at[^>]*>(.*?)<\/at>/gs;
 
 /** Message types the v0.1 surface handles (attachments are v0.2). */
 const SUPPORTED_MESSAGE_TYPES = new Set(['text']);
@@ -57,7 +58,10 @@ const SUPPORTED_MESSAGE_TYPES = new Set(['text']);
  * @returns the normalized message, or `undefined` for unsupported/malformed
  *   payloads or empty text.
  */
-export function normalizeMessageEvent(raw: RawMessageEventLike): InboundMessage | undefined {
+export function normalizeMessageEvent(
+  raw: RawMessageEventLike,
+  botOpenId?: string,
+): InboundMessage | undefined {
   // Priority #1: only human messages may enter a session.
   const senderType = raw.sender?.sender_type;
   if (senderType !== 'user') return undefined;
@@ -74,9 +78,42 @@ export function normalizeMessageEvent(raw: RawMessageEventLike): InboundMessage 
     return undefined;
   }
 
-  text = text.replace(MENTION_PATTERN, ' ').replace(/\r\n?/g, '\n').trim();
-  // Strip Feishu placeholder mentions only at the start; body @-mentions stay.
-  text = stripLeadingMentions(text).trim();
+  // Preserve the display text inside <at> tags first: key -> @name replacement
+  // below needs the placeholder text to still be present.
+  text = text.replace(AT_TAG_PATTERN, (_match, inner: string) => ` @${inner.trim().replace(/^@/, '')} `);
+  text = text.replace(/\r\n?/g, '\n');
+
+  const rawMentions = message.mentions ?? [];
+  const entries = rawMentions
+    .map((mention) => ({
+      key: mention.key,
+      name: mention.name,
+      openId: mention.id?.open_id,
+    }))
+    .filter((entry) => entry.key !== undefined || entry.name !== undefined || entry.openId !== undefined);
+
+  if (entries.length === 0) {
+    // No mention metadata: keep the previous behaviour (strip placeholders).
+    text = text.trim();
+    text = stripLeadingMentions(text).trim();
+  } else {
+    // 1) Remove the bot's own mention(s) entirely (agent need not see "@self").
+    for (const entry of entries) {
+      const own = botOpenId !== undefined && botOpenId.length > 0 && entry.openId === botOpenId;
+      if (!own) continue;
+      if (entry.key !== undefined && entry.key.length > 0) text = text.split(entry.key).join(' ');
+      if (entry.name !== undefined && entry.name.length > 0) text = text.split(`@${entry.name}`).join(' ');
+    }
+    // 2) Replace remaining placeholder keys with @display-name (longest first,
+    // so @_user_10 is never clobbered by @_user_1).
+    const replaceable = entries
+      .filter((entry) => entry.name !== undefined && entry.name.length > 0 && entry.key !== undefined)
+      .sort((left, right) => (right.key?.length ?? 0) - (left.key?.length ?? 0));
+    for (const entry of replaceable) {
+      text = text.split(entry.key as string).join(`@${entry.name as string}`);
+    }
+    text = text.replace(/[ \t]{2,}/g, ' ').trim();
+  }
   if (text.length === 0) return undefined;
 
   const threadId = firstNonEmpty(message.thread_id, message.root_id);

@@ -85,6 +85,7 @@ onlyBuiltDependencies:
 | `reactionOnStart` | `OnIt` | 收到用户消息时添加的表情 |
 | `reactionOnDone` | `DONE` | 回合完成时添加的表情 |
 | `reactionOnFail` | `CROSS_MARK` | 回合出错/中断时添加的表情（失败退回 `THINKING`） |
+| `gateRequireBotIdentity` | `true` | bot open id 未知时群 @ 门禁 fail-closed（false 恢复旧放行） |
 
 ## 命令
 

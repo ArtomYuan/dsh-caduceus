@@ -101,6 +101,8 @@ export interface BridgeConfig {
   readonly reactionOnStart?: string;
   readonly reactionOnDone?: string;
   readonly reactionOnFail?: string;
+  /** Default true: group @ gate fails closed when bot open id is unknown. */
+  readonly gateRequireBotIdentity?: boolean;
 }
 
 /** Everything the bridge needs; unit tests provide fakes for every seam. */

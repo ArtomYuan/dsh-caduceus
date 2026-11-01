@@ -86,6 +86,7 @@ onlyBuiltDependencies:
 | `reactionOnStart` | `OnIt` | Reaction added when a user message is accepted |
 | `reactionOnDone` | `DONE` | Reaction added when a turn completes |
 | `reactionOnFail` | `CROSS_MARK` | Reaction added when a turn errors/interrupts (falls back to `THINKING`) |
+| `gateRequireBotIdentity` | `true` | Group @ gate fails closed when the bot open id is unknown |
 
 ## Commands
 
