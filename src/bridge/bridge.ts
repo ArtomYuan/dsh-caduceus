@@ -1686,12 +1686,14 @@ export class Bridge {
   }
 
   async #sendNewCard(state: ScopeState, card: FeishuCard): Promise<{ messageId: string }> {
-    if (state.lastInboundMessageId !== undefined) {
+    // A topic must receive a thread reply; a normal chat must get a plain card
+    // message (quoting the user's message creates a fake "topic" UI).
+    if (state.threadId !== undefined && state.lastInboundMessageId !== undefined) {
       return this.#transport.reply(
         state.chatId,
         state.lastInboundMessageId,
         { kind: 'card', card },
-        state.threadId === undefined ? {} : { threadId: state.threadId },
+        { threadId: state.threadId },
       );
     }
     return this.#transport.sendCard(state.chatId, card);
@@ -1720,7 +1722,7 @@ export class Bridge {
   async #replyText(state: ScopeState, text: string): Promise<void> {
     if (text.length === 0) return;
     try {
-      if (state.lastInboundMessageId !== undefined) {
+      if (state.threadId !== undefined && state.lastInboundMessageId !== undefined) {
         await this.#transport.reply(
           state.chatId,
           state.lastInboundMessageId,
@@ -1728,6 +1730,7 @@ export class Bridge {
           { threadId: state.threadId },
         );
       } else {
+        // Normal chat: a fresh message, not a quoted "topic reply".
         await this.#transport.sendText(state.chatId, text);
       }
     } catch (error) {

@@ -2050,7 +2050,7 @@ test('自检提示发送失败：不抛错、不重试、日志 warn', async (t)
     { id: 'preset:applied', detail: '未挂载', consequence: 'agent 无工具无人格' },
   ]);
   const h = makeHarness(t, { selfCheck: fake });
-  h.transport.reply = async () => {
+  h.transport.sendText = async () => {
     throw new Error('feishu reply boom');
   };
 
@@ -2238,7 +2238,7 @@ test('交互卡：话题会话走 reply + threadId，不走 createMessage', asyn
   assert.equal(await promise, 'allowed-once');
 });
 
-test('交互卡：私聊会话 reply 不传 threadId', async (t) => {
+test('交互卡：私聊会话走 sendCard，不 reply', async (t) => {
   const { InteractiveRuntime } = await import('../src/interactive/runtime.js');
   const runtime = new InteractiveRuntime({
     config: { approvalCard: true, questionCard: true, timeoutMs: 300_000 },
@@ -2265,17 +2265,21 @@ test('交互卡：私聊会话 reply 不传 threadId', async (t) => {
     async () => 'unavailable',
   );
   await tick();
-  const cardReply = h.transport.calls.find(
-    (call): call is Extract<TransportCall, { op: 'reply' }> =>
-      call.op === 'reply' && JSON.stringify(call.payload).includes('审批请求'),
+  const sentCard = h.transport.calls.find(
+    (call): call is Extract<TransportCall, { op: 'sendCard' }> =>
+      call.op === 'sendCard' && JSON.stringify(call.card).includes('审批请求'),
   );
-  assert.ok(cardReply !== undefined);
-  assert.equal(cardReply.threadId, undefined);
-  assert.equal(cardReply.replyTo, message.messageId);
-  const buttons = buttonsOf((cardReply as { payload: { card: FeishuCard } }).payload.card);
+  assert.ok(sentCard !== undefined, 'private chat must send a plain card');
+  assert.ok(
+    !h.transport.calls.some(
+      (call) => call.op === 'reply' && JSON.stringify(call.payload).includes('审批请求'),
+    ),
+    'private chat must not use a quoted reply for interactive cards',
+  );
+  const buttons = buttonsOf(sentCard.card);
   await runtime.handleCardAction({
     operatorOpenId: message.senderOpenId,
-    messageId: cardReply.messageId,
+    messageId: sentCard.messageId,
     chatId: message.chatId,
     value: buttons[0]!.value,
   });
@@ -2831,4 +2835,47 @@ test('访问控制：管理员放行；/whoami 显示管理员与话题', async 
     }),
   );
   assert.equal(liveAgent(h).followups.length, 1);
+});
+
+test('私聊：/whoami 等文本回复走 sendText，不引用回复', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('/whoami'));
+  const sends = h.transport.calls.filter((call) => call.op === 'sendText');
+  const replies = h.transport.calls.filter((call) => call.op === 'reply');
+  assert.equal(sends.length, 1);
+  assert.match(sends[0]?.text ?? '', /你的 open_id/);
+  assert.equal(replies.length, 0, 'p2p text must not use reply');
+});
+
+test('私聊：普通回合的文本通知/回复走 sendText，不引用回复', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('hi'));
+  const session = liveAgent(h).session;
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 100));
+  await h.bridge.handleSessionEvent(
+    session,
+    event('turn/end', { turn: 1, reason: { kind: 'error', error: { message: 'boom' } } }, 200),
+  );
+  const replies = h.transport.calls.filter((call) => call.op === 'reply');
+  assert.equal(replies.length, 0, 'p2p text must not use reply');
+  assert.ok(h.transport.calls.some((call) => call.op === 'sendText'));
+});
+
+test('话题：/whoami 走 reply + threadId，不漂到主流程', async (t) => {
+  const h = makeHarness(t, { botOpenId: 'ou_bot', prebindTopic: true });
+  const msg = inbound('/whoami', {
+    chatType: 'group',
+    chatId: 'oc_g',
+    threadId: 'omt_t',
+    senderOpenId: 'ou_user',
+    mentions: ['ou_bot'],
+  });
+  await h.bridge.handleInbound(msg);
+  const replies = h.transport.calls.filter(
+    (call): call is Extract<TransportCall, { op: 'reply' }> => call.op === 'reply',
+  );
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0]?.threadId, 'omt_t');
+  assert.equal(replies[0]?.replyTo, msg.messageId);
+  assert.ok(!h.transport.calls.some((call) => call.op === 'sendText'));
 });

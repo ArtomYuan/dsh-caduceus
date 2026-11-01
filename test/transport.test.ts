@@ -54,10 +54,11 @@ test('normalize: thread_id 优先于 root_id（话题标识必须保留）', () 
   assert.equal(message.rootId, 'om_root');
 });
 
-test('normalize: 只有 root_id 时回落到 root_id', () => {
+test('normalize: 只有 root_id 时 threadId 仍为 undefined（root_id 不兼任话题）', () => {
   const message = normalizeMessageEvent(raw({ root_id: 'om_root' }));
   assert.ok(message !== undefined);
-  assert.equal(message.threadId, 'om_root');
+  assert.equal(message.threadId, undefined);
+  assert.equal(message.rootId, 'om_root');
 });
 
 test('normalize: 无话题字段时 threadId 为 undefined', () => {

@@ -132,7 +132,9 @@ export function normalizeMessageEvent(
   if (senderType !== 'user') return undefined;
 
   const message = raw.message;
-  const threadId = firstNonEmpty(message.thread_id, message.root_id);
+  // Only a real thread_id makes a topic. In p2p, root_id can equal the
+  // message id; treating it as threadId produced bogus "topic replies".
+  const threadId = firstNonEmpty(message.thread_id);
   const rootId = firstNonEmpty(message.root_id);
   const mentions = (message.mentions ?? [])
     .map((mention) => mention.id?.open_id)
