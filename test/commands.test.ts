@@ -67,17 +67,22 @@ test('COMMAND_SPECS 与 COMMAND_NAMES 一致，helpText 覆盖全部命令', () 
   for (const name of COMMAND_NAMES) assert.match(help, new RegExp(`/${name}\\b`));
 });
 
-test('README 命令表与 parse.ts 实际支持的命令完全一致', () => {
-  const readme = readFileSync(join(process.cwd(), 'README.md'), 'utf8');
-  const start = readme.indexOf('## 命令');
-  assert.ok(start >= 0, 'README 缺少 `## 命令` 段落');
-  const rest = readme.slice(start);
-  const nextHeading = rest.indexOf('\n## ', 1);
-  const section = nextHeading === -1 ? rest : rest.slice(0, nextHeading);
+test('README/README.zh.md 命令表与 parse.ts 实际支持的命令完全一致', () => {
+  for (const file of ['README.md', 'README.zh.md']) {
+    const readme = readFileSync(join(process.cwd(), file), 'utf8');
+    const heading = /^## (?:命令|Commands).*$/m.exec(readme);
+    assert.ok(heading !== null, `${file} 缺少命令表段落（## Commands / ## 命令）`);
+    const start = heading.index;
+    const rest = readme.slice(start);
+    const nextHeading = rest.indexOf('\n## ', 1);
+    const section = nextHeading === -1 ? rest : rest.slice(0, nextHeading);
 
-  const documented = [...section.matchAll(/^\|\s*`\/([a-z]+)/gm)].map((match) => match[1] as string);
-  assert.ok(documented.length > 0, 'README 命令表里没有解析到任何命令行');
-  assert.deepEqual([...documented].sort(), [...COMMAND_NAMES].sort());
+    const documented = [...section.matchAll(/^\|\s*`\/([a-z]+)/gm)].map(
+      (match) => match[1] as string,
+    );
+    assert.ok(documented.length > 0, `${file} 命令表里没有解析到任何命令行`);
+    assert.deepEqual([...documented].sort(), [...COMMAND_NAMES].sort(), file);
+  }
 });
 
 test('/status 是自有命令，参数非法返回 usage', () => {

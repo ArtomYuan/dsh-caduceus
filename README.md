@@ -1,96 +1,123 @@
 # dsh-caduceus
 
-把 **DeepSeek Harness（dsh）** 接到 **飞书 / Lark** 的插件：一个话题一个会话，人格块自动同步，过程卡片承载状态与答案，并带 `/status`、`/doctor`、`/sessions` 等命令。
+[中文](README.zh.md) / **English**
 
-## 安装
+[![npm version](https://img.shields.io/npm/v/dsh-caduceus.svg)](https://www.npmjs.com/package/dsh-caduceus)
+[![GitHub stars](https://img.shields.io/github/stars/ArtomYuan/dsh-caduceus.svg?style=social)](https://github.com/ArtomYuan/dsh-caduceus)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-### 路径 1：一次性命令行（推荐）
+**Use DeepSeek Harness in Feishu/Lark the way you use an agent — one topic, one session, a visible title, one card per turn.**
 
-发布到 npm 后，装包时直接放行依赖构建脚本：
+> Scope: the engine is still dsh. The agent loop, tools, sandbox and skills are unchanged; this package adds the conversation semantics and the chat surface around them.
 
-```bash
-dsh plugin --profile web add dsh-caduceus --allow-build=protobufjs
+## What you get
+
+- **One scope, one session** — p2p, topic, and group-per-user sessions are kept separate.
+- **Visible titles** — generated from the first prompt and shown on the turn card.
+- **One card per turn** — status and answer live in the same card, edited in place; the final answer is not a second message.
+- **11 commands** — `/new`, `/sessions`, `/rename`, `/resume`, `/adopt`, `/status`, `/stop`, `/doctor`, `/selfcheck`, `/persona`, `/help`.
+- **Persona** — `SOUL.md` is synced into the `AGENTS.md` block, automatically at startup.
+- **Observability** — two-stage self-check, `/doctor`, and in-chat degradation warnings.
+
+## Looks like
+
+```text
+飞书会话 · 过程
+会话：重构登录流程 · **运行中** · 步数 4 · 工具 3 · 已运行 12s
+最近：bash
+（the answer streams inside this card; at turn end the same card is frozen as 完成）
 ```
 
-### 路径 2：先授权再装（不带 flag 也能装）
+This is a text sketch, not a screenshot. At turn end the card shows the terminal state and the complete answer; a degraded card (preset not mounted) is marked `（preset 未挂载）`.
 
-在目标 profile 目录的 `pnpm-workspace.yaml` 里加：
+## Requirements
+
+| Requirement | Version / note |
+|:--|:--|
+| dsh | `>=0.2.1-rc.2` |
+| Node.js | `>=22.13` |
+| pnpm | `>=10` (pnpm 11 tested) |
+| Feishu / Lark app | One app can have **one long-connection consumer** at a time |
+
+## Install
+
+1. Add the package (the build flag is required, see the note below):
+
+   ```bash
+   dsh plugin --profile web add dsh-caduceus --allow-build=protobufjs
+   ```
+
+2. In the profile's `cordis.patch.yml`, give the `caduceus-gateway` row your Feishu credentials
+   (`appId` / `appSecret`, or `FEISHU_APP_ID` / `FEISHU_APP_SECRET`).
+
+3. Restart dsh from the host side. The log should contain `feishu long connection started`.
+
+> **pnpm ≥10 note**: `protobufjs` is a transitive dependency of the Feishu SDK, and pnpm ≥10 does not
+> run dependency install/build scripts by default. Use `--allow-build=protobufjs` **with the equals
+> sign**; the space form (`--allow-build protobufjs`) fails with
+> `ERR_PNPM_ALLOW_BUILD_MISSING_PACKAGE`. Without the flag the install fails with
+> `ERR_PNPM_IGNORED_BUILDS: Ignored build scripts: protobufjs@7.6.6`.
+> Alternatively, pre-authorize in the profile's `pnpm-workspace.yaml`:
 
 ```yaml
 onlyBuiltDependencies:
   - protobufjs
 ```
 
-然后正常安装即可：
+> Confirm the install with `dsh --profile web --dump-config | grep dsh-caduceus` — expect at least 2 lines.
 
-```bash
-dsh plugin --profile web add dsh-caduceus
-```
+## Configure
 
-### 路径 3：本地 tgz
-
-```bash
-npm pack
-dsh plugin --profile web add ./dsh-caduceus-0.1.0.tgz --allow-build=protobufjs
-```
-
-### 安装坑（实测 pnpm 11.7.0）
-
-- **flag 必须用等号**：`--allow-build=protobufjs` 可以；`--allow-build protobufjs`（空格）会报
-  `ERR_PNPM_ALLOW_BUILD_MISSING_PACKAGE` 并安装失败。
-- **为什么需要放行**：`protobufjs` 是飞书 SDK 的传递依赖；pnpm ≥10 默认不执行依赖包的安装/构建脚本，
-  未放行时安装会以 `ERR_PNPM_IGNORED_BUILDS: Ignored build scripts: protobufjs@7.6.6` 失败。
-- **确认装上了**：安装后执行
-
-  ```bash
-  dsh --profile web --dump-config | grep dsh-caduceus
-  ```
-
-  应至少输出 2 行（两条 caduceus entry）。
-
-安装/启用后由宿主统一重启 dsh；本包不控制服务。
-
-## 配置
-
-在 profile 的 bundle 配置里提供：
-
-| 配置 | 默认 | 说明 |
+| Key | Default | Description |
 |:--|:--|:--|
-| `appId` / `appSecret` | — | 飞书应用凭证；也可用 `FEISHU_APP_ID` / `FEISHU_APP_SECRET` |
-| `defaultCwd` | 当前进程 cwd | 新建会话的工作目录 |
-| `groupSessionsPerUser` | `true` | 普通群按发送者隔离会话；话题不受影响 |
-| `busyMode` | `queue` | 群里忙时的投递：`queue` / `steer` / `interrupt` |
-| `cardThrottleMs` | `400` | 过程卡 patch 节流（毫秒） |
-| `personaAutoSync` | `true` | 启动时把 SOUL 同步到 `$DSH_HOME/AGENTS.md` |
-| `agentPreset` | `standard` | 新会话挂载的 dsh agent preset |
-| `logLevel` | `info` | 文件日志级别：`info` / `debug` |
+| `appId` / `appSecret` | — | Feishu app credentials; `FEISHU_APP_ID` / `FEISHU_APP_SECRET` also work |
+| `defaultCwd` | process cwd | Working directory for new sessions |
+| `groupSessionsPerUser` | `true` | Isolate ordinary groups per sender; topics are unaffected |
+| `busyMode` | `queue` | Busy delivery: `queue` / `steer` / `interrupt` |
+| `cardThrottleMs` | `400` | Process-card patch throttle (ms) |
+| `personaAutoSync` | `true` | Sync SOUL into `$DSH_HOME/AGENTS.md` at startup |
+| `agentPreset` | `standard` | dsh agent preset mounted for new sessions |
+| `logLevel` | `info` | File log level: `info` / `debug` |
 
-人格：SOUL 源按 `$DSH_HOME/SOUL.md` → `$DSH_AGENTS_HOME/SOUL.md` 查找，投影到 `$DSH_HOME/AGENTS.md` 的标记块；命令见下。
+## Commands
 
-## 命令
-
-| 命令 | 说明 |
+| Command | Description |
 |:--|:--|
-| `/new` | 立即创建新会话（旧会话保留） |
-| `/sessions [--all]` | 列出当前会话或同聊天全部会话（含历史） |
-| `/rename <标题>` | 重命名当前会话 |
-| `/resume [id\|尾号]` | 恢复上一条或按完整 id / ≥8 位尾号切换 |
-| `/adopt <id\|尾号>` | 把无归属的历史会话收养到当前 scope |
-| `/selfcheck` | 立即重跑自检并输出逐项明细 |
-| `/doctor [--json]` | 体检报告：运行时 / 飞书 / 人格 / 会话 / 存储 / 版本 |
-| `/stop` | 中断正在运行的一轮 |
-| `/status` | 当前会话状态与自检摘要 |
-| `/persona [show\|sync]` | 查看或同步 SOUL 人格块 |
-| `/help` | 命令表 |
+| `/new` | Materialize a new session immediately; keep the old one |
+| `/sessions [--all]` | List the current session, or every session of this chat |
+| `/rename <title>` | Rename the current session |
+| `/resume [id\|tail]` | Resume the previous session, or switch by full id / ≥8-char tail |
+| `/adopt <id\|tail>` | Adopt an unowned historical session into the current scope |
+| `/status` | Current session status plus the self-check summary |
+| `/stop` | Interrupt the running turn |
+| `/doctor [--json]` | Health report: runtime / Feishu / persona / session / storage / versions |
+| `/selfcheck` | Re-run both self-check stages and print every item |
+| `/persona [show\|sync]` | Show or sync the SOUL persona block |
+| `/help` | Command table |
 
-## 故障排查
+## Troubleshooting
 
-- 启动日志里没有 `feishu long connection started`：先发 `/doctor` 看飞书凭证/长连接状态，再查文件日志。
-- 先发 `/doctor`：逐项看到 preset、工具数、人格投影、飞书连接、存储等状态；`/doctor --json` 可给脚本或他人排查。
-- 文件日志：`$DSH_HOME/caduceus/caduceus.log`（自动轮转，默认保留 3 份）。
-- 自检异常会同时在对话里发一条 `⚠ 自检异常 …（详情 /doctor）`；恢复后会发 `✓ 自检已恢复`。
-- 常见项：`preset:applied` 失败 = agent 没挂 preset（无工具/无人格）；`persona:fresh` 失败 = SOUL 与 `AGENTS.md` 不一致，发 `/persona sync` 或重启等自动同步。
+- **No `feishu long connection started` in the log**: run `/doctor` first, then check the file log at `$DSH_HOME/caduceus/caduceus.log`.
+- **`/doctor`**: shows runtime, Feishu, persona, session and storage checks; `/doctor --json` gives the same report for scripts or support.
+- **In-chat warnings**: self-check failures are posted into the conversation as `⚠ 自检异常 …（详情 /doctor）`; recovery posts `✓ 自检已恢复`.
+- **`preset:applied` fails**: the agent was created without a preset, so it has no tools and no persona. Check `agentPreset` and that the `agentPresets` service is available.
+- **`persona:fresh` fails**: `SOUL.md` and the block in `$DSH_HOME/AGENTS.md` differ. Run `/persona sync` or let the next startup auto-sync.
+- **Install failed with `ERR_PNPM_IGNORED_BUILDS` / `ERR_PNPM_ALLOW_BUILD_MISSING_PACKAGE`**: see the pnpm note under Install.
 
-## 许可
+## Limitations
 
-MIT。见 [LICENSE](LICENSE)。
+- One Feishu/Lark app supports one long-connection consumer; do not run the same app in two dsh instances.
+- Command turns (`/doctor`, `/status`, `/sessions`, …) do not go through the agent, so tool counts may read `pending` until a normal message is sent.
+- The persona projection targets `$DSH_HOME/AGENTS.md`; a legacy block in `$DSH_AGENTS_HOME/AGENTS.md` is only reported and never deleted.
+- The file log rotates at 5 MB and keeps 3 files.
+- There is no separate Web UI install wizard; installation is through the dsh CLI.
+
+## Docs
+
+- [docs/DESIGN.md](docs/DESIGN.md) — design and surface semantics
+- [docs/VERIFY.md](docs/VERIFY.md) — isolated-profile verification steps
+- [docs/](docs/) — slice notes (`SLICE*.md`)
+
+## License
+
+[MIT](LICENSE) © 2026 ArtomYuan
