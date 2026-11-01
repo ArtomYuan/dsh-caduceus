@@ -82,6 +82,10 @@ onlyBuiltDependencies:
 | `questionCard` | `true` | Send interactive question cards; single-select ≤4 options get buttons |
 | `interactiveTimeoutMs` | `300000` | How long an approval/question card waits before it expires |
 | `approvalPolicy` | `ask` | Session approval policy: `ask` (card confirmation, default) or `never` |
+| `reactions` | `true` | Emoji reactions on messages: `OnIt` while running, `DONE`/`CROSS_MARK` at turn end |
+| `reactionOnStart` | `OnIt` | Reaction added when a user message is accepted |
+| `reactionOnDone` | `DONE` | Reaction added when a turn completes |
+| `reactionOnFail` | `CROSS_MARK` | Reaction added when a turn errors/interrupts (falls back to `THINKING`) |
 
 ## Commands
 

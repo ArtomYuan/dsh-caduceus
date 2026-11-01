@@ -33,6 +33,10 @@ export interface FeishuApi {
   onMessage(handler: (message: InboundMessage) => void): void;
   /** Register the card.action.trigger callback. */
   onCardAction?(handler: (action: CardAction) => void): void;
+  /** Add one emoji reaction; resolves the reaction id. */
+  addReaction(messageId: string, emojiType: string): Promise<string>;
+  /** Remove one reaction previously added by this bot. */
+  removeReaction(messageId: string, reactionId: string): Promise<void>;
   createMessage(input: CreateMessageInput): Promise<{ messageId: string }>;
   replyMessage(input: ReplyMessageInput): Promise<{ messageId: string }>;
   patchCard(messageId: string, card: FeishuCard): Promise<void>;

@@ -280,3 +280,17 @@ test('正文归一化：只剥前导 @_user_N，保留正文里的 @', () => {
   );
   assert.equal(multi?.text, '请继续');
 });
+
+test('reaction：reliable 透传 add/remove 并返回 reaction_id', async () => {
+  const { ReliableTransport } = await import('../src/transport/reliable.js');
+  const { FakeFeishuApi } = await import('./support/fakes.js');
+  const api = new FakeFeishuApi();
+  const transport = new ReliableTransport(api);
+  const id = await transport.addReaction('om_1', 'OnIt');
+  assert.equal(id, 'api-reaction-1');
+  await transport.removeReaction('om_1', id);
+  assert.deepEqual(api.reactions, [
+    { action: 'add', messageId: 'om_1', emojiType: 'OnIt' },
+    { action: 'remove', messageId: 'om_1', reactionId: 'api-reaction-1' },
+  ]);
+});

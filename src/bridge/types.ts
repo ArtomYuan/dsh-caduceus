@@ -96,6 +96,11 @@ export interface BridgeConfig {
   readonly groupSessionsPerUser: boolean;
   /** Agent preset mounted for caduceus sessions (default `standard`). */
   readonly agentPreset?: string;
+  /** Emoji reactions enabled (default true). */
+  readonly reactions?: boolean;
+  readonly reactionOnStart?: string;
+  readonly reactionOnDone?: string;
+  readonly reactionOnFail?: string;
 }
 
 /** Everything the bridge needs; unit tests provide fakes for every seam. */

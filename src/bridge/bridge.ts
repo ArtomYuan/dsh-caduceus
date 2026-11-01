@@ -91,6 +91,10 @@ interface ScopeState {
   lastAgentTurn?: DoctorLastTurn;
   /** Latest session title (from a `session/title` event or `/rename`). */
   title?: string;
+  /** Accepted inbound messages awaiting a turn/end reaction transition. */
+  reactionQueue: string[];
+  /** Start-reaction promises keyed by message id (to order remove after add). */
+  reactionStarts: Map<string, Promise<string | undefined>>;
 }
 
 function errorMessage(error: unknown): string {
@@ -314,6 +318,8 @@ export class Bridge {
       await this.#handleSlash(state, message.text);
       return;
     }
+    state.reactionQueue.push(message.messageId);
+    this.#startReaction(state, message.messageId);
     await this.#deliverTurn(state, message.text);
   }
 
@@ -556,6 +562,7 @@ export class Bridge {
       const notice = terminalNotice(kind, snapshot.errorMessage);
       if (notice !== undefined) await this.#replyText(state, notice);
     }
+    await this.#finishReactions(state, kind);
     state.lastOutput = '';
   }
 
@@ -1290,6 +1297,61 @@ export class Bridge {
     };
   }
 
+  #startReaction(state: ScopeState, messageId: string): void {
+    if (this.#config.reactions === false) return;
+    const promise = this.#safeAddReaction(
+      messageId,
+      this.#config.reactionOnStart ?? 'OnIt',
+    );
+    state.reactionStarts.set(messageId, promise);
+    void promise;
+  }
+
+  /** Remove the start reaction, then add the terminal reaction (best effort). */
+  async #finishReactions(state: ScopeState, turnKind: string | undefined): Promise<void> {
+    if (this.#config.reactions === false) return;
+    const messageId = state.reactionQueue.shift();
+    if (messageId === undefined) return;
+    const start = state.reactionStarts.get(messageId);
+    state.reactionStarts.delete(messageId);
+    const reactionId = start === undefined ? undefined : await start;
+    if (reactionId !== undefined) await this.#safeRemoveReaction(messageId, reactionId);
+
+    const completed = turnKind === 'completed';
+    const emoji =
+      completed
+        ? (this.#config.reactionOnDone ?? 'DONE')
+        : (this.#config.reactionOnFail ?? 'CROSS_MARK');
+    const added = await this.#safeAddReaction(messageId, emoji);
+    if (!completed && added === undefined && emoji !== 'THINKING') {
+      await this.#safeAddReaction(messageId, 'THINKING');
+    }
+  }
+
+  async #safeAddReaction(messageId: string, emojiType: string): Promise<string | undefined> {
+    try {
+      return await this.#transport.addReaction(messageId, emojiType);
+    } catch (error) {
+      this.#logReactionSkipped(error);
+      return undefined;
+    }
+  }
+
+  async #safeRemoveReaction(messageId: string, reactionId: string): Promise<void> {
+    try {
+      await this.#transport.removeReaction(messageId, reactionId);
+    } catch (error) {
+      this.#logReactionSkipped(error);
+    }
+  }
+
+  #logReactionSkipped(error: unknown): void {
+    const code = (error as { code?: unknown }).code;
+    this.#logger.debug(
+      `reaction skipped: ${typeof code === 'number' ? code : 'unknown'} ${errorMessage(error)}`,
+    );
+  }
+
   #stateFor(message: InboundMessage): ScopeState {
     const key = scopeKey(
       message.chatType,
@@ -1309,6 +1371,8 @@ export class Bridge {
       running: false,
       status: new StatusTracker(),
       lastOutput: '',
+      reactionQueue: [],
+      reactionStarts: new Map(),
     };
     this.#states.set(key, created);
     return created;

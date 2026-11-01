@@ -136,6 +136,10 @@ export interface Transport {
   sendText(chatId: string, text: string, options?: SendOptions): Promise<SentMessage>;
   sendCard(chatId: string, card: FeishuCard, options?: SendOptions): Promise<SentMessage>;
   updateCard(messageId: string, card: FeishuCard): Promise<void>;
+  /** Add one emoji reaction; resolves the reaction id. */
+  addReaction(messageId: string, emojiType: string): Promise<string>;
+  /** Remove one reaction previously added by this bot. */
+  removeReaction(messageId: string, reactionId: string): Promise<void>;
   /**
    * The bot's own open id when known (needed for the group @ gate). Optional:
    * fake transports may omit it, and the real one resolves it lazily.

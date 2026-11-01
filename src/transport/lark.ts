@@ -37,6 +37,14 @@ interface MessageResponse {
   };
 }
 
+interface ReactionResponse {
+  readonly code?: number;
+  readonly msg?: string;
+  readonly data?: {
+    readonly reaction_id?: string;
+  };
+}
+
 /** Long-connection Feishu implementation of {@link FeishuApi}. */
 export class LarkFeishuApi implements FeishuApi {
   private readonly client: Client;
@@ -186,6 +194,26 @@ export class LarkFeishuApi implements FeishuApi {
     return { messageId: this.messageIdOf(response, 'im.v1.message.reply') };
   }
 
+  async addReaction(messageId: string, emojiType: string): Promise<string> {
+    const response = (await this.client.im.v1.messageReaction.create({
+      data: { reaction_type: { emoji_type: emojiType } },
+      path: { message_id: messageId },
+    })) as ReactionResponse;
+    this.assertOk(response, 'im.v1.message.reaction.create');
+    const reactionId = response.data?.reaction_id;
+    if (reactionId === undefined || reactionId.length === 0) {
+      throw new FeishuApiError('feishu im.v1.message.reaction.create returned no reaction_id', -1);
+    }
+    return reactionId;
+  }
+
+  async removeReaction(messageId: string, reactionId: string): Promise<void> {
+    const response = (await this.client.im.v1.messageReaction.delete({
+      path: { message_id: messageId, reaction_id: reactionId },
+    })) as ReactionResponse;
+    this.assertOk(response, 'im.v1.message.reaction.delete');
+  }
+
   async patchCard(messageId: string, card: FeishuCard): Promise<void> {
     const response = (await this.client.im.v1.message.patch({
       data: { content: JSON.stringify(card) },
@@ -203,7 +231,7 @@ export class LarkFeishuApi implements FeishuApi {
     return messageId;
   }
 
-  private assertOk(response: MessageResponse, operation: string): void {
+  private assertOk(response: { readonly code?: number; readonly msg?: string }, operation: string): void {
     const code = response.code ?? -1;
     if (code !== 0) {
       throw new FeishuApiError(`feishu ${operation} failed: ${response.msg ?? 'unknown error'}`, code);

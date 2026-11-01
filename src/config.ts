@@ -39,6 +39,14 @@ export interface GatewayConfig {
   readonly interactiveTimeoutMs?: number;
   /** Session approval policy; IM humans are present, so default `ask`. */
   readonly approvalPolicy?: ApprovalPolicy;
+  /** Emoji reactions on inbound/turn-end (default true). */
+  readonly reactions?: boolean;
+  /** Emoji added on accept (default `OnIt`). */
+  readonly reactionOnStart?: string;
+  /** Emoji added on completed turn (default `DONE`). */
+  readonly reactionOnDone?: string;
+  /** Emoji added on failed/interrupted turn (default `CROSS_MARK`). */
+  readonly reactionOnFail?: string;
 }
 
 /** Schemastery schema for the `caduceus-gateway` entry. */
@@ -58,6 +66,10 @@ export const Config = z.object({
   questionCard: z.boolean().required(false),
   interactiveTimeoutMs: z.natural().min(1).required(false),
   approvalPolicy: z.union([z.const('ask'), z.const('never')]).required(false),
+  reactions: z.boolean().required(false),
+  reactionOnStart: z.string().required(false),
+  reactionOnDone: z.string().required(false),
+  reactionOnFail: z.string().required(false),
 });
 
 /** Default card patch throttle: half of Feishu's 5 QPS budget. */
@@ -77,6 +89,12 @@ export const DEFAULT_PERSONA_AUTO_SYNC = true;
 
 /** Default agent preset for caduceus sessions. */
 export const DEFAULT_AGENT_PRESET = 'standard';
+
+/** Default message reactions. */
+export const DEFAULT_REACTIONS = true;
+export const DEFAULT_REACTION_ON_START = 'OnIt';
+export const DEFAULT_REACTION_ON_DONE = 'DONE';
+export const DEFAULT_REACTION_ON_FAIL = 'CROSS_MARK';
 
 /** Default session approval policy: ask, so dangerous actions prompt a card. */
 export const DEFAULT_APPROVAL_POLICY: ApprovalPolicy = 'ask';
@@ -137,6 +155,10 @@ export function resolveGatewayConfig(
     groupSessionsPerUser:
       config.groupSessionsPerUser ?? DEFAULT_GROUP_SESSIONS_PER_USER,
     agentPreset: config.agentPreset ?? DEFAULT_AGENT_PRESET,
+    reactions: config.reactions ?? DEFAULT_REACTIONS,
+    reactionOnStart: config.reactionOnStart ?? DEFAULT_REACTION_ON_START,
+    reactionOnDone: config.reactionOnDone ?? DEFAULT_REACTION_ON_DONE,
+    reactionOnFail: config.reactionOnFail ?? DEFAULT_REACTION_ON_FAIL,
   };
   return {
     ...(appId === undefined || appSecret === undefined ? {} : { credentials: { appId, appSecret } }),

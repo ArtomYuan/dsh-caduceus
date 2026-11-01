@@ -142,6 +142,14 @@ export class ReliableTransport implements Transport {
     );
   }
 
+  addReaction(messageId: string, emojiType: string): Promise<string> {
+    return this.api.addReaction(messageId, emojiType);
+  }
+
+  removeReaction(messageId: string, reactionId: string): Promise<void> {
+    return this.api.removeReaction(messageId, reactionId);
+  }
+
   async updateCard(messageId: string, card: FeishuCard): Promise<void> {
     assertUpdateMulti(card);
     await this.#recordVoid('卡片', () => this.api.patchCard(messageId, card));

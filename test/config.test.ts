@@ -98,3 +98,37 @@ test('approvalPolicy 默认 ask，可显式设为 never', async () => {
   assert.equal(resolveGatewayConfig({}).approvalPolicy, 'ask');
   assert.equal(resolveGatewayConfig({ approvalPolicy: 'never' }).approvalPolicy, 'never');
 });
+
+test('reactions 默认开启，四个配置项可覆盖', async () => {
+  const {
+    DEFAULT_REACTIONS,
+    DEFAULT_REACTION_ON_START,
+    DEFAULT_REACTION_ON_DONE,
+    DEFAULT_REACTION_ON_FAIL,
+    resolveGatewayConfig,
+  } = await import('../src/config.js');
+  assert.equal(DEFAULT_REACTIONS, true);
+  assert.equal(DEFAULT_REACTION_ON_START, 'OnIt');
+  assert.equal(DEFAULT_REACTION_ON_DONE, 'DONE');
+  assert.equal(DEFAULT_REACTION_ON_FAIL, 'CROSS_MARK');
+  const defaults = resolveGatewayConfig({});
+  assert.deepEqual(
+    {
+      reactions: defaults.bridge.reactions,
+      start: defaults.bridge.reactionOnStart,
+      done: defaults.bridge.reactionOnDone,
+      fail: defaults.bridge.reactionOnFail,
+    },
+    { reactions: true, start: 'OnIt', done: 'DONE', fail: 'CROSS_MARK' },
+  );
+  const custom = resolveGatewayConfig({
+    reactions: false,
+    reactionOnStart: 'THINKING',
+    reactionOnDone: 'THUMBSUP',
+    reactionOnFail: 'SMILE',
+  });
+  assert.equal(custom.bridge.reactions, false);
+  assert.equal(custom.bridge.reactionOnStart, 'THINKING');
+  assert.equal(custom.bridge.reactionOnDone, 'THUMBSUP');
+  assert.equal(custom.bridge.reactionOnFail, 'SMILE');
+});

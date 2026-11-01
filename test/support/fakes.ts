@@ -75,6 +75,16 @@ export class FakeTransport implements Transport {
   stopCount = 0;
   /** When set, the next `updateCard` throws once (final-edit fallback tests). */
   failUpdateCardWith: Error | undefined;
+  /** Reaction calls recorded for assertions. */
+  readonly reactionCalls: {
+    readonly action: 'add' | 'remove';
+    readonly messageId: string;
+    readonly emojiType?: string;
+    readonly reactionId?: string;
+  }[] = [];
+  failAddReactionWith: Error | undefined;
+  failRemoveReactionWith: Error | undefined;
+  #reactionSeq = 0;
   readonly #botOpenId: string | undefined;
   private handler: ((message: InboundMessage) => void) | undefined;
   private cardActionHandler: ((action: CardAction) => void) | undefined;
@@ -102,6 +112,26 @@ export class FakeTransport implements Transport {
 
   onCardAction(handler: (action: CardAction) => void): void {
     this.cardActionHandler = handler;
+  }
+
+  async addReaction(messageId: string, emojiType: string): Promise<string> {
+    this.reactionCalls.push({ action: 'add', messageId, emojiType });
+    const failure = this.failAddReactionWith;
+    if (failure !== undefined) {
+      this.failAddReactionWith = undefined;
+      throw failure;
+    }
+    this.#reactionSeq += 1;
+    return `reaction-${this.#reactionSeq}`;
+  }
+
+  async removeReaction(messageId: string, reactionId: string): Promise<void> {
+    this.reactionCalls.push({ action: 'remove', messageId, reactionId });
+    const failure = this.failRemoveReactionWith;
+    if (failure !== undefined) {
+      this.failRemoveReactionWith = undefined;
+      throw failure;
+    }
   }
 
   /** Deliver one card button click through the registered handler (test seam). */
@@ -219,8 +249,11 @@ export class FakeFeishuApi implements FeishuApi {
   readonly replied: ReplyMessageInput[] = [];
   readonly patched: { readonly messageId: string; readonly card: FeishuCard }[] = [];
   readonly failReplyCodes: number[] = [];
+  readonly reactions: { action: 'add' | 'remove'; messageId: string; emojiType?: string; reactionId?: string }[] = [];
+  failAddReactionWith: Error | undefined;
   private handler: ((message: InboundMessage) => void) | undefined;
   started = false;
+  #reactionSeq = 0;
 
   async start(): Promise<void> {
     this.started = true;
@@ -248,6 +281,17 @@ export class FakeFeishuApi implements FeishuApi {
 
   async patchCard(messageId: string, card: FeishuCard): Promise<void> {
     this.patched.push({ messageId, card });
+  }
+
+  async addReaction(messageId: string, emojiType: string): Promise<string> {
+    this.reactions.push({ action: 'add', messageId, emojiType });
+    if (this.failAddReactionWith !== undefined) throw this.failAddReactionWith;
+    this.#reactionSeq += 1;
+    return `api-reaction-${this.#reactionSeq}`;
+  }
+
+  async removeReaction(messageId: string, reactionId: string): Promise<void> {
+    this.reactions.push({ action: 'remove', messageId, reactionId });
   }
 }
 

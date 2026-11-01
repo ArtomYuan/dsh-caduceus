@@ -92,6 +92,11 @@ interface HarnessOptions {
   readonly approvalPolicy?: ApprovalPolicy;
   /** Plugin root context double for interactive registration. */
   readonly rootCtx?: unknown;
+  /** Emoji reactions switch/defaults (bridge defaults true/OnIt/DONE/CROSS_MARK). */
+  readonly reactions?: boolean;
+  readonly reactionOnStart?: string;
+  readonly reactionOnDone?: string;
+  readonly reactionOnFail?: string;
   /** `/doctor` data collector (optional; tests inject deterministic data). */
   readonly doctorInputs?: (
     session: import('../src/doctor.js').DoctorSessionInfo,
@@ -158,6 +163,12 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
     busyMode: options.busyMode ?? 'queue',
     groupSessionsPerUser: options.groupSessionsPerUser ?? true,
     ...(options.agentPreset === undefined ? {} : { agentPreset: options.agentPreset }),
+    ...(options.reactions === undefined ? {} : { reactions: options.reactions }),
+    ...(options.reactionOnStart === undefined
+      ? {}
+      : { reactionOnStart: options.reactionOnStart }),
+    ...(options.reactionOnDone === undefined ? {} : { reactionOnDone: options.reactionOnDone }),
+    ...(options.reactionOnFail === undefined ? {} : { reactionOnFail: options.reactionOnFail }),
   };
   // Ownership sidecars must never escape into the real ~/.dsh during tests.
   const ownershipDir = join(dir, 'owners');
@@ -2232,5 +2243,94 @@ test('交互卡：无 scope state 时回退 chat send 并 warn', async (t) => {
       (call) => call.op === 'sendCard' && JSON.stringify(call.card).includes('fallback'),
     ).length,
     1,
+  );
+});
+
+test('表情反馈：接受消息加 OnIt；turn/end completed 删 OnIt 并加 DONE', async (t) => {
+  const h = makeHarness(t);
+  const message = inbound('hi');
+  await h.bridge.handleInbound(message);
+  const session = liveAgent(h).session;
+  await h.bridge.handleSessionEvent(session, event('turn/end', { reason: { kind: 'completed' } }));
+
+  assert.deepEqual(
+    h.transport.reactionCalls.map((call) => [call.action, call.messageId, call.emojiType ?? call.reactionId]),
+    [
+      ['add', message.messageId, 'OnIt'],
+      ['remove', message.messageId, 'reaction-1'],
+      ['add', message.messageId, 'DONE'],
+    ],
+  );
+});
+
+test('表情反馈：turn/end error 删 OnIt 并加 CROSS_MARK', async (t) => {
+  const h = makeHarness(t);
+  const message = inbound('hi');
+  await h.bridge.handleInbound(message);
+  const session = liveAgent(h).session;
+  await h.bridge.handleSessionEvent(session, event('turn/end', { reason: { kind: 'error' } }));
+  assert.deepEqual(
+    h.transport.reactionCalls.map((call) => [call.action, call.emojiType ?? call.reactionId]),
+    [
+      ['add', 'OnIt'],
+      ['remove', 'reaction-1'],
+      ['add', 'CROSS_MARK'],
+    ],
+  );
+});
+
+test('表情反馈：API 抛错只记 debug，不影响 turn/end', async (t) => {
+  const h = makeHarness(t);
+  h.transport.failAddReactionWith = new Error('emoji invalid');
+  const message = inbound('hi');
+  await h.bridge.handleInbound(message);
+  const session = liveAgent(h).session;
+  await assert.doesNotReject(
+    h.bridge.handleSessionEvent(session, event('turn/end', { reason: { kind: 'completed' } })),
+  );
+  assert.ok(
+    h.logger.entries.some(
+      (entry) =>
+        entry.level === 'debug' && entry.message === 'reaction skipped: unknown emoji invalid',
+    ),
+    h.logger.entries.map((entry) => `${entry.level}:${entry.message}`).join(' | '),
+  );
+  assert.ok(
+    h.transport.reactionCalls.some(
+      (call) => call.action === 'add' && call.messageId === message.messageId,
+    ),
+  );
+});
+
+test('表情反馈：reactions=false 零调用', async (t) => {
+  const h = makeHarness(t, { reactions: false });
+  const message = inbound('hi');
+  await h.bridge.handleInbound(message);
+  const session = liveAgent(h).session;
+  await h.bridge.handleSessionEvent(session, event('turn/end', { reason: { kind: 'completed' } }));
+  assert.deepEqual(h.transport.reactionCalls, []);
+});
+
+test('表情反馈：连续两轮各自 reaction_id，不串号', async (t) => {
+  const h = makeHarness(t);
+  const first = inbound('第一轮');
+  await h.bridge.handleInbound(first);
+  const session = liveAgent(h).session;
+  await h.bridge.handleSessionEvent(session, event('turn/end', { reason: { kind: 'completed' } }));
+
+  const second = inbound('第二轮');
+  await h.bridge.handleInbound(second);
+  await h.bridge.handleSessionEvent(session, event('turn/end', { reason: { kind: 'completed' } }));
+
+  assert.deepEqual(
+    h.transport.reactionCalls.map((call) => [call.action, call.messageId, call.emojiType ?? call.reactionId]),
+    [
+      ['add', first.messageId, 'OnIt'],
+      ['remove', first.messageId, 'reaction-1'],
+      ['add', first.messageId, 'DONE'],
+      ['add', second.messageId, 'OnIt'],
+      ['remove', second.messageId, 'reaction-3'],
+      ['add', second.messageId, 'DONE'],
+    ],
   );
 });
