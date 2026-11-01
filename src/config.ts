@@ -63,6 +63,8 @@ export interface GatewayConfig {
   readonly maxSendImageBytes?: number;
   /** Allowed roots for MEDIA paths; empty = session cwd only. */
   readonly mediaRoots?: readonly string[];
+  /** Admin open-id allowlist; empty disables access control (default). */
+  readonly admins?: readonly string[];
 }
 
 /** Schemastery schema for the `caduceus-gateway` entry. */
@@ -94,6 +96,7 @@ export const Config = z.object({
   maxSendFileBytes: z.natural().min(1).required(false),
   maxSendImageBytes: z.natural().min(1).required(false),
   mediaRoots: z.array(z.string()).required(false),
+  admins: z.array(z.string()).required(false),
 });
 
 /** Default card patch throttle: half of Feishu's 5 QPS budget. */
@@ -137,6 +140,14 @@ export const DEFAULT_APPROVAL_POLICY: ApprovalPolicy = 'ask';
 export const DEFAULT_APPROVAL_CARD = true;
 export const DEFAULT_QUESTION_CARD = true;
 export const DEFAULT_INTERACTIVE_TIMEOUT_MS = 300_000;
+
+/**
+ * Startup warning for access control (empty admin list = disabled).
+ * Exported so the log line stays testable without mounting the plugin.
+ */
+export function accessControlWarning(admins: readonly string[]): string | undefined {
+  return admins.length === 0 ? 'access control disabled (no admins configured)' : undefined;
+}
 
 export interface ResolvedGatewayConfig {
   readonly credentials?: {
@@ -201,6 +212,7 @@ export function resolveGatewayConfig(
     maxSendFileBytes: config.maxSendFileBytes ?? DEFAULT_MAX_SEND_FILE_BYTES,
     maxSendImageBytes: config.maxSendImageBytes ?? DEFAULT_MAX_SEND_IMAGE_BYTES,
     mediaRoots: config.mediaRoots ?? [],
+    admins: config.admins ?? [],
   };
   return {
     ...(appId === undefined || appSecret === undefined ? {} : { credentials: { appId, appSecret } }),

@@ -124,6 +124,8 @@ export interface BridgeConfig {
   readonly maxSendImageBytes?: number;
   /** Allowed roots for outbound MEDIA paths; empty = session cwd. */
   readonly mediaRoots?: readonly string[];
+  /** Admin allowlist; empty disables access control (default). */
+  readonly admins?: readonly string[];
 }
 
 /** Everything the bridge needs; unit tests provide fakes for every seam. */

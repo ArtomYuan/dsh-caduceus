@@ -29,7 +29,12 @@ import type {
   SessionTitleLike,
 } from './bridge/types.js';
 import { runHarnessCommand } from './commands/harness.js';
-import { Config, resolveGatewayConfig, type GatewayConfig } from './config.js';
+import {
+  Config,
+  accessControlWarning,
+  resolveGatewayConfig,
+  type GatewayConfig,
+} from './config.js';
 import { FileLogger } from './file-logger.js';
 import { defaultLogPath } from './home.js';
 import { adaptLogger, teeLoggers, type LoggerLike } from './logger.js';
@@ -183,6 +188,8 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
     }),
   );
   logger.info(`agent preset=${resolved.agentPreset}`);
+  const accessWarning = accessControlWarning(resolved.bridge.admins ?? []);
+  if (accessWarning !== undefined) logger.warn(accessWarning);
   const selfCheck = new SelfChecker({
     logger,
     getAgentPresets: () => ctx.get('agentPresets') as AgentPresetsLike | undefined,

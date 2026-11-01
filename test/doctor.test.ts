@@ -253,3 +253,18 @@ test('有缓存回合：显示「上一回合」行，且不计入跳过；JSON 
   assert.match(parsed.lastTurn?.relative ?? '', /2m 前/);
   assert.deepEqual(parsed.warnings, []);
 });
+
+test('访问控制：/doctor 开启与关闭各一行', async (t) => {
+  const dir = makeDir(t);
+  const env = await personaHome(dir);
+  const enabled = await buildDoctorReport({
+    ...healthyInputs(env),
+    access: { enabled: true, adminCount: 2 },
+  });
+  assert.match(renderDoctorText(enabled), /✓ 访问控制 · 开启（2 人）/);
+  const disabled = await buildDoctorReport({
+    ...healthyInputs(env),
+    access: { enabled: false, adminCount: 0 },
+  });
+  assert.match(renderDoctorText(disabled), /○ 访问控制 · 关闭（未配置 admins）/);
+});

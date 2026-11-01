@@ -12,7 +12,7 @@
 import { stripLeadingMentions } from '../mentions.js';
 
 /** Commands dsh-caduceus owns. Keep in sync with README's command table. */
-export const COMMAND_NAMES = ['new', 'sessions', 'rename', 'resume', 'adopt', 'selfcheck', 'doctor', 'stop', 'status', 'persona', 'help'] as const;
+export const COMMAND_NAMES = ['new', 'sessions', 'rename', 'resume', 'adopt', 'selfcheck', 'doctor', 'stop', 'status', 'persona', 'whoami', 'help'] as const;
 
 export type CommandName = (typeof COMMAND_NAMES)[number];
 
@@ -35,6 +35,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   { name: 'stop', usage: '/stop', description: '中断当前正在运行的一轮' },
   { name: 'status', usage: '/status', description: '显示本会话的运行状态、步数与起止时间' },
   { name: 'persona', usage: '/persona [show|sync]', description: '查看或同步 SOUL 人格块' },
+  { name: 'whoami', usage: '/whoami', description: '显示你的 open_id、当前会话与身份' },
   { name: 'help', usage: '/help', description: '显示命令表' },
 ];
 
@@ -51,6 +52,7 @@ export type ParsedCommand =
   | { readonly kind: 'stop' }
   | { readonly kind: 'status' }
   | { readonly kind: 'persona'; readonly action: PersonaAction }
+  | { readonly kind: 'whoami' }
   | { readonly kind: 'help' }
   | { readonly kind: 'usage'; readonly command: string; readonly usage: string; readonly reason: string }
   | { readonly kind: 'passthrough'; readonly raw: string };
@@ -92,6 +94,8 @@ export function parseCommand(raw: string): ParsedCommand {
       return rest === '' ? { kind: 'stop' } : usageResult('stop', '/stop 不接受参数');
     case 'status':
       return rest === '' ? { kind: 'status' } : usageResult('status', '/status 不接受参数');
+    case 'whoami':
+      return rest === '' ? { kind: 'whoami' } : usageResult('whoami', '/whoami 不接受参数');
     case 'help':
       return { kind: 'help' };
     case 'rename':

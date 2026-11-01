@@ -192,3 +192,18 @@ test('发送媒体配置默认值/覆盖', async () => {
   assert.equal(custom.bridge.maxSendImageBytes, 50);
   assert.deepEqual(custom.bridge.mediaRoots, ['/tmp']);
 });
+
+test('admins 默认空（访问控制关闭），可配置白名单', async () => {
+  const { resolveGatewayConfig } = await import('../src/config.js');
+  assert.deepEqual(resolveGatewayConfig({}).bridge.admins, []);
+  assert.deepEqual(resolveGatewayConfig({ admins: ['ou_a'] }).bridge.admins, ['ou_a']);
+});
+
+test('accessControlWarning：空 admins 返回禁用警告', async () => {
+  const { accessControlWarning } = await import('../src/config.js');
+  assert.equal(
+    accessControlWarning([]),
+    'access control disabled (no admins configured)',
+  );
+  assert.equal(accessControlWarning(['ou_admin']), undefined);
+});

@@ -73,6 +73,11 @@ export interface DoctorInputs {
   };
   readonly persona: { readonly env?: HomeEnv };
   readonly session: DoctorSessionInfo;
+  /** Access-control state (`admins` allowlist). */
+  readonly access?: {
+    readonly enabled: boolean;
+    readonly adminCount: number;
+  };
   readonly storage: {
     readonly mapVersion?: number;
     readonly mapWritable?: boolean;
@@ -208,6 +213,16 @@ export async function buildDoctorReport(inputs: DoctorInputs): Promise<DoctorRep
             detail: `preset=${presetText}，工具 ${toolsText}，${relativeAge(lastTurnInput.at, now)}`,
           };
         });
+  const accessItem =
+    inputs.access === undefined
+      ? undefined
+      : await safeItem('runtime', 'access', '访问控制', () => ({
+          mark: inputs.access?.enabled === true ? 'ok' : 'skip',
+          detail:
+            inputs.access?.enabled === true
+              ? `开启（${inputs.access.adminCount} 人）`
+              : '关闭（未配置 admins）',
+        }));
   const titleService = await safeItem('runtime', 'session-title', '标题服务', () => {
     if (inputs.runtime.sessionTitleService === undefined) return { mark: 'skip', detail: '不可用' };
     return inputs.runtime.sessionTitleService
@@ -330,6 +345,7 @@ export async function buildDoctorReport(inputs: DoctorInputs): Promise<DoctorRep
         tools,
         sessionTools,
         ...(lastTurnItem === undefined ? [] : [lastTurnItem]),
+        ...(accessItem === undefined ? [] : [accessItem]),
         titleService,
         agentsService,
       ],

@@ -15,7 +15,7 @@
 - **一个 scope 一个会话** — 私聊、话题、普通群按发送者隔离。
 - **标题可见** — 由第一条 prompt 生成，显示在回合卡上。
 - **每回合一张卡** — 状态与答案在同一张卡里，原地编辑；终稿不再另发一条消息。
-- **11 条命令** — `/new`、`/sessions`、`/rename`、`/resume`、`/adopt`、`/status`、`/stop`、`/doctor`、`/selfcheck`、`/persona`、`/help`。
+- **12 条命令** — `/new`、`/sessions`、`/rename`、`/resume`、`/adopt`、`/status`、`/stop`、`/doctor`、`/selfcheck`、`/persona`、`/whoami`、`/help`。
 - **人格** — `SOUL.md` 同步到 `AGENTS.md` 的标记块，启动时自动执行。
 - **可观测性** — 两阶段自检、`/doctor`、对话内的降级提示。
 
@@ -93,6 +93,7 @@ onlyBuiltDependencies:
 | `maxSendFileBytes` | `31457280` | 发送文件上限（30 MiB） |
 | `maxSendImageBytes` | `10485760` | 发送图片上限（10 MiB） |
 | `mediaRoots` | `[]` | 允许发送的目录（空=会话 cwd） |
+| `admins` | `[]` | 管理员 open_id 白名单；空=关闭访问控制 |
 
 ## 命令
 
@@ -108,6 +109,7 @@ onlyBuiltDependencies:
 | `/doctor [--json]` | 体检报告：运行时 / 飞书 / 人格 / 会话 / 存储 / 版本 |
 | `/selfcheck` | 立即重跑两阶段自检并输出逐项明细 |
 | `/persona [show\|sync]` | 查看或同步 SOUL 人格块 |
+| `/whoami` | 显示你的 open_id、当前会话与身份 |
 | `/help` | 命令表 |
 
 ## Troubleshooting（故障排查）

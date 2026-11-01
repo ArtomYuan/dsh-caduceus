@@ -108,6 +108,7 @@ interface HarnessOptions {
   readonly maxSendFileBytes?: number;
   readonly maxSendImageBytes?: number;
   readonly mediaRoots?: readonly string[];
+  readonly admins?: readonly string[];
   /** `/doctor` data collector (optional; tests inject deterministic data). */
   readonly doctorInputs?: (
     session: import('../src/doctor.js').DoctorSessionInfo,
@@ -196,6 +197,7 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
       ? {}
       : { maxSendImageBytes: options.maxSendImageBytes }),
     ...(options.mediaRoots === undefined ? {} : { mediaRoots: options.mediaRoots }),
+    ...(options.admins === undefined ? {} : { admins: options.admins }),
   };
   // Ownership sidecars must never escape into the real ~/.dsh during tests.
   const ownershipDir = join(dir, 'owners');
@@ -2764,4 +2766,69 @@ test('MEDIA：sendMedia=false → 零上传，标记原样保留在正文', asyn
     JSON.stringify(finalPatchOfCard(h.transport, processCard.messageId)),
     /MEDIA:/,
   );
+});
+
+test('访问控制：admins=[] 时任意发送者放行', async (t) => {
+  const h = makeHarness(t, { admins: [] });
+  await h.bridge.handleInbound(inbound('hi', { senderOpenId: 'ou_anyone' }));
+  assert.equal(liveAgent(h).followups.length, 1);
+});
+
+test('访问控制：非管理员被拒，不建会话/不调 agent/无卡片；/help 与 /whoami 放行', async (t) => {
+  const h = makeHarness(t, { admins: ['ou_admin'] });
+  const guest = { senderOpenId: 'ou_guest' };
+
+  await h.bridge.handleInbound(inbound('/stop', guest));
+  assert.ok(recordedTexts(h.transport).some((text) => text.includes('访客无执行权限')));
+  assert.equal(h.agents.live.size, 0);
+  assert.equal(h.agents.created.length, 0);
+  assert.equal(recordedCards(h.transport).length, 0);
+  assert.ok(
+    h.logger.entries.some(
+      (entry) =>
+        entry.level === 'info' &&
+        entry.message === 'gate drop: not-admin sender=ou_guest',
+    ),
+  );
+
+  await h.bridge.handleInbound(inbound('普通消息', guest));
+  assert.equal(h.agents.live.size, 0);
+  assert.equal(recordedCards(h.transport).length, 0);
+
+  await h.bridge.handleInbound(inbound('/help', guest));
+  assert.ok(recordedTexts(h.transport).some((text) => text.includes('/whoami')));
+  await h.bridge.handleInbound(inbound('/whoami', guest));
+  const whoami = recordedTexts(h.transport).at(-1) ?? '';
+  assert.match(whoami, /你的 open_id：ou_guest/);
+  assert.match(whoami, /当前会话：oc_chat/);
+  assert.match(whoami, /身份：访客/);
+  assert.equal(h.agents.live.size, 0);
+});
+
+test('访问控制：管理员放行；/whoami 显示管理员与话题', async (t) => {
+  const h = makeHarness(t, { admins: ['ou_admin'], botOpenId: 'ou_bot', prebindTopic: true });
+  await h.bridge.handleInbound(
+    inbound('/whoami', {
+      chatType: 'group',
+      chatId: 'oc_g',
+      threadId: 'omt_t',
+      senderOpenId: 'ou_admin',
+      mentions: ['ou_bot'],
+    }),
+  );
+  const whoami = recordedTexts(h.transport).at(-1) ?? '';
+  assert.match(whoami, /你的 open_id：ou_admin/);
+  assert.match(whoami, /当前会话：oc_g\[话题 omt_t\]/);
+  assert.match(whoami, /身份：管理员/);
+
+  await h.bridge.handleInbound(
+    inbound('hi', {
+      chatType: 'group',
+      chatId: 'oc_g',
+      threadId: 'omt_t',
+      senderOpenId: 'ou_admin',
+      mentions: ['ou_bot'],
+    }),
+  );
+  assert.equal(liveAgent(h).followups.length, 1);
 });

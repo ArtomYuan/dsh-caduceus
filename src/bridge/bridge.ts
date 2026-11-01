@@ -21,7 +21,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { planSlashLine, type OwnedCommand } from '../commands/dispatch.js';
-import { helpText } from '../commands/parse.js';
+import { helpText, parseCommand } from '../commands/parse.js';
 import { evaluateGate, logGate } from '../gate.js';
 import { silentLogger, type LoggerLike } from '../logger.js';
 import {
@@ -261,6 +261,16 @@ export class Bridge {
       }
     }
     if (!decision.accept) return;
+    if (!this.#isAdmin(message.senderOpenId) && !this.#isPublicCommand(message.text)) {
+      const state = this.#stateFor(message);
+      state.lastInboundMessageId = message.messageId;
+      state.ownerOpenId = message.senderOpenId;
+      this.#logger.info(
+        `gate drop: not-admin sender=${message.senderOpenId.slice(0, 12) || '-'}`,
+      );
+      await this.#replyText(state, '访客无执行权限。');
+      return;
+    }
     await this.#queue.run(
       scopeKey(
         message.chatType,
@@ -270,6 +280,21 @@ export class Bridge {
         this.#config.groupSessionsPerUser,
       ),
       () => this.#processInbound(message),
+    );
+  }
+
+  #isAdmin(openId: string): boolean {
+    const admins = this.#config.admins ?? [];
+    return admins.length === 0 || admins.includes(openId);
+  }
+
+  /** `/help` and `/whoami` are safe for any sender (no execution, no session). */
+  #isPublicCommand(text: string): boolean {
+    const command = parseCommand(text);
+    return (
+      command.kind === 'help' ||
+      command.kind === 'whoami' ||
+      (command.kind === 'usage' && (command.command === 'help' || command.command === 'whoami'))
     );
   }
 
@@ -519,6 +544,17 @@ export class Bridge {
         }
         const result = await handler(command.action);
         await this.#replyText(state, result.text);
+        return;
+      }
+      case 'whoami': {
+        const openId = state.ownerOpenId ?? '';
+        const identity = this.#isAdmin(openId) ? '管理员' : '访客';
+        const topic =
+          state.threadId === undefined ? '' : `[话题 ${state.threadId}]`;
+        await this.#replyText(
+          state,
+          `你的 open_id：${openId}\n当前会话：${state.chatId}${topic}\n身份：${identity}`,
+        );
         return;
       }
       case 'help': {
