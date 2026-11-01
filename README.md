@@ -78,6 +78,7 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 | `/rename <标题>` | 重命名当前会话的标题（标题非法时回一句人话） |
 | `/resume [id\|尾号]` | 无参恢复本 scope 上一条；带参可按完整 sessionId 或 ≥8 位不歧义**尾号**在本 chat 所有 scope 的**当前 + 全量 history** 中恢复；命中后该 id 成为当前并置于 history 首位（命中多条给歧义提示） |
 | `/adopt <id\|尾号>` | 把一条无归属的会话显式收养到**当前 scopeKey**（加入 history 并设为当前）；已在其他 scope 下会提示位置、歧义列候选、零命中给提示 |
+| `/selfcheck` | 立即重跑启动自检，逐项输出 `ok/fail/skip` 与详情 |
 | `/stop` | 中断当前正在运行的一轮（`cancel({kind:'user'})`） |
 | `/status` | 显示本会话状态、步数、工具数、起止时间与最近事件 |
 | `/persona [show\|sync]` | 查看或同步 SOUL 人格块 |
@@ -117,6 +118,7 @@ dsh plugin --profile web add /home/artom/agent-workspace/dsh/worktrees/dsh-caduc
 - 门禁每条判定一行：`gate accept: p2p|mentioned …` / `gate drop: no-mention|bot-sender|not-allowed-chat|not-allowed-user|empty-text …`，附 `chat=`/`thread=`/`sender=` 前 12 位；
 - 命令分发：`command: /status`、`command: unknown passthrough /xxx`、`command: parse-fail <原文前 40>`；
 - 归属补录：启动一行 `backfill: scanned=N adopted=M skipped=K`；
+- 启动自检：全过打 `selfcheck: ok preset=<id> tools=<n> persona=<bytes>B`，任一失败打 `selfcheck: FAIL <items>`；`/status` 顶部与 `/selfcheck` 明细可见；
 - 会话键：`scope: kind=p2p|topic|group-user|group-shared key=<前 16 位> session=<后 8 位>`。
 
 ## 存储

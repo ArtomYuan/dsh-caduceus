@@ -1,0 +1,304 @@
+/**
+ * Startup and per-session self-check.
+ *
+ * Three same-shaped incidents (sessionTitle, agentPresets, status card) were
+ * silent degradations: one warn line, then weeks of a broken surface. This
+ * module turns those degradations into visible `ok | fail | skip` items.
+ *
+ * Stage A (after plugin ready, non-blocking):
+ *   preset:service / instructions:block / persona:fresh / tools:service
+ * Stage B (after each successful create/resume):
+ *   preset:applied / tools:count
+ *
+ * Rules:
+ * - `skip` is used when an API is genuinely unavailable; never report a fake
+ *   `fail` for it.
+ * - exceptions become `skip` (with the reason), they never throw to startup.
+ * - logs: one `selfcheck: ok ...` line when everything is ok, or one
+ *   `selfcheck: FAIL <items>` line when anything fails. Re-checks only log when
+ *   the fail set / status changes.
+ *
+ * @module @artomyuan/dsh-caduceus/selfcheck
+ */
+import { readFile } from 'node:fs/promises';
+
+import type { AgentPresetsLike } from './bridge/types.js';
+import { defaultAgentsFile, defaultSoulCandidatePaths, type HomeEnv } from './home.js';
+import { silentLogger, type LoggerLike } from './logger.js';
+import { inspectSoulBlock } from './persona/blocks.js';
+
+export type SelfCheckStatus = 'ok' | 'fail' | 'skip';
+
+export interface SelfCheckItem {
+  readonly id: string;
+  readonly status: SelfCheckStatus;
+  readonly detail: string;
+  /** Human consequence shown in the one-line FAIL summary. */
+  readonly consequence?: string;
+}
+
+export interface SelfCheckReport {
+  readonly stage: 'A' | 'B';
+  readonly items: readonly SelfCheckItem[];
+}
+
+export interface SelfCheckOptions {
+  readonly env?: HomeEnv;
+  readonly logger?: LoggerLike;
+  /** `ctx.get('agentPresets')` (lazy, may be undefined early). */
+  readonly getAgentPresets?: () => AgentPresetsLike | undefined;
+  /** `ctx.get('tools')` (lazy). */
+  readonly getTools?: () => unknown;
+  /** Count the tools visible to one agent context; undefined = API unavailable. */
+  readonly toolCount?: (agentCtx: unknown) => number | undefined;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isNotFound(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
+/** Normalize a SOUL body exactly like the sync path does. */
+export function normalizeSoulBody(text: string): string {
+  return text.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').trim();
+}
+
+function item(
+  id: string,
+  status: SelfCheckStatus,
+  detail: string,
+  consequence?: string,
+): SelfCheckItem {
+  return { id, status, detail, ...(consequence === undefined ? {} : { consequence }) };
+}
+
+/** The combined latest report (stage A then stage B). */
+export function combineReports(
+  a: SelfCheckReport | undefined,
+  b: SelfCheckReport | undefined,
+): readonly SelfCheckItem[] {
+  return [...(a?.items ?? []), ...(b?.items ?? [])];
+}
+
+/** Format the one-line FAIL summary. */
+export function failLine(items: readonly SelfCheckItem[]): string {
+  const failed = items.filter((entry) => entry.status === 'fail');
+  return `selfcheck: FAIL ${failed
+    .map((entry) => `${entry.id}(fail): ${entry.consequence ?? entry.detail}`)
+    .join(', ')}`;
+}
+
+/** Format the one-line OK summary. */
+export function okLine(preset: string, tools: number, personaBytes: number): string {
+  return `selfcheck: ok preset=${preset} tools=${tools} persona=${personaBytes}B`;
+}
+
+/** Format one detail line for `/selfcheck`. */
+export function detailLine(entry: SelfCheckItem): string {
+  return `${entry.id}: ${entry.status} — ${entry.detail}`;
+}
+
+/** Run both stages, keep the latest state, and emit de-duplicated log lines. */
+export class SelfChecker {
+  readonly #options: SelfCheckOptions;
+  #stageA: SelfCheckReport | undefined;
+  #stageB: SelfCheckReport | undefined;
+  #personaBytes = 0;
+  #lastLogged: string | undefined;
+  #lastAgentCtx: unknown;
+
+  constructor(options: SelfCheckOptions = {}) {
+    this.#options = options;
+  }
+
+  /** Stage A: services + instruction block + persona freshness. */
+  async runStageA(): Promise<SelfCheckReport> {
+    const items: SelfCheckItem[] = [];
+    items.push(this.#checkPresetService());
+    const block = await this.#checkInstructionsBlock();
+    items.push(block.blockItem);
+    items.push(await this.#checkPersonaFresh(block));
+    items.push(this.#checkToolsService());
+    const report: SelfCheckReport = { stage: 'A', items };
+    this.#stageA = report;
+    this.#maybeLog();
+    return report;
+  }
+
+  /** Stage B: applied preset + tool count for one created/resumed agent. */
+  async runStageB(agentCtx?: unknown): Promise<SelfCheckReport> {
+    if (agentCtx !== undefined) this.#lastAgentCtx = agentCtx;
+    const items: SelfCheckItem[] = [this.#checkPresetApplied(), this.#checkToolsCount()];
+    const report: SelfCheckReport = { stage: 'B', items };
+    this.#stageB = report;
+    this.#maybeLog();
+    return report;
+  }
+
+  /** `/selfcheck`: rerun both stages (stage B only if an agent context exists). */
+  async runAll(): Promise<SelfCheckReport> {
+    await this.runStageA();
+    await this.runStageB();
+    return { stage: 'B', items: combineReports(this.#stageA, this.#stageB) };
+  }
+
+  /** Combined report for display. */
+  report(): readonly SelfCheckItem[] {
+    return combineReports(this.#stageA, this.#stageB);
+  }
+
+  /** `/status` first line. */
+  statusLine(): string {
+    const items = this.report();
+    const failed = items.filter((entry) => entry.status === 'fail').map((entry) => entry.id);
+    if (failed.length > 0) return `自检 ✗ ${failed.join(', ')}`;
+    if (this.#stageA === undefined || this.#stageB === undefined) return '自检 …';
+    if (items.every((entry) => entry.status === 'ok')) return '自检 ✓';
+    return '自检 …';
+  }
+
+  /** `/selfcheck` full detail, one line per item. */
+  detailText(): string {
+    const items = this.report();
+    if (items.length === 0) return '自检尚未运行。';
+    return items.map(detailLine).join('\n');
+  }
+
+  #checkPresetService(): SelfCheckItem {
+    try {
+      const service = this.#options.getAgentPresets?.();
+      if (service === undefined) return item('preset:service', 'fail', 'agentPresets 服务未注册');
+      return item('preset:service', 'ok', '服务可用');
+    } catch (error) {
+      return item('preset:service', 'skip', `检查失败：${errorMessage(error)}`);
+    }
+  }
+
+  async #checkInstructionsBlock(): Promise<{
+    blockItem: SelfCheckItem;
+    content?: string;
+  }> {
+    const target = defaultAgentsFile(this.#options.env);
+    let text: string;
+    try {
+      text = await readFile(target, 'utf8');
+    } catch (error) {
+      if (isNotFound(error)) {
+        return { blockItem: item('instructions:block', 'fail', `AGENTS.md 不存在（${target}）`) };
+      }
+      return { blockItem: item('instructions:block', 'skip', `读取失败：${errorMessage(error)}`) };
+    }
+    const inspection = inspectSoulBlock(text);
+    if (inspection.status === 'absent') {
+      return { blockItem: item('instructions:block', 'fail', `没有人格块标记（${target}）`) };
+    }
+    if (inspection.status === 'malformed') {
+      return { blockItem: item('instructions:block', 'fail', `人格块损坏：${inspection.reason}`) };
+    }
+    const bytes = Buffer.byteLength(inspection.content.trim(), 'utf8');
+    return {
+      blockItem: item('instructions:block', 'ok', `人格块存在（${bytes}B，${target}）`),
+      content: inspection.content,
+    };
+  }
+
+  async #checkPersonaFresh(block: {
+    blockItem: SelfCheckItem;
+    content?: string;
+  }): Promise<SelfCheckItem> {
+    if (block.blockItem.status !== 'ok' || block.content === undefined) {
+      return item('persona:fresh', 'skip', '指令块不可用');
+    }
+    for (const candidate of defaultSoulCandidatePaths(this.#options.env)) {
+      try {
+        const soul = normalizeSoulBody(await readFile(candidate, 'utf8'));
+        this.#personaBytes = Buffer.byteLength(soul, 'utf8');
+        if (block.content.trim() === soul) {
+          return item('persona:fresh', 'ok', `与 ${candidate} 一致（${this.#personaBytes}B）`);
+        }
+        return item(
+          'persona:fresh',
+          'fail',
+          `与 ${candidate} 不一致，发 /persona sync 或等待自动同步`,
+          '人格块未同步到 AGENTS.md',
+        );
+      } catch (error) {
+        if (isNotFound(error)) continue;
+        return item('persona:fresh', 'skip', `SOUL 读取失败：${errorMessage(error)}`);
+      }
+    }
+    return item('persona:fresh', 'skip', 'SOUL 源缺失');
+  }
+
+  #checkToolsService(): SelfCheckItem {
+    try {
+      const service = this.#options.getTools?.();
+      if (service === undefined) return item('tools:service', 'fail', 'tools 服务未注册');
+      return item('tools:service', 'ok', '服务可用');
+    } catch (error) {
+      return item('tools:service', 'skip', `检查失败：${errorMessage(error)}`);
+    }
+  }
+
+  #checkPresetApplied(): SelfCheckItem {
+    const presets = this.#options.getAgentPresets?.();
+    if (presets === undefined) return item('preset:applied', 'skip', 'agentPresets 服务未就绪');
+    try {
+      const preset = presets.composedPreset(this.#lastAgentCtx);
+      if (preset === undefined || preset.length === 0) {
+        return item(
+          'preset:applied',
+          'fail',
+          'agent 未挂载 preset',
+          'agent 无工具无人格',
+        );
+      }
+      return item('preset:applied', 'ok', `preset=${preset}`);
+    } catch (error) {
+      return item('preset:applied', 'skip', `检查失败：${errorMessage(error)}`);
+    }
+  }
+
+  #checkToolsCount(): SelfCheckItem {
+    if (this.#options.toolCount === undefined) {
+      return item('tools:count', 'skip', '工具计数接口未接线');
+    }
+    try {
+      const count = this.#options.toolCount(this.#lastAgentCtx);
+      if (count === undefined) return item('tools:count', 'skip', '工具数不可用');
+      if (count === 0) {
+        return item('tools:count', 'fail', 'agent 无可用工具', 'agent 无法执行任何操作');
+      }
+      return item('tools:count', 'ok', `tools=${count}`);
+    } catch (error) {
+      return item('tools:count', 'skip', `检查失败：${errorMessage(error)}`);
+    }
+  }
+
+  #maybeLog(): void {
+    const logger = this.#options.logger ?? silentLogger();
+    const items = this.report();
+    const failed = items.filter((entry) => entry.status === 'fail');
+    if (failed.length > 0) {
+      const key = `FAIL:${failed.map((entry) => entry.id).join(',')}`;
+      if (key === this.#lastLogged) return;
+      this.#lastLogged = key;
+      logger.warn(failLine(items));
+      return;
+    }
+    if (this.#stageA === undefined || this.#stageB === undefined) return;
+    if (!items.every((entry) => entry.status === 'ok')) return;
+    const presetItem = items.find((entry) => entry.id === 'preset:applied');
+    const toolsItem = items.find((entry) => entry.id === 'tools:count');
+    const preset = presetItem?.detail.replace(/^preset=/, '') ?? 'unknown';
+    const tools = Number(toolsItem?.detail.replace(/^tools=/, '') ?? 0);
+    const key = `ok:${preset}:${tools}:${this.#personaBytes}`;
+    if (key === this.#lastLogged) return;
+    this.#lastLogged = key;
+    logger.info(okLine(preset, tools, this.#personaBytes));
+  }
+}

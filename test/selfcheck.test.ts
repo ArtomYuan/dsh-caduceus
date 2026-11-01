@@ -1,0 +1,213 @@
+/**
+ * Self-check: stage A services/instructions/persona, stage B applied preset and
+ * tool count. All file paths live in mkdtemp; no real ~/.dsh access.
+ */
+import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import test, { type TestContext } from 'node:test';
+
+import { syncSoul } from '../src/persona/blocks.js';
+import { SelfChecker } from '../src/selfcheck.js';
+
+function makeDir(t: TestContext): string {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-caduceus-selfcheck-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+function homes(dir: string): { dshHome: string; agentsHome: string } {
+  const dshHome = join(dir, 'dsh-home');
+  const agentsHome = join(dir, 'agents-home');
+  mkdirSync(dshHome, { recursive: true });
+  mkdirSync(agentsHome, { recursive: true });
+  return { dshHome, agentsHome };
+}
+
+/** Write a fresh SOUL + synced AGENTS block; returns env/paths. */
+async function syncedHome(dir: string): Promise<{
+  env: { DSH_HOME: string; DSH_AGENTS_HOME: string };
+  target: string;
+}> {
+  const { dshHome, agentsHome } = homes(dir);
+  const env = { DSH_HOME: dshHome, DSH_AGENTS_HOME: agentsHome };
+  writeFileSync(join(dshHome, 'SOUL.md'), '自检人格\n', 'utf8');
+  await syncSoul({ env });
+  return { env, target: join(dshHome, 'AGENTS.md') };
+}
+
+function recordingLogger(): {
+  logger: { info(message: string): void; warn(message: string): void; error(): void; debug(): void };
+  lines: string[];
+  warnings: string[];
+} {
+  const lines: string[] = [];
+  const warnings: string[] = [];
+  return {
+    logger: {
+      info: (message: string) => lines.push(message),
+      warn: (message: string) => warnings.push(message),
+      error: () => {},
+      debug: () => {},
+    },
+    lines,
+    warnings,
+  };
+}
+
+const presetsOk = {
+  async mount(_ctx: unknown, id?: string) {
+    return { id };
+  },
+  composedPreset() {
+    return 'standard';
+  },
+};
+
+test('阶段 A 全过 + 阶段 B 全过：只打一行 selfcheck: ok', async (t) => {
+  const dir = makeDir(t);
+  const { env } = await syncedHome(dir);
+  const { logger, lines, warnings } = recordingLogger();
+  const checker = new SelfChecker({
+    env,
+    logger,
+    getAgentPresets: () => presetsOk,
+    getTools: () => ({}),
+    toolCount: () => 3,
+  });
+
+  const a = await checker.runStageA();
+  assert.deepEqual(
+    a.items.map((entry) => `${entry.id}:${entry.status}`),
+    ['preset:service:ok', 'instructions:block:ok', 'persona:fresh:ok', 'tools:service:ok'],
+  );
+  assert.deepEqual(lines, [], 'stage A alone defers the ok line');
+  assert.equal(checker.statusLine(), '自检 …', 'stage B has not run yet');
+
+  const b = await checker.runStageB({ sessionId: 's1' });
+  assert.deepEqual(
+    b.items.map((entry) => `${entry.id}:${entry.status}`),
+    ['preset:applied:ok', 'tools:count:ok'],
+  );
+  assert.equal(checker.statusLine(), '自检 ✓');
+  assert.deepEqual(lines, [
+    `selfcheck: ok preset=standard tools=3 persona=${Buffer.byteLength('自检人格', 'utf8')}B`,
+  ]);
+  assert.deepEqual(warnings, []);
+});
+
+test('阶段 A：指令块缺失 / 多对 / 人格不一致 → 对应 fail，且不抛错', async (t) => {
+  const dir = makeDir(t);
+  const { dshHome, agentsHome } = homes(dir);
+  const env = { DSH_HOME: dshHome, DSH_AGENTS_HOME: agentsHome };
+  writeFileSync(join(dshHome, 'SOUL.md'), '人格\n', 'utf8');
+
+  const missing = new SelfChecker({ env, getAgentPresets: () => presetsOk, getTools: () => ({}) });
+  const aMissing = await missing.runStageA();
+  assert.equal(
+    aMissing.items.find((entry) => entry.id === 'instructions:block')?.status,
+    'fail',
+  );
+  assert.equal(aMissing.items.find((entry) => entry.id === 'persona:fresh')?.status, 'skip');
+
+  writeFileSync(
+    join(dshHome, 'AGENTS.md'),
+    '<!-- dsh-caduceus:soul:start -->\nA\n<!-- dsh-caduceus:soul:end -->\n<!-- dsh-caduceus:soul:start -->\nB\n<!-- dsh-caduceus:soul:end -->\n',
+    'utf8',
+  );
+  const multiple = await missing.runStageA();
+  assert.equal(
+    multiple.items.find((entry) => entry.id === 'instructions:block')?.status,
+    'fail',
+  );
+
+  writeFileSync(join(dshHome, 'AGENTS.md'), '<!-- dsh-caduceus:soul:start -->\n旧\n<!-- dsh-caduceus:soul:end -->\n', 'utf8');
+  const stale = await missing.runStageA();
+  assert.equal(stale.items.find((entry) => entry.id === 'persona:fresh')?.status, 'fail');
+  assert.match(
+    stale.items.find((entry) => entry.id === 'persona:fresh')?.detail ?? '',
+    /不一致/,
+  );
+});
+
+test('阶段 A：agentPresets / tools 服务缺失 → fail（不是 skip）', async (t) => {
+  const dir = makeDir(t);
+  const { env } = await syncedHome(dir);
+  const checker = new SelfChecker({
+    env,
+    getAgentPresets: () => undefined,
+    getTools: () => undefined,
+  });
+  const report = await checker.runStageA();
+  const status = new Map(report.items.map((entry) => [entry.id, entry.status]));
+  assert.equal(status.get('preset:service'), 'fail');
+  assert.equal(status.get('tools:service'), 'fail');
+  assert.equal(status.get('instructions:block'), 'ok');
+});
+
+test('阶段 B：composedPreset 为空 → preset:applied fail，/status 显示 ✗', async (t) => {
+  const dir = makeDir(t);
+  const { env } = await syncedHome(dir);
+  const checker = new SelfChecker({
+    env,
+    getAgentPresets: () => ({ async mount() {}, composedPreset: () => undefined }),
+    getTools: () => ({}),
+    toolCount: () => 3,
+  });
+  await checker.runStageA();
+  const report = await checker.runStageB({});
+  assert.equal(report.items.find((entry) => entry.id === 'preset:applied')?.status, 'fail');
+  assert.match(checker.statusLine(), /^自检 ✗ preset:applied/);
+});
+
+test('阶段 B：工具数 0 → tools:count fail；连续两次同 fail 只 warn 一次', async (t) => {
+  const dir = makeDir(t);
+  const { env } = await syncedHome(dir);
+  const { logger, warnings } = recordingLogger();
+  const checker = new SelfChecker({
+    env,
+    logger,
+    getAgentPresets: () => presetsOk,
+    getTools: () => ({}),
+    toolCount: () => 0,
+  });
+  await checker.runStageA();
+  await checker.runStageB({});
+  await checker.runStageB({});
+  assert.equal(checker.statusLine(), '自检 ✗ tools:count');
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0] as string, /^selfcheck: FAIL tools:count\(fail\)/);
+});
+
+test('阶段 B：全 ok 连续两次只打一次 ok 日志；fail→ok 时再打', async (t) => {
+  const dir = makeDir(t);
+  const { env } = await syncedHome(dir);
+  const { logger, lines } = recordingLogger();
+  let composed: string | undefined;
+  const checker = new SelfChecker({
+    env,
+    logger,
+    getAgentPresets: () => ({ async mount() {}, composedPreset: () => composed }),
+    getTools: () => ({}),
+    toolCount: () => 2,
+  });
+  await checker.runStageA();
+  composed = 'standard';
+  await checker.runStageB({});
+  await checker.runStageB({});
+  assert.equal(lines.filter((line) => line.startsWith('selfcheck: ok')).length, 1);
+});
+
+test('阶段 B：API 不可用（toolCount 未接线）→ skip，不假报 fail', async (t) => {
+  const dir = makeDir(t);
+  const { env } = await syncedHome(dir);
+  const checker = new SelfChecker({
+    env,
+    getAgentPresets: () => presetsOk,
+    getTools: () => ({}),
+  });
+  const report = await checker.runStageB({});
+  assert.equal(report.items.find((entry) => entry.id === 'tools:count')?.status, 'skip');
+  assert.match(checker.statusLine(), /^自检 …/);
+});

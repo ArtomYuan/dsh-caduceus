@@ -1,7 +1,7 @@
 /**
  * Slash-command parsing for the Feishu surface. Pure: no I/O, no side effects.
  *
- * Nine commands are owned by dsh-caduceus: `/new`, `/sessions`, `/rename`,
+ * Ten commands are owned by dsh-caduceus: `/new`, `/sessions`, `/rename`,
  * `/resume`, `/adopt`, `/stop`, `/status`, `/persona`, `/help`. Everything else — unknown slash
  * commands such as `/compact` and all ordinary user text — comes back as
  * `{ kind: 'passthrough', raw }` so the caller can forward it unchanged to the
@@ -11,7 +11,7 @@
  */
 
 /** Commands dsh-caduceus owns. Keep in sync with README's command table. */
-export const COMMAND_NAMES = ['new', 'sessions', 'rename', 'resume', 'adopt', 'stop', 'status', 'persona', 'help'] as const;
+export const COMMAND_NAMES = ['new', 'sessions', 'rename', 'resume', 'adopt', 'selfcheck', 'stop', 'status', 'persona', 'help'] as const;
 
 export type CommandName = (typeof COMMAND_NAMES)[number];
 
@@ -29,6 +29,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   { name: 'rename', usage: '/rename <标题>', description: '重命名当前会话的标题' },
   { name: 'resume', usage: '/resume [id|前缀]', description: '恢复上一条或按完整 id / 前缀（≥8 位）恢复会话' },
   { name: 'adopt', usage: '/adopt <id|尾号>', description: '把一条无归属的会话显式收养到当前 scope' },
+  { name: 'selfcheck', usage: '/selfcheck', description: '立即重跑启动自检并输出明细' },
   { name: 'stop', usage: '/stop', description: '中断当前正在运行的一轮' },
   { name: 'status', usage: '/status', description: '显示本会话的运行状态、步数与起止时间' },
   { name: 'persona', usage: '/persona [show|sync]', description: '查看或同步 SOUL 人格块' },
@@ -43,6 +44,7 @@ export type ParsedCommand =
   | { readonly kind: 'rename'; readonly title: string }
   | { readonly kind: 'resume'; readonly sessionId?: string }
   | { readonly kind: 'adopt'; readonly sessionId: string }
+  | { readonly kind: 'selfcheck' }
   | { readonly kind: 'stop' }
   | { readonly kind: 'status' }
   | { readonly kind: 'persona'; readonly action: PersonaAction }
@@ -100,6 +102,8 @@ export function parseCommand(raw: string): ParsedCommand {
       if (parts.length > 1) return usageResult('adopt', '用法：/adopt <id|尾号>');
       return { kind: 'adopt', sessionId: parts[0] as string };
     }
+    case 'selfcheck':
+      return rest === '' ? { kind: 'selfcheck' } : usageResult('selfcheck', '/selfcheck 不接受参数');
     case 'persona': {
       if (rest === '') return { kind: 'persona', action: 'show' };
       const action = rest.toLowerCase();

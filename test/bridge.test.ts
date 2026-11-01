@@ -74,6 +74,8 @@ interface HarnessOptions {
   readonly agentPreset?: string;
   /** Persistent session-header preset lookup (simulates a non-legacy header). */
   readonly sessionPresetLookup?: (sessionId: string) => string | undefined;
+  /** Self-check controller (for /status and /selfcheck tests). */
+  readonly selfCheck?: import('../src/selfcheck.js').SelfChecker;
 }
 
 interface Harness {
@@ -175,6 +177,7 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
     ...(options.sessionPresetLookup === undefined
       ? {}
       : { sessionPresetLookup: options.sessionPresetLookup }),
+    ...(options.selfCheck === undefined ? {} : { selfCheck: options.selfCheck }),
   });
   return { dir, store, presets: agentPresets, transport, agents, clock, logger, titles, bridge };
 }
@@ -1674,4 +1677,64 @@ test('agentPresets 解析成功后复用缓存：第二次 create 不再重新�
     1,
     'resolution is logged once',
   );
+});
+
+test('/status 顶部显示自检行；/selfcheck 输出六项明细', async (t) => {
+  const { SelfChecker } = await import('../src/selfcheck.js');
+  const { syncSoul } = await import('../src/persona/blocks.js');
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-caduceus-selfcheck-bridge-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  mkdirSync(join(dir, 'agents-home'), { recursive: true });
+  const env = { DSH_HOME: dir, DSH_AGENTS_HOME: join(dir, 'agents-home') };
+  writeFileSync(join(dir, 'SOUL.md'), '人格\n', 'utf8');
+  await syncSoul({ env });
+
+  let presetsHolder: FakeAgentPresets | undefined;
+  const checker = new SelfChecker({
+    env,
+    getAgentPresets: () => presetsHolder,
+    getTools: () => ({}),
+    toolCount: () => 3,
+  });
+  const h = makeHarness(t, {
+    selfCheck: checker,
+    agentPresetsProvider: () => presetsHolder,
+  });
+  presetsHolder = new FakeAgentPresets();
+  presetsHolder.composedPresetValue = 'standard';
+  await checker.runStageA();
+
+  await h.bridge.handleInbound(inbound('hi'));
+  await h.bridge.handleInbound(inbound('/status'));
+  assert.match(recordedTexts(h.transport).at(-1) ?? '', /^自检 ✓/);
+
+  await h.bridge.handleInbound(inbound('/selfcheck'));
+  const detail = recordedTexts(h.transport).at(-1) ?? '';
+  for (const id of [
+    'preset:service',
+    'instructions:block',
+    'persona:fresh',
+    'tools:service',
+    'preset:applied',
+    'tools:count',
+  ]) {
+    assert.match(detail, new RegExp(`${id}: ok`), detail);
+  }
+});
+
+test('/status 在 preset:applied 失败时显示自检 ✗', async (t) => {
+  const { SelfChecker } = await import('../src/selfcheck.js');
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-caduceus-selfcheck-bridge-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const checker = new SelfChecker({
+    env: { DSH_HOME: dir, DSH_AGENTS_HOME: join(dir, 'agents') },
+    getAgentPresets: () => ({ async mount() {}, composedPreset: () => undefined }),
+    getTools: () => ({}),
+    toolCount: () => 1,
+  });
+  const h = makeHarness(t, { selfCheck: checker });
+  await h.bridge.handleInbound(inbound('hi'));
+  await h.bridge.handleInbound(inbound('/status'));
+  assert.match(recordedTexts(h.transport).at(-1) ?? '', /^自检 ✗ preset:applied/);
 });

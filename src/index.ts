@@ -31,6 +31,7 @@ import { adaptLogger, teeLoggers, type LoggerLike } from './logger.js';
 import { formatStartupLine } from './observability.js';
 import { autoSyncPersona } from './persona/auto-sync.js';
 import { runPersonaCommand } from './persona/command.js';
+import { SelfChecker } from './selfcheck.js';
 import { hasSessionLog } from './session-files.js';
 import { SessionStore } from './session-key.js';
 import { createLarkFeishuApi } from './transport/lark.js';
@@ -143,6 +144,20 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
     }),
   );
   logger.info(`agent preset=${resolved.agentPreset}`);
+  const selfCheck = new SelfChecker({
+    logger,
+    getAgentPresets: () => ctx.get('agentPresets') as AgentPresetsLike | undefined,
+    getTools: () => ctx.get('tools'),
+    toolCount: (agentCtx) => {
+      try {
+        const scoped = agentCtx as { get?: (name: string) => unknown };
+        const tools = scoped.get?.('tools') as { schemas?: () => readonly unknown[] } | undefined;
+        return tools?.schemas?.().length;
+      } catch {
+        return undefined;
+      }
+    },
+  });
   const sessionMap = new SessionStore();
   sessionMap.load();
   // Ownership backfill is read-only for dsh sessions (session-map writes only),
@@ -150,6 +165,8 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
   backfillSessionOwnership(sessionMap, { logger });
   const personaAutoSync = (): Promise<void> =>
     autoSyncPersona({ enabled: resolved.personaAutoSync, logger });
+  // Stage A is non-blocking: startup never waits for the self-check.
+  void selfCheck.runStageA();
 
   if (resolved.credentials === undefined) {
     // Still keep the projection fresh in idle/no-credentials mode.
@@ -176,6 +193,7 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
     sessionIdsProvider: () => scanSessionDirs().map((entry) => entry.sessionId),
     // Lazy per use: the preset registry can register AFTER this plugin mounts.
     agentPresetsProvider: () => ctx.get('agentPresets') as AgentPresetsLike | undefined,
+    selfCheck,
     sessionPresetLookup: (sessionId) =>
       (ctx.get('sessions') as SessionsServiceLike | undefined)?.get(sessionId)?.header
         ?.agentPreset,

@@ -115,6 +115,8 @@ export interface BridgeOptions {
   readonly persona?: (action: 'show' | 'sync') => Promise<PersonaCommandResult>;
   /** Time source for elapsed rendering; defaults to the clock. */
   readonly now?: () => number;
+  /** Optional self-check controller (`/status`, `/selfcheck`, stage B). */
+  readonly selfCheck?: import('../selfcheck.js').SelfChecker;
   /** Owners sidecar directory (tests); defaults to `<DSH_HOME>/caduceus/owners`. */
   readonly ownershipDir?: string;
   /** Discover caduceus session ids on disk for `/adopt` (tests inject; default []). */

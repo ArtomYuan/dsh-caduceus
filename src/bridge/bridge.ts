@@ -132,6 +132,8 @@ export class Bridge {
   #agentPresetsCache: AgentPresetsLike | undefined;
   #agentPresetsLogged = false;
   readonly #sessionPresetLookup: ((sessionId: string) => string | undefined) | undefined;
+  readonly #selfCheck: import('../selfcheck.js').SelfChecker | undefined;
+  readonly #agentCtxBySession = new Map<string, unknown>();
   /** Session ids whose preset mount failed (shown as `（preset 未挂载）`). */
   readonly #presetFailures = new Set<string>();
   readonly #sessionTitleProvider: () => SessionTitleLike | undefined;
@@ -156,6 +158,7 @@ export class Bridge {
       options.agentPresetsProvider ??
       (options.agentPresets === undefined ? undefined : () => options.agentPresets);
     this.#sessionPresetLookup = options.sessionPresetLookup;
+    this.#selfCheck = options.selfCheck;
     const provider =
       options.sessionTitleProvider ??
       (options.sessionTitle === undefined ? undefined : () => options.sessionTitle);
@@ -350,12 +353,13 @@ export class Bridge {
       }
       case 'status': {
         const title = this.#titleOf(state);
+        const selfLine = this.#selfCheck?.statusLine();
         await this.#replyText(
           state,
-          statusText(state.status.get(), {
+          `${selfLine === undefined ? '' : `${selfLine}\n`}${statusText(state.status.get(), {
             ...(title === undefined ? {} : { title }),
             ...(state.sessionId === undefined ? {} : { sessionId: state.sessionId }),
-          }),
+          })}`,
         );
         return;
       }
@@ -373,6 +377,16 @@ export class Bridge {
       }
       case 'adopt': {
         await this.#adopt(state, command.sessionId);
+        return;
+      }
+      case 'selfcheck': {
+        const checker = this.#options.selfCheck;
+        if (checker === undefined) {
+          await this.#replyText(state, '自检未接线。');
+          return;
+        }
+        await checker.runAll();
+        await this.#replyText(state, checker.detailText());
         return;
       }
       case 'persona': {
@@ -826,6 +840,8 @@ export class Bridge {
    * so the card state line can show `（preset 未挂载）`.
    */
   async #mountPreset(sessionId: string, agentCtx: unknown): Promise<void> {
+    // Retained for stage-B self-checks even when mounting fails.
+    this.#agentCtxBySession.set(sessionId, agentCtx);
     const preset = this.#config.agentPreset ?? 'standard';
     const presets = this.#resolveAgentPresets();
     if (presets === undefined) {
@@ -879,7 +895,14 @@ export class Bridge {
     } catch (error) {
       this.#logger.warn(`ownership write failed for ${sessionId}: ${errorMessage(error)}`);
     }
+    await this.#runSelfCheckStageB(sessionId);
     return { agent };
+  }
+
+  /** Stage B runs after every create/resume; logging is de-duplicated inside. */
+  async #runSelfCheckStageB(sessionId: string): Promise<void> {
+    if (this.#selfCheck === undefined) return;
+    await this.#selfCheck.runStageB(this.#agentCtxBySession.get(sessionId));
   }
 
   /**
@@ -1008,15 +1031,15 @@ export class Bridge {
       const persistedPreset = this.#sessionPresetLookup?.(sessionId);
       const { agent } = await this.#agents.resume({
         resumeSessionId: sessionId,
-        ...(persistedPreset === undefined
-          ? {
-              setup: async (agentCtx: unknown) => {
-                await this.#mountPreset(sessionId, agentCtx);
-              },
-            }
-          : {}),
+        setup: async (agentCtx: unknown) => {
+          // Always capture the agent scope for stage-B self-checks; only legacy
+          // headers (no persisted preset) actually mount.
+          this.#agentCtxBySession.set(sessionId, agentCtx);
+          if (persistedPreset === undefined) await this.#mountPreset(sessionId, agentCtx);
+        },
       });
       this.#bindSession(state, String(agent.session.id));
+      await this.#runSelfCheckStageB(sessionId);
       return { agent, sessionId, cwd };
     } catch (error) {
       // The mapped session has no persisted log (or is stale): remint rather
