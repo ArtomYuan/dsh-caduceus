@@ -154,6 +154,15 @@ export class ReliableTransport implements Transport {
     return this.api.removeReaction(messageId, reactionId);
   }
 
+  downloadResource(
+    messageId: string,
+    fileKey: string,
+    type: 'image' | 'file',
+    maxBytes: number,
+  ): Promise<{ readonly bytes: Uint8Array; readonly contentType?: string }> {
+    return this.api.downloadResource(messageId, fileKey, type, maxBytes);
+  }
+
   async updateCard(messageId: string, card: FeishuCard): Promise<void> {
     assertUpdateMulti(card);
     await this.#recordVoid('卡片', () => this.api.patchCard(messageId, card));

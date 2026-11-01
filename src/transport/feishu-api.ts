@@ -37,6 +37,13 @@ export interface FeishuApi {
   addReaction(messageId: string, emojiType: string): Promise<string>;
   /** Remove one reaction previously added by this bot. */
   removeReaction(messageId: string, reactionId: string): Promise<void>;
+  /** Download a message resource (image/file), enforcing a byte limit. */
+  downloadResource(
+    messageId: string,
+    fileKey: string,
+    type: 'image' | 'file',
+    maxBytes: number,
+  ): Promise<{ readonly bytes: Uint8Array; readonly contentType?: string }>;
   createMessage(input: CreateMessageInput): Promise<{ messageId: string }>;
   replyMessage(input: ReplyMessageInput): Promise<{ messageId: string }>;
   patchCard(messageId: string, card: FeishuCard): Promise<void>;

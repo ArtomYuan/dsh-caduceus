@@ -17,6 +17,8 @@
  * @module dsh-caduceus/bridge/bridge
  */
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { planSlashLine, type OwnedCommand } from '../commands/dispatch.js';
 import { helpText } from '../commands/parse.js';
@@ -56,7 +58,13 @@ import {
   type StatusEventLike,
   type StatusSnapshot,
 } from '../status.js';
-import type { ChatType, FeishuCard, InboundMessage, Transport } from '../transport/types.js';
+import type {
+  ChatType,
+  FeishuCard,
+  InboundAttachment,
+  InboundMessage,
+  Transport,
+} from '../transport/types.js';
 import { ScopeQueue } from './scope-queue.js';
 import type {
   AgentLike,
@@ -204,6 +212,13 @@ export class Bridge {
 
   /** Process one inbound message (serialized per scope). */
   async handleInbound(message: InboundMessage): Promise<void> {
+    if (message.unsupportedType !== undefined) {
+      const state = this.#stateFor(message);
+      this.#logger.info(`unsupported message type: ${message.unsupportedType}`);
+      await this.#replyText(state, '这类消息暂不支持。');
+      await this.#safeAddReaction(message.messageId, 'CROSS_MARK');
+      return;
+    }
     // Bot identity may have failed at startup; retry on the next group message
     // before deciding, so a late bot/v3/info success restores normal gating.
     if (message.chatType === 'group' && (this.#transport.getBotOpenId?.() ?? '').length === 0) {
@@ -219,7 +234,10 @@ export class Bridge {
       chatId: message.chatId,
       ...(message.threadId === undefined ? {} : { threadId: message.threadId }),
       senderOpenId: message.senderOpenId,
-      text: message.text,
+      text:
+        message.text.trim().length === 0 && (message.attachments?.length ?? 0) > 0
+          ? '[attachment]'
+          : message.text,
       ...(message.mentions === undefined ? {} : { mentions: message.mentions }),
       ...(botOpenId === undefined ? {} : { botOpenId }),
       requireBotIdentity: this.#config.gateRequireBotIdentity !== false,
@@ -338,7 +356,10 @@ export class Bridge {
     }
     state.reactionQueue.push(message.messageId);
     this.#startReaction(state, message.messageId);
-    await this.#deliverTurn(state, message.text);
+    await this.#deliverTurn(state, {
+      text: message.text,
+      ...(message.attachments === undefined ? {} : { attachments: message.attachments }),
+    });
   }
 
   async #handleSlash(state: ScopeState, raw: string): Promise<void> {
@@ -513,14 +534,143 @@ export class Bridge {
     }
   }
 
-  async #deliverTurn(state: ScopeState, text: string): Promise<void> {
+  async #prepareAttachments(
+    state: ScopeState,
+    input: { readonly text: string; readonly attachments?: readonly InboundAttachment[] },
+  ): Promise<{ readonly content: readonly unknown[] } | undefined> {
+    const attachments = input.attachments ?? [];
+    if (attachments.length === 0) {
+      return { content: [{ type: 'text', text: input.text }] };
+    }
+    const maxBytes = this.#config.maxAttachmentBytes ?? 20 * 1024 * 1024;
+    const imagesEnabled = this.#config.images !== false;
+    const filesEnabled = this.#config.files !== false;
+    const kept: InboundAttachment[] = [];
+    let imageCount = 0;
+    let truncatedImages = 0;
+    let ignored = 0;
+    for (const attachment of attachments) {
+      if (attachment.kind === 'image') {
+        if (!imagesEnabled) {
+          ignored += 1;
+          continue;
+        }
+        if (imageCount >= 9) {
+          truncatedImages += 1;
+          continue;
+        }
+        imageCount += 1;
+        kept.push(attachment);
+      } else if (!filesEnabled) {
+        ignored += 1;
+      } else {
+        kept.push(attachment);
+      }
+    }
+    if (ignored > 0) {
+      await this.#replyText(state, '当前未启用图片/文件消息，已忽略部分附件。');
+    }
+    let annotated = input.text;
+    if (truncatedImages > 0) {
+      annotated += `（图片超过 9 张，已截断 ${truncatedImages} 张）`;
+    }
+    const store = this.#options.attachmentProvider?.();
+    const parts: unknown[] = [];
+    for (const attachment of kept) {
+      let downloaded: { readonly bytes: Uint8Array; readonly contentType?: string };
+      try {
+        downloaded = await this.#transport.downloadResource(
+          state.lastInboundMessageId ?? '',
+          attachment.fileKey,
+          attachment.kind,
+          maxBytes,
+        );
+      } catch (error) {
+        const tooLarge = errorMessage(error).includes('too large');
+        await this.#replyText(
+          state,
+          tooLarge ? '文件太大，已跳过。' : '附件下载失败，已跳过。',
+        );
+        await this.#safeAddReaction(state.lastInboundMessageId ?? '', 'CROSS_MARK');
+        return undefined;
+      }
+      if (downloaded.bytes.length > maxBytes) {
+        await this.#replyText(state, '文件太大，已跳过。');
+        await this.#safeAddReaction(state.lastInboundMessageId ?? '', 'CROSS_MARK');
+        return undefined;
+      }
+      const base64 = Buffer.from(downloaded.bytes).toString('base64');
+      if (attachment.kind === 'image') {
+        if (store === undefined) {
+          await this.#replyText(state, '当前无法处理图片（attachments 服务不可用）。');
+          await this.#safeAddReaction(state.lastInboundMessageId ?? '', 'CROSS_MARK');
+          return undefined;
+        }
+        parts.push({
+          type: 'image',
+          mediaType: imageMediaType(downloaded.contentType),
+          data: base64,
+          ...(attachment.fileName === undefined ? {} : { name: attachment.fileName }),
+        });
+        continue;
+      }
+      const fileName = attachment.fileName ?? attachment.fileKey;
+      let admitted = false;
+      if (store !== undefined) {
+        try {
+          const ref = await store.admitEncodedFile({ data: base64, name: fileName });
+          parts.push({ type: 'file', attachment: ref });
+          admitted = true;
+        } catch {
+          admitted = false;
+        }
+      }
+      if (!admitted) {
+        try {
+          const dir = this.#config.defaultCwd;
+          mkdirSync(dir, { recursive: true });
+          const target = join(dir, `${Date.now()}-${fileName.replace(/[^\w.-]+/g, '_')}`);
+          writeFileSync(target, downloaded.bytes);
+          annotated += `（文件已保存：${target}）`;
+        } catch (error) {
+          this.#logger.warn(`attachment file save failed: ${errorMessage(error)}`);
+          await this.#replyText(state, '附件保存失败，已跳过。');
+          await this.#safeAddReaction(state.lastInboundMessageId ?? '', 'CROSS_MARK');
+          return undefined;
+        }
+      }
+    }
+    if (parts.length === 0) return { content: [{ type: 'text', text: annotated }] };
+    if (store !== undefined) {
+      try {
+        const admitted = await store.admitPromptContent([
+          { type: 'text', text: annotated },
+          ...parts,
+        ]);
+        return { content: admitted };
+      } catch (error) {
+        this.#logger.warn(`attachment admission failed: ${errorMessage(error)}`);
+        await this.#replyText(state, '附件处理失败，已跳过。');
+        await this.#safeAddReaction(state.lastInboundMessageId ?? '', 'CROSS_MARK');
+        return undefined;
+      }
+    }
+    return { content: [{ type: 'text', text: annotated }, ...parts] };
+  }
+
+  async #deliverTurn(
+    state: ScopeState,
+    input: { readonly text: string; readonly attachments?: readonly InboundAttachment[] },
+  ): Promise<void> {
+    const prepared = await this.#prepareAttachments(state, input);
+    if (prepared === undefined) return;
     const resolved = await this.#tryResolve(state);
     if (resolved === undefined) {
       await this.#replyText(state, '无法创建会话（agents 服务不可用）。');
       return;
     }
     const message = createUserMessage({
-      content: [{ type: 'text', text }],
+      content: prepared.content as never,
       source: { kind: 'user' },
     });
     const agent = resolved.agent;
@@ -1482,4 +1632,18 @@ export function progressCardForSnapshot(
     ...(snapshot.startedAt === undefined ? {} : { startedAt: snapshot.startedAt }),
     now,
   });
+}
+
+/** Normalize a resource content-type to one of dsh's accepted image types. */
+function imageMediaType(contentType: string | undefined): string {
+  const normalized = (contentType ?? '').split(';')[0]?.trim().toLowerCase();
+  if (
+    normalized === 'image/png' ||
+    normalized === 'image/jpeg' ||
+    normalized === 'image/webp' ||
+    normalized === 'image/gif'
+  ) {
+    return normalized;
+  }
+  return 'image/jpeg';
 }

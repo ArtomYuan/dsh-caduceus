@@ -58,6 +58,18 @@ export interface InboundMessage {
   readonly rootId?: string;
   /** Unix epoch milliseconds from Feishu; `0` when the event omitted it. */
   readonly createdAt: number;
+  /** Image/file attachments carried by this message. */
+  readonly attachments?: readonly InboundAttachment[];
+  /** Set for message types caduceus cannot process (audio/video/sticker/...). */
+  readonly unsupportedType?: string;
+}
+
+/** One inbound attachment reference (image/file message or post image). */
+export interface InboundAttachment {
+  readonly kind: 'image' | 'file';
+  readonly fileKey: string;
+  readonly fileName?: string;
+  readonly mediaType?: string;
 }
 
 /** One interactive-card button click, normalized for the bridge. */
@@ -140,6 +152,13 @@ export interface Transport {
   addReaction(messageId: string, emojiType: string): Promise<string>;
   /** Remove one reaction previously added by this bot. */
   removeReaction(messageId: string, reactionId: string): Promise<void>;
+  /** Download a message resource (image/file), enforcing a byte limit. */
+  downloadResource(
+    messageId: string,
+    fileKey: string,
+    type: 'image' | 'file',
+    maxBytes: number,
+  ): Promise<{ readonly bytes: Uint8Array; readonly contentType?: string }>;
   /**
    * The bot's own open id when known (needed for the group @ gate). Optional:
    * fake transports may omit it, and the real one resolves it lazily.

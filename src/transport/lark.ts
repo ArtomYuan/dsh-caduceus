@@ -220,6 +220,39 @@ export class LarkFeishuApi implements FeishuApi {
     this.assertOk(response, 'im.v1.message.reaction.delete');
   }
 
+  async downloadResource(
+    messageId: string,
+    fileKey: string,
+    type: 'image' | 'file',
+    maxBytes: number,
+  ): Promise<{ readonly bytes: Uint8Array; readonly contentType?: string }> {
+    const response = await this.client.im.v1.messageResource.get({
+      params: { type },
+      path: { message_id: messageId, file_key: fileKey },
+    });
+    const headers = (response.headers ?? {}) as Record<string, string>;
+    const declared = Number(headers['content-length']);
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      throw new FeishuApiError(`attachment too large (${declared} > ${maxBytes})`, -2);
+    }
+    const contentType = headers['content-type'] ?? headers['Content-Type'];
+    const stream = response.getReadableStream() as AsyncIterable<Buffer>;
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for await (const chunk of stream) {
+      total += chunk.length;
+      if (total > maxBytes) {
+        (stream as { destroy?: () => void }).destroy?.();
+        throw new FeishuApiError(`attachment too large (> ${maxBytes})`, -2);
+      }
+      chunks.push(chunk);
+    }
+    return {
+      bytes: new Uint8Array(Buffer.concat(chunks)),
+      ...(contentType === undefined ? {} : { contentType }),
+    };
+  }
+
   async patchCard(messageId: string, card: FeishuCard): Promise<void> {
     const response = (await this.client.im.v1.message.patch({
       data: { content: JSON.stringify(card) },

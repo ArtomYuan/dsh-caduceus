@@ -49,6 +49,12 @@ export interface GatewayConfig {
   readonly reactionOnFail?: string;
   /** Require the bot's own open id for the group @ gate (default true). */
   readonly gateRequireBotIdentity?: boolean;
+  /** Process image attachments (default true). */
+  readonly images?: boolean;
+  /** Process file attachments (default true). */
+  readonly files?: boolean;
+  /** Per-attachment byte cap (default 20 MiB). */
+  readonly maxAttachmentBytes?: number;
 }
 
 /** Schemastery schema for the `caduceus-gateway` entry. */
@@ -73,6 +79,9 @@ export const Config = z.object({
   reactionOnDone: z.string().required(false),
   reactionOnFail: z.string().required(false),
   gateRequireBotIdentity: z.boolean().required(false),
+  images: z.boolean().required(false),
+  files: z.boolean().required(false),
+  maxAttachmentBytes: z.natural().min(1).required(false),
 });
 
 /** Default card patch throttle: half of Feishu's 5 QPS budget. */
@@ -92,6 +101,11 @@ export const DEFAULT_PERSONA_AUTO_SYNC = true;
 
 /** Default agent preset for caduceus sessions. */
 export const DEFAULT_AGENT_PRESET = 'standard';
+
+/** Default attachment switches/limit. */
+export const DEFAULT_IMAGES = true;
+export const DEFAULT_FILES = true;
+export const DEFAULT_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
 /** Default message reactions. */
 export const DEFAULT_REACTIONS = true;
@@ -163,6 +177,9 @@ export function resolveGatewayConfig(
     reactionOnDone: config.reactionOnDone ?? DEFAULT_REACTION_ON_DONE,
     reactionOnFail: config.reactionOnFail ?? DEFAULT_REACTION_ON_FAIL,
     gateRequireBotIdentity: config.gateRequireBotIdentity ?? true,
+    images: config.images ?? DEFAULT_IMAGES,
+    files: config.files ?? DEFAULT_FILES,
+    maxAttachmentBytes: config.maxAttachmentBytes ?? DEFAULT_MAX_ATTACHMENT_BYTES,
   };
   return {
     ...(appId === undefined || appSecret === undefined ? {} : { credentials: { appId, appSecret } }),

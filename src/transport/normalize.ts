@@ -19,7 +19,7 @@
  * @module dsh-caduceus/transport/normalize
  */
 import { stripLeadingMentions } from '../mentions.js';
-import type { CardAction, InboundMessage } from './types.js';
+import type { CardAction, InboundAttachment, InboundMessage } from './types.js';
 
 /** Structural subset of the SDK's `RawMessageEvent` (no SDK import needed). */
 export interface RawMessageEventLike {
@@ -49,88 +49,147 @@ export interface RawMessageEventLike {
 
 const AT_TAG_PATTERN = /<at[^>]*>(.*?)<\/at>/gs;
 
-/** Message types the v0.1 surface handles (attachments are v0.2). */
-const SUPPORTED_MESSAGE_TYPES = new Set(['text']);
+/** Message types the surface can process (attachments included). */
+const KNOWN_MESSAGE_TYPES = new Set(['text', 'image', 'file', 'post']);
+
+function restoreMentions(
+  text: string,
+  rawMentions: readonly { key?: string; name?: string; id?: { open_id?: string } }[],
+  botOpenId?: string,
+): string {
+  text = text.replace(AT_TAG_PATTERN, (_match, inner: string) => ` @${inner.trim().replace(/^@/, '')} `);
+  text = text.replace(/\r\n?/g, '\n');
+  const entries = rawMentions
+    .map((mention) => ({ key: mention.key, name: mention.name, openId: mention.id?.open_id }))
+    .filter((entry) => entry.key !== undefined || entry.name !== undefined || entry.openId !== undefined);
+  if (entries.length === 0) return stripLeadingMentions(text.trim()).trim();
+
+  for (const entry of entries) {
+    const own = botOpenId !== undefined && botOpenId.length > 0 && entry.openId === botOpenId;
+    if (!own) continue;
+    if (entry.key !== undefined && entry.key.length > 0) text = text.split(entry.key).join(' ');
+    if (entry.name !== undefined && entry.name.length > 0) text = text.split(`@${entry.name}`).join(' ');
+  }
+  const replaceable = entries
+    .filter((entry) => entry.name !== undefined && entry.name.length > 0 && entry.key !== undefined)
+    .sort((left, right) => (right.key?.length ?? 0) - (left.key?.length ?? 0));
+  for (const entry of replaceable) {
+    text = text.split(entry.key as string).join(`@${entry.name as string}`);
+  }
+  return text.replace(/[ \t]{2,}/g, ' ').trim();
+}
+
+interface PostBlock {
+  readonly tag?: unknown;
+  readonly text?: unknown;
+  readonly image_key?: unknown;
+}
+
+function postParts(parsed: { title?: unknown; content?: unknown }): {
+  text: string;
+  attachments: InboundAttachment[];
+} {
+  const attachments: InboundAttachment[] = [];
+  const texts: string[] = [];
+  if (typeof parsed.title === 'string' && parsed.title.trim().length > 0) {
+    texts.push(parsed.title.trim());
+  }
+  const flatten = (value: unknown): void => {
+    if (!Array.isArray(value)) return;
+    for (const item of value) {
+      if (Array.isArray(item)) {
+        flatten(item);
+        continue;
+      }
+      if (typeof item !== 'object' || item === null) continue;
+      const block = item as PostBlock;
+      if (block.tag === 'text' && typeof block.text === 'string') texts.push(block.text);
+      if (
+        (block.tag === 'img' || block.tag === 'image') &&
+        typeof block.image_key === 'string' &&
+        block.image_key.length > 0
+      ) {
+        attachments.push({ kind: 'image', fileKey: block.image_key });
+      }
+    }
+  };
+  flatten(parsed.content);
+  return { text: texts.join(' '), attachments };
+}
 
 /**
  * Normalize one raw event.
  *
  * @returns the normalized message, or `undefined` for unsupported/malformed
- *   payloads or empty text.
+ *   payloads or empty text. Unsupported message types return a message with
+ *   `unsupportedType` so the bridge can reply and react explicitly.
  */
 export function normalizeMessageEvent(
   raw: RawMessageEventLike,
   botOpenId?: string,
 ): InboundMessage | undefined {
-  // Priority #1: only human messages may enter a session.
   const senderType = raw.sender?.sender_type;
   if (senderType !== 'user') return undefined;
 
   const message = raw.message;
-  if (!SUPPORTED_MESSAGE_TYPES.has(message.message_type)) return undefined;
-
-  let text: string;
-  try {
-    const parsed = JSON.parse(message.content) as { text?: unknown };
-    if (typeof parsed.text !== 'string') return undefined;
-    text = parsed.text;
-  } catch {
-    return undefined;
-  }
-
-  // Preserve the display text inside <at> tags first: key -> @name replacement
-  // below needs the placeholder text to still be present.
-  text = text.replace(AT_TAG_PATTERN, (_match, inner: string) => ` @${inner.trim().replace(/^@/, '')} `);
-  text = text.replace(/\r\n?/g, '\n');
-
-  const rawMentions = message.mentions ?? [];
-  const entries = rawMentions
-    .map((mention) => ({
-      key: mention.key,
-      name: mention.name,
-      openId: mention.id?.open_id,
-    }))
-    .filter((entry) => entry.key !== undefined || entry.name !== undefined || entry.openId !== undefined);
-
-  if (entries.length === 0) {
-    // No mention metadata: keep the previous behaviour (strip placeholders).
-    text = text.trim();
-    text = stripLeadingMentions(text).trim();
-  } else {
-    // 1) Remove the bot's own mention(s) entirely (agent need not see "@self").
-    for (const entry of entries) {
-      const own = botOpenId !== undefined && botOpenId.length > 0 && entry.openId === botOpenId;
-      if (!own) continue;
-      if (entry.key !== undefined && entry.key.length > 0) text = text.split(entry.key).join(' ');
-      if (entry.name !== undefined && entry.name.length > 0) text = text.split(`@${entry.name}`).join(' ');
-    }
-    // 2) Replace remaining placeholder keys with @display-name (longest first,
-    // so @_user_10 is never clobbered by @_user_1).
-    const replaceable = entries
-      .filter((entry) => entry.name !== undefined && entry.name.length > 0 && entry.key !== undefined)
-      .sort((left, right) => (right.key?.length ?? 0) - (left.key?.length ?? 0));
-    for (const entry of replaceable) {
-      text = text.split(entry.key as string).join(`@${entry.name as string}`);
-    }
-    text = text.replace(/[ \t]{2,}/g, ' ').trim();
-  }
-  if (text.length === 0) return undefined;
-
   const threadId = firstNonEmpty(message.thread_id, message.root_id);
   const rootId = firstNonEmpty(message.root_id);
   const mentions = (message.mentions ?? [])
     .map((mention) => mention.id?.open_id)
     .filter((openId): openId is string => typeof openId === 'string' && openId.length > 0);
-  return {
+  const base = (): Pick<
+    InboundMessage,
+    'messageId' | 'chatId' | 'chatType' | 'senderOpenId' | 'createdAt' | 'mentions' | 'threadId' | 'rootId'
+  > => ({
     messageId: message.message_id,
     chatId: message.chat_id,
     chatType: message.chat_type === 'group' ? 'group' : 'p2p',
     senderOpenId: raw.sender?.sender_id?.open_id ?? '',
     ...(mentions.length === 0 ? {} : { mentions }),
-    text,
     ...(threadId === undefined ? {} : { threadId }),
     ...(rootId === undefined ? {} : { rootId }),
     createdAt: Number(message.create_time) || 0,
+  });
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(message.content) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+
+  if (!KNOWN_MESSAGE_TYPES.has(message.message_type)) {
+    return { ...base(), text: '', unsupportedType: message.message_type };
+  }
+
+  let text = '';
+  let attachments: InboundAttachment[] = [];
+  if (message.message_type === 'image') {
+    if (typeof parsed.image_key !== 'string' || parsed.image_key.length === 0) return undefined;
+    attachments = [{ kind: 'image', fileKey: parsed.image_key }];
+  } else if (message.message_type === 'file') {
+    if (typeof parsed.file_key !== 'string' || parsed.file_key.length === 0) return undefined;
+    attachments = [{
+      kind: 'file',
+      fileKey: parsed.file_key,
+      ...(typeof parsed.file_name === 'string' && parsed.file_name.length > 0
+        ? { fileName: parsed.file_name }
+        : {}),
+    }];
+  } else if (message.message_type === 'post') {
+    const parts = postParts(parsed);
+    text = parts.text;
+    attachments = parts.attachments;
+  } else {
+    text = typeof parsed.text === 'string' ? parsed.text : '';
+  }
+
+  text = restoreMentions(text, message.mentions ?? [], botOpenId);
+  if (text.length === 0 && attachments.length === 0) return undefined;
+  return {
+    ...base(),
+    text,
+    ...(attachments.length === 0 ? {} : { attachments }),
   };
 }
 

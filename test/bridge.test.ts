@@ -99,6 +99,11 @@ interface HarnessOptions {
   readonly reactionOnFail?: string;
   /** Default true; false restores the old fail-open group gate. */
   readonly gateRequireBotIdentity?: boolean;
+  /** Attachment service double. */
+  readonly attachmentProvider?: () => import('../src/bridge/types.js').AttachmentStoreLike | undefined;
+  readonly images?: boolean;
+  readonly files?: boolean;
+  readonly maxAttachmentBytes?: number;
   /** `/doctor` data collector (optional; tests inject deterministic data). */
   readonly doctorInputs?: (
     session: import('../src/doctor.js').DoctorSessionInfo,
@@ -174,6 +179,11 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
     ...(options.gateRequireBotIdentity === undefined
       ? {}
       : { gateRequireBotIdentity: options.gateRequireBotIdentity }),
+    ...(options.images === undefined ? {} : { images: options.images }),
+    ...(options.files === undefined ? {} : { files: options.files }),
+    ...(options.maxAttachmentBytes === undefined
+      ? {}
+      : { maxAttachmentBytes: options.maxAttachmentBytes }),
   };
   // Ownership sidecars must never escape into the real ~/.dsh during tests.
   const ownershipDir = join(dir, 'owners');
@@ -216,6 +226,9 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
     ...(options.selfCheck === undefined ? {} : { selfCheck: options.selfCheck }),
     ...(options.interactive === undefined ? {} : { interactive: options.interactive }),
     ...(options.rootCtx === undefined ? {} : { rootCtx: options.rootCtx }),
+    ...(options.attachmentProvider === undefined
+      ? {}
+      : { attachmentProvider: options.attachmentProvider }),
     ...(options.approvalProvider === undefined
       ? {}
       : { approvalProvider: options.approvalProvider }),
@@ -2373,4 +2386,145 @@ test('@ 门禁：gateRequireBotIdentity=false 时保留旧 fail-open 行为', as
     inbound('@某人', { chatType: 'group', mentions: ['ou_anyone'] }),
   );
   assert.equal(liveAgent(h).followups.length, 1);
+});
+
+interface FakeAttachmentStore {
+  readonly promptInputs: unknown[][];
+  readonly fileInputs: unknown[];
+  readonly store: import('../src/bridge/types.js').AttachmentStoreLike;
+}
+
+function fakeAttachmentStore(): FakeAttachmentStore {
+  const promptInputs: unknown[][] = [];
+  const fileInputs: unknown[] = [];
+  return {
+    promptInputs,
+    fileInputs,
+    store: {
+      admitPromptContent: async (parts) => {
+        promptInputs.push([...parts]);
+        return parts.map((part) => {
+          if (typeof part === 'object' && part !== null && (part as { type?: string }).type === 'image') {
+            return {
+              type: 'image',
+              attachment: {
+                attachmentId: 'att-1',
+                mediaType: 'image/png',
+                bytes: 3,
+                width: 1,
+                height: 1,
+              },
+            };
+          }
+          return part;
+        });
+      },
+      admitEncodedFile: async (input) => {
+        fileInputs.push(input);
+        return { attachmentId: 'file-1', name: input.name ?? 'file', bytes: 1 };
+      },
+    },
+  };
+}
+
+test('附件：图片下载一次、admitPromptContent 收到 image part、用户消息含 image 块', async (t) => {
+  const attachments = fakeAttachmentStore();
+  const h = makeHarness(t, { attachmentProvider: () => attachments.store });
+  h.transport.downloadResult = {
+    bytes: new Uint8Array([1, 2, 3]),
+    contentType: 'image/png',
+  };
+  const message = {
+    ...inbound(''),
+    text: '',
+    attachments: [{ kind: 'image' as const, fileKey: 'img_1' }],
+  };
+  await h.bridge.handleInbound(message);
+  assert.equal(h.transport.downloadCalls.length, 1);
+  assert.deepEqual(h.transport.downloadCalls[0], {
+    messageId: message.messageId,
+    fileKey: 'img_1',
+    type: 'image',
+  });
+  assert.equal(attachments.promptInputs.length, 1);
+  const parts = attachments.promptInputs[0]!;
+  assert.equal((parts[1] as { type: string }).type, 'image');
+  assert.equal((parts[1] as { mediaType: string }).mediaType, 'image/png');
+  const userMessage = h.agents.live.get(liveAgent(h).id)?.followups[0];
+  assert.ok(userMessage !== undefined);
+  assert.ok(
+    userMessage.content.some((block) => block.type === 'image'),
+    'user message must carry the admitted image block',
+  );
+});
+
+test('附件：纯图无文字不丢，text 为空串', async (t) => {
+  const attachments = fakeAttachmentStore();
+  const h = makeHarness(t, { attachmentProvider: () => attachments.store });
+  const message = {
+    ...inbound(''),
+    text: '',
+    attachments: [{ kind: 'image' as const, fileKey: 'img_1' }],
+  };
+  await h.bridge.handleInbound(message);
+  const userMessage = liveAgent(h).followups[0]!;
+  assert.ok(userMessage !== undefined);
+  const textBlock = userMessage.content.find((block) => block.type === 'text') as
+    | { text: string }
+    | undefined;
+  assert.equal(textBlock?.text, '');
+});
+
+test('附件：下载超限 → 文件太大 + CROSS_MARK，不进 agent', async (t) => {
+  const attachments = fakeAttachmentStore();
+  const h = makeHarness(t, { attachmentProvider: () => attachments.store });
+  h.transport.failDownloadWith = new Error('attachment too large (999 > 20)');
+  const message = {
+    ...inbound('看图'),
+    text: '看图',
+    attachments: [{ kind: 'image' as const, fileKey: 'img_big' }],
+  };
+  await h.bridge.handleInbound(message);
+  assert.equal(h.agents.live.size, 0);
+  assert.ok(recordedTexts(h.transport).some((text) => text.includes('文件太大')));
+  assert.ok(
+    h.transport.reactionCalls.some(
+      (call) => call.action === 'add' && call.emojiType === 'CROSS_MARK',
+    ),
+  );
+});
+
+test('附件：images=false 退回纯文本并提示，不下载', async (t) => {
+  const h = makeHarness(t, { images: false });
+  const message = {
+    ...inbound('看这张'),
+    text: '看这张',
+    attachments: [{ kind: 'image' as const, fileKey: 'img_1' }],
+  };
+  await h.bridge.handleInbound(message);
+  assert.equal(h.transport.downloadCalls.length, 0);
+  assert.ok(recordedTexts(h.transport).some((text) => text.includes('未启用图片/文件')));
+  const userMessage = liveAgent(h).followups[0]!;
+  assert.deepEqual(
+    userMessage.content,
+    [{ type: 'text', text: '看这张' }],
+  );
+});
+
+test('附件：音频等不支持类型 → 暂不支持回复 + CROSS_MARK', async (t) => {
+  const h = makeHarness(t);
+  const message = { ...inbound(''), text: '', unsupportedType: 'audio' };
+  await h.bridge.handleInbound(message);
+  assert.equal(h.agents.live.size, 0);
+  assert.ok(recordedTexts(h.transport).some((text) => text.includes('这类消息暂不支持')));
+  assert.ok(
+    h.transport.reactionCalls.some(
+      (call) => call.action === 'add' && call.emojiType === 'CROSS_MARK',
+    ),
+  );
+  assert.ok(
+    h.logger.entries.some(
+      (entry) => entry.level === 'info' && entry.message === 'unsupported message type: audio',
+    ),
+  );
 });

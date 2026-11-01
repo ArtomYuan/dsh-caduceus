@@ -24,6 +24,15 @@ export type BusyMode = 'queue' | 'steer' | 'interrupt';
 /** Session approval policy understood by dsh's approval service. */
 export type ApprovalPolicy = 'ask' | 'never';
 
+/** The slice of dsh's attachment service the bridge needs. */
+export interface AttachmentStoreLike {
+  admitPromptContent(content: readonly unknown[]): Promise<readonly unknown[]>;
+  admitEncodedFile(input: {
+    readonly data: string;
+    readonly name?: string;
+  }): Promise<unknown>;
+}
+
 /** The slice of dsh's approval service the bridge needs. */
 export interface ApprovalServiceLike {
   setPolicy(agent: AgentLike, policy: ApprovalPolicy): void;
@@ -103,6 +112,12 @@ export interface BridgeConfig {
   readonly reactionOnFail?: string;
   /** Default true: group @ gate fails closed when bot open id is unknown. */
   readonly gateRequireBotIdentity?: boolean;
+  /** Process image attachments (default true). */
+  readonly images?: boolean;
+  /** Process file attachments (default true). */
+  readonly files?: boolean;
+  /** Per-attachment byte cap (default 20 MiB). */
+  readonly maxAttachmentBytes?: number;
 }
 
 /** Everything the bridge needs; unit tests provide fakes for every seam. */
@@ -136,6 +151,8 @@ export interface BridgeOptions {
   readonly interactive?: InteractiveRuntime;
   /** Plugin root Cordis context; answerers register here once, not per agent. */
   readonly rootCtx?: unknown;
+  /** Lazily resolve dsh's attachment service (image admission / file refs). */
+  readonly attachmentProvider?: () => AttachmentStoreLike | undefined;
   /** Lazily resolve dsh's approval service (agent-scoped setPolicy). */
   readonly approvalProvider?: () => ApprovalServiceLike | undefined;
   /** Desired session approval policy (default `ask`). */

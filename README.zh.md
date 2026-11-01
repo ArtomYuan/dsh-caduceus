@@ -86,6 +86,9 @@ onlyBuiltDependencies:
 | `reactionOnDone` | `DONE` | 回合完成时添加的表情 |
 | `reactionOnFail` | `CROSS_MARK` | 回合出错/中断时添加的表情（失败退回 `THINKING`） |
 | `gateRequireBotIdentity` | `true` | bot open id 未知时群 @ 门禁 fail-closed（false 恢复旧放行） |
+| `images` | `true` | 接收图片消息并作为附件交给 agent |
+| `files` | `true` | 接收文件消息（附件服务或落到 cwd） |
+| `maxAttachmentBytes` | `20971520` | 单个附件下载上限（20 MiB） |
 
 ## 命令
 

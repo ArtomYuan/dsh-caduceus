@@ -84,6 +84,17 @@ export class FakeTransport implements Transport {
   }[] = [];
   failAddReactionWith: Error | undefined;
   failRemoveReactionWith: Error | undefined;
+  /** Attachment download calls/results. */
+  readonly downloadCalls: {
+    readonly messageId: string;
+    readonly fileKey: string;
+    readonly type: 'image' | 'file';
+  }[] = [];
+  downloadResult: { readonly bytes: Uint8Array; readonly contentType?: string } = {
+    bytes: new Uint8Array([1, 2, 3]),
+    contentType: 'image/png',
+  };
+  failDownloadWith: Error | undefined;
   #reactionSeq = 0;
   #botOpenId: string | undefined;
   private handler: ((message: InboundMessage) => void) | undefined;
@@ -141,6 +152,20 @@ export class FakeTransport implements Transport {
       this.failRemoveReactionWith = undefined;
       throw failure;
     }
+  }
+
+  async downloadResource(
+    messageId: string,
+    fileKey: string,
+    type: 'image' | 'file',
+  ): Promise<{ readonly bytes: Uint8Array; readonly contentType?: string }> {
+    this.downloadCalls.push({ messageId, fileKey, type });
+    if (this.failDownloadWith !== undefined) {
+      const failure = this.failDownloadWith;
+      this.failDownloadWith = undefined;
+      throw failure;
+    }
+    return this.downloadResult;
   }
 
   /** Deliver one card button click through the registered handler (test seam). */
@@ -301,6 +326,15 @@ export class FakeFeishuApi implements FeishuApi {
 
   async removeReaction(messageId: string, reactionId: string): Promise<void> {
     this.reactions.push({ action: 'remove', messageId, reactionId });
+  }
+
+  async downloadResource(
+    _messageId: string,
+    _fileKey: string,
+    _type: 'image' | 'file',
+    _maxBytes: number,
+  ): Promise<{ readonly bytes: Uint8Array; readonly contentType?: string }> {
+    return { bytes: new Uint8Array([1, 2, 3]), contentType: 'image/png' };
   }
 }
 

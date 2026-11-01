@@ -87,6 +87,9 @@ onlyBuiltDependencies:
 | `reactionOnDone` | `DONE` | Reaction added when a turn completes |
 | `reactionOnFail` | `CROSS_MARK` | Reaction added when a turn errors/interrupts (falls back to `THINKING`) |
 | `gateRequireBotIdentity` | `true` | Group @ gate fails closed when the bot open id is unknown |
+| `images` | `true` | Accept image messages and attach them to the agent prompt |
+| `files` | `true` | Accept file messages (durable attachment or saved to cwd) |
+| `maxAttachmentBytes` | `20971520` | Per-attachment download limit (20 MiB) |
 
 ## Commands
 

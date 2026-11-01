@@ -141,3 +141,27 @@ test('gateRequireBotIdentity 默认 true，可显式关闭', async () => {
     false,
   );
 });
+
+test('附件配置默认开启、20MB；可覆盖', async () => {
+  const {
+    DEFAULT_IMAGES,
+    DEFAULT_FILES,
+    DEFAULT_MAX_ATTACHMENT_BYTES,
+    resolveGatewayConfig,
+  } = await import('../src/config.js');
+  assert.equal(DEFAULT_IMAGES, true);
+  assert.equal(DEFAULT_FILES, true);
+  assert.equal(DEFAULT_MAX_ATTACHMENT_BYTES, 20 * 1024 * 1024);
+  const defaults = resolveGatewayConfig({});
+  assert.equal(defaults.bridge.images, true);
+  assert.equal(defaults.bridge.files, true);
+  assert.equal(defaults.bridge.maxAttachmentBytes, 20 * 1024 * 1024);
+  const custom = resolveGatewayConfig({
+    images: false,
+    files: false,
+    maxAttachmentBytes: 1024,
+  });
+  assert.equal(custom.bridge.images, false);
+  assert.equal(custom.bridge.files, false);
+  assert.equal(custom.bridge.maxAttachmentBytes, 1024);
+});

@@ -332,3 +332,39 @@ test('mention 还原：key → @名字，正文里的也替换；机器人自己
   );
   assert.equal(noMetadata?.text, '你好');
 });
+
+test('normalize: image/file/post 抽取附件；未知类型返回 unsupportedType', () => {
+  const image = normalizeMessageEvent(
+    raw({ message_type: 'image', content: JSON.stringify({ image_key: 'img_1' }) }),
+  );
+  assert.deepEqual(image?.attachments, [{ kind: 'image', fileKey: 'img_1' }]);
+  assert.equal(image?.text, '');
+
+  const file = normalizeMessageEvent(
+    raw({
+      message_type: 'file',
+      content: JSON.stringify({ file_key: 'file_1', file_name: 'a.pdf' }),
+    }),
+  );
+  assert.deepEqual(file?.attachments, [
+    { kind: 'file', fileKey: 'file_1', fileName: 'a.pdf' },
+  ]);
+
+  const post = normalizeMessageEvent(
+    raw({
+      message_type: 'post',
+      content: JSON.stringify({
+        title: '标题',
+        content: [[{ tag: 'text', text: '看这个' }, { tag: 'img', image_key: 'img_2' }]],
+      }),
+    }),
+  );
+  assert.equal(post?.text, '标题 看这个');
+  assert.deepEqual(post?.attachments, [{ kind: 'image', fileKey: 'img_2' }]);
+
+  const audio = normalizeMessageEvent(
+    raw({ message_type: 'audio', content: JSON.stringify({ file_key: 'audio_1' }) }),
+  );
+  assert.equal(audio?.unsupportedType, 'audio');
+  assert.equal(audio?.text, '');
+});
