@@ -90,6 +90,10 @@ onlyBuiltDependencies:
 | `images` | `true` | Accept image messages and attach them to the agent prompt |
 | `files` | `true` | Accept file messages (durable attachment or saved to cwd) |
 | `maxAttachmentBytes` | `20971520` | Per-attachment download limit (20 MiB) |
+| `sendMedia` | `true` | Send `MEDIA:/path` outputs from the agent back to Feishu |
+| `maxSendFileBytes` | `31457280` | Outbound file limit (30 MiB) |
+| `maxSendImageBytes` | `10485760` | Outbound image limit (10 MiB) |
+| `mediaRoots` | `[]` | Allowed roots for outbound paths (empty = session cwd) |
 
 ## Commands
 

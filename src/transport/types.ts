@@ -124,7 +124,9 @@ export interface FeishuCard {
 /** The payload of an outbound reply. */
 export type ReplyPayload =
   | { readonly kind: 'text'; readonly text: string }
-  | { readonly kind: 'card'; readonly card: FeishuCard };
+  | { readonly kind: 'card'; readonly card: FeishuCard }
+  | { readonly kind: 'file'; readonly fileKey: string; readonly fileName: string }
+  | { readonly kind: 'image'; readonly imageKey: string };
 
 export interface SendOptions {
   /** Idempotency key; the same key may succeed only once per hour on Feishu. */
@@ -152,6 +154,10 @@ export interface Transport {
   addReaction(messageId: string, emojiType: string): Promise<string>;
   /** Remove one reaction previously added by this bot. */
   removeReaction(messageId: string, reactionId: string): Promise<void>;
+  /** Upload one file and return its Feishu file_key. */
+  uploadFile(fileName: string, bytes: Uint8Array): Promise<string>;
+  /** Upload one image message and return its Feishu image_key. */
+  uploadImage(bytes: Uint8Array): Promise<string>;
   /** Download a message resource (image/file), enforcing a byte limit. */
   downloadResource(
     messageId: string,

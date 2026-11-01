@@ -104,6 +104,10 @@ interface HarnessOptions {
   readonly images?: boolean;
   readonly files?: boolean;
   readonly maxAttachmentBytes?: number;
+  readonly sendMedia?: boolean;
+  readonly maxSendFileBytes?: number;
+  readonly maxSendImageBytes?: number;
+  readonly mediaRoots?: readonly string[];
   /** `/doctor` data collector (optional; tests inject deterministic data). */
   readonly doctorInputs?: (
     session: import('../src/doctor.js').DoctorSessionInfo,
@@ -184,6 +188,14 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
     ...(options.maxAttachmentBytes === undefined
       ? {}
       : { maxAttachmentBytes: options.maxAttachmentBytes }),
+    ...(options.sendMedia === undefined ? {} : { sendMedia: options.sendMedia }),
+    ...(options.maxSendFileBytes === undefined
+      ? {}
+      : { maxSendFileBytes: options.maxSendFileBytes }),
+    ...(options.maxSendImageBytes === undefined
+      ? {}
+      : { maxSendImageBytes: options.maxSendImageBytes }),
+    ...(options.mediaRoots === undefined ? {} : { mediaRoots: options.mediaRoots }),
   };
   // Ownership sidecars must never escape into the real ~/.dsh during tests.
   const ownershipDir = join(dir, 'owners');
@@ -2588,4 +2600,168 @@ test('终态卡：正文为空仍显示终态 + 「本轮已结束」占位', as
   const cardText = JSON.stringify(finalPatchOfCard(h.transport, processCard.messageId));
   assert.match(cardText, /完成/);
   assert.match(cardText, /本轮已结束（完成）/);
+});
+
+test('MEDIA：两个文件 → 正文剥除、卡片尾注、图片/文件各走不同上传并回复', async (t) => {
+  const h = makeHarness(t);
+  const image = join(h.dir, 'chart.png');
+  const file = join(h.dir, 'report.pdf');
+  writeFileSync(image, Buffer.from([1, 2, 3]));
+  writeFileSync(file, Buffer.from([4, 5, 6]));
+  await h.bridge.handleInbound(inbound('给我结果'));
+  const session = liveAgent(h).session;
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 100));
+  await h.bridge.handleSessionEvent(
+    session,
+    event(
+      'assistant/message',
+      { message: { content: [{ type: 'text', text: `结果如下\nMEDIA:${image}\nMEDIA:${file}` }] } },
+      150,
+    ),
+  );
+  await h.bridge.handleSessionEvent(
+    session,
+    event('turn/end', { turn: 1, reason: { kind: 'completed' } }, 200),
+  );
+
+  assert.equal(h.transport.uploadedImages.length, 1);
+  assert.equal(h.transport.uploadedFiles.length, 1);
+  assert.equal(h.transport.uploadedFiles[0]?.fileName, 'report.pdf');
+  const mediaReplies = h.transport.calls.filter(
+    (call): call is Extract<TransportCall, { op: 'reply' }> =>
+      call.op === 'reply' && call.payload.kind !== 'text' && call.payload.kind !== 'card',
+  );
+  assert.deepEqual(
+    mediaReplies.map((call) => call.payload.kind),
+    ['image', 'file'],
+  );
+
+  const cards = recordedCards(h.transport);
+  const processCard = cardOfTitle(cards, PROCESS_CARD_TITLE);
+  assert.ok(processCard !== undefined);
+  const finalCard = JSON.stringify(finalPatchOfCard(h.transport, processCard.messageId));
+  assert.ok(!finalCard.includes('MEDIA:'), 'markers must be stripped from the card');
+  assert.match(finalCard, /📎 chart\.png × 1/);
+  assert.match(finalCard, /📎 report\.pdf × 1/);
+  assert.match(finalCard, /结果如下/);
+});
+
+test('MEDIA：相对路径/不存在/越界 → 跳过并写卡片原因，不调用上传', async (t) => {
+  const h = makeHarness(t);
+  const outsideDir = mkdtempSync(join(tmpdir(), 'dsh-media-outside-'));
+  t.after(() => rmSync(outsideDir, { recursive: true, force: true }));
+  const outside = join(outsideDir, 'secret.txt');
+  writeFileSync(outside, 'x');
+  await h.bridge.handleInbound(inbound('发文件'));
+  const session = liveAgent(h).session;
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 100));
+  await h.bridge.handleSessionEvent(
+    session,
+    event(
+      'assistant/message',
+      {
+        message: {
+          content: [{
+            type: 'text',
+            text: `正文\nMEDIA:relative.txt\nMEDIA:${join(h.dir, 'missing.txt')}\nMEDIA:${outside}`,
+          }],
+        },
+      },
+      150,
+    ),
+  );
+  await h.bridge.handleSessionEvent(
+    session,
+    event('turn/end', { turn: 1, reason: { kind: 'completed' } }, 200),
+  );
+  assert.equal(h.transport.uploadedFiles.length, 0);
+  assert.equal(h.transport.uploadedImages.length, 0);
+  const processCard = cardOfTitle(recordedCards(h.transport), PROCESS_CARD_TITLE);
+  assert.ok(processCard !== undefined);
+  const text = JSON.stringify(finalPatchOfCard(h.transport, processCard.messageId));
+  assert.match(text, /📎 relative\.txt：未发送（仅支持绝对路径）/);
+  assert.match(text, /📎 missing\.txt：未发送（文件不存在）/);
+  assert.match(text, /📎 secret\.txt：未发送（路径不在允许目录内）/);
+});
+
+test('MEDIA：超过发送上限 → 不调用上传，卡片注明', async (t) => {
+  const h = makeHarness(t, { maxSendFileBytes: 10 });
+  const file = join(h.dir, 'big.zip');
+  writeFileSync(file, Buffer.alloc(20));
+  await h.bridge.handleInbound(inbound('大文件'));
+  const session = liveAgent(h).session;
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 100));
+  await h.bridge.handleSessionEvent(
+    session,
+    event('assistant/message', {
+      message: { content: [{ type: 'text', text: `MEDIA:${file}` }] },
+    }, 150),
+  );
+  await h.bridge.handleSessionEvent(
+    session,
+    event('turn/end', { turn: 1, reason: { kind: 'completed' } }, 200),
+  );
+  assert.equal(h.transport.uploadedFiles.length, 0);
+  const processCard = cardOfTitle(recordedCards(h.transport), PROCESS_CARD_TITLE);
+  assert.ok(processCard !== undefined);
+  assert.match(
+    JSON.stringify(finalPatchOfCard(h.transport, processCard.messageId)),
+    /📎 big\.zip：未发送（超过大小限制）/,
+  );
+});
+
+test('MEDIA：单个上传失败 → 其余文件照发，warn 日志', async (t) => {
+  const h = makeHarness(t);
+  const first = join(h.dir, 'a.pdf');
+  const second = join(h.dir, 'b.pdf');
+  writeFileSync(first, 'a');
+  writeFileSync(second, 'b');
+  h.transport.failUploadFileWith = new Error('upload boom');
+  await h.bridge.handleInbound(inbound('文件'));
+  const session = liveAgent(h).session;
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 100));
+  await h.bridge.handleSessionEvent(
+    session,
+    event('assistant/message', {
+      message: { content: [{ type: 'text', text: `MEDIA:${first}\nMEDIA:${second}` }] },
+    }, 150),
+  );
+  await h.bridge.handleSessionEvent(
+    session,
+    event('turn/end', { turn: 1, reason: { kind: 'completed' } }, 200),
+  );
+  assert.equal(h.transport.uploadedFiles.length, 1);
+  assert.equal(
+    h.logger.entries.filter(
+      (entry) => entry.level === 'warn' && entry.message.includes('media send failed'),
+    ).length,
+    1,
+  );
+});
+
+test('MEDIA：sendMedia=false → 零上传，标记原样保留在正文', async (t) => {
+  const h = makeHarness(t, { sendMedia: false });
+  const file = join(h.dir, 'report.pdf');
+  writeFileSync(file, 'x');
+  await h.bridge.handleInbound(inbound('文件'));
+  const session = liveAgent(h).session;
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 100));
+  await h.bridge.handleSessionEvent(
+    session,
+    event('assistant/message', {
+      message: { content: [{ type: 'text', text: `报告\nMEDIA:${file}` }] },
+    }, 150),
+  );
+  await h.bridge.handleSessionEvent(
+    session,
+    event('turn/end', { turn: 1, reason: { kind: 'completed' } }, 200),
+  );
+  assert.equal(h.transport.uploadedFiles.length, 0);
+  assert.equal(h.transport.uploadedImages.length, 0);
+  const processCard = cardOfTitle(recordedCards(h.transport), PROCESS_CARD_TITLE);
+  assert.ok(processCard !== undefined);
+  assert.match(
+    JSON.stringify(finalPatchOfCard(h.transport, processCard.messageId)),
+    /MEDIA:/,
+  );
 });

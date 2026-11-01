@@ -37,6 +37,15 @@ interface MessageResponse {
   };
 }
 
+interface UploadResponse {
+  readonly code?: number;
+  readonly msg?: string;
+  readonly data?: {
+    readonly file_key?: string;
+    readonly image_key?: string;
+  };
+}
+
 interface ReactionResponse {
   readonly code?: number;
   readonly msg?: string;
@@ -218,6 +227,37 @@ export class LarkFeishuApi implements FeishuApi {
       path: { message_id: messageId, reaction_id: reactionId },
     })) as ReactionResponse;
     this.assertOk(response, 'im.v1.message.reaction.delete');
+  }
+
+  async uploadFile(fileName: string, bytes: Uint8Array): Promise<string> {
+    const response = (await this.client.im.v1.file.create({
+      data: {
+        file_type: 'stream',
+        file_name: fileName,
+        file: Buffer.from(bytes),
+      },
+    })) as UploadResponse;
+    this.assertOk(response, 'im.v1.file.create');
+    const fileKey = response.data?.file_key;
+    if (fileKey === undefined || fileKey.length === 0) {
+      throw new FeishuApiError('feishu im.v1.file.create returned no file_key', -1);
+    }
+    return fileKey;
+  }
+
+  async uploadImage(bytes: Uint8Array): Promise<string> {
+    const response = (await this.client.im.v1.image.create({
+      data: {
+        image_type: 'message',
+        image: Buffer.from(bytes),
+      },
+    })) as UploadResponse;
+    this.assertOk(response, 'im.v1.image.create');
+    const imageKey = response.data?.image_key;
+    if (imageKey === undefined || imageKey.length === 0) {
+      throw new FeishuApiError('feishu im.v1.image.create returned no image_key', -1);
+    }
+    return imageKey;
   }
 
   async downloadResource(

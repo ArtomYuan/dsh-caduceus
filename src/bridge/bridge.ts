@@ -17,7 +17,7 @@
  * @module dsh-caduceus/bridge/bridge
  */
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { planSlashLine, type OwnedCommand } from '../commands/dispatch.js';
@@ -38,6 +38,7 @@ import {
   type DoctorSessionInfo,
 } from '../doctor.js';
 import { writeOwnership, type SessionScopeKind } from '../ownership.js';
+import { extractMediaMarkers, resolveMedia } from '../media.js';
 import {
   finalCard,
   finalCardPlainText,
@@ -704,10 +705,12 @@ export class Bridge {
     // but re-apply to guarantee /status never disagrees with the final card.
     state.status.apply(event);
     const snapshot = state.status.get();
-    const body =
+    const rawBody =
       state.lastOutput.trim().length > 0
         ? state.lastOutput
         : `本轮已结束（${finalStateLabel}）。`;
+    const outbound = this.#planOutboundMedia(state, rawBody);
+    const body = outbound.body;
     const finalInput = this.#finalCardInput(state, snapshot, body, finalState, finalStateLabel);
 
     const stream = state.progress;
@@ -733,12 +736,88 @@ export class Bridge {
       }
     }
 
+    await this.#sendOutboundMedia(state, outbound.entries);
     if (shouldNotifyTerminal(kind)) {
       const notice = terminalNotice(kind, snapshot.errorMessage);
       if (notice !== undefined) await this.#replyText(state, notice);
     }
     await this.#finishReactions(state, kind);
     state.lastOutput = '';
+  }
+
+  /** Extract MEDIA markers, validate paths, and annotate the final card body. */
+  #planOutboundMedia(
+    state: ScopeState,
+    rawBody: string,
+  ): {
+    readonly body: string;
+    readonly entries: readonly {
+      readonly path: string;
+      readonly name: string;
+      readonly image: boolean;
+    }[];
+  } {
+    if (this.#config.sendMedia === false) return { body: rawBody, entries: [] };
+    const parsed = extractMediaMarkers(rawBody);
+    if (parsed.paths.length === 0) return { body: parsed.text, entries: [] };
+    const cwd = this.#sessionMap.getCwd(state.key) ?? this.#config.defaultCwd;
+    const roots = this.#config.mediaRoots?.length ? this.#config.mediaRoots : [cwd];
+    const entries: { path: string; name: string; image: boolean }[] = [];
+    const notes: string[] = [];
+    for (const path of parsed.paths) {
+      const resolved = resolveMedia(path, {
+        roots,
+        maxFileBytes: this.#config.maxSendFileBytes ?? 30 * 1024 * 1024,
+        maxImageBytes: this.#config.maxSendImageBytes ?? 10 * 1024 * 1024,
+      });
+      if (!resolved.ok) {
+        notes.push(`📎 ${resolved.name}：未发送（${resolved.reason}）`);
+        continue;
+      }
+      entries.push({ path: resolved.path, name: resolved.name, image: resolved.image });
+      notes.push(`📎 ${resolved.name} × 1`);
+    }
+    const body = parsed.text.length === 0 ? notes.join('\n') : `${parsed.text}\n\n${notes.join('\n')}`;
+    return { body, entries };
+  }
+
+  /** Upload and reply each validated file individually; one failure never stops the rest. */
+  async #sendOutboundMedia(
+    state: ScopeState,
+    entries: readonly { readonly path: string; readonly name: string; readonly image: boolean }[],
+  ): Promise<void> {
+    if (entries.length === 0) return;
+    const replyTo = state.lastInboundMessageId;
+    if (replyTo === undefined) {
+      this.#logger.warn('media send skipped: no inbound message to reply to');
+      return;
+    }
+    const threadOptions =
+      state.threadId === undefined ? {} : { threadId: state.threadId };
+    for (const entry of entries) {
+      try {
+        const bytes = readFileSync(entry.path);
+        if (entry.image) {
+          const imageKey = await this.#transport.uploadImage(bytes);
+          await this.#transport.reply(
+            state.chatId,
+            replyTo,
+            { kind: 'image', imageKey },
+            threadOptions,
+          );
+        } else {
+          const fileKey = await this.#transport.uploadFile(entry.name, bytes);
+          await this.#transport.reply(
+            state.chatId,
+            replyTo,
+            { kind: 'file', fileKey, fileName: entry.name },
+            threadOptions,
+          );
+        }
+      } catch (error) {
+        this.#logger.warn(`media send failed for ${entry.name}: ${errorMessage(error)}`);
+      }
+    }
   }
 
   #finalCardInput(

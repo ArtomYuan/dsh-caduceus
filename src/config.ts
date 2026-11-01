@@ -55,6 +55,14 @@ export interface GatewayConfig {
   readonly files?: boolean;
   /** Per-attachment byte cap (default 20 MiB). */
   readonly maxAttachmentBytes?: number;
+  /** Send MEDIA:/path outputs back to Feishu (default true). */
+  readonly sendMedia?: boolean;
+  /** Outbound file size limit (default 30 MiB). */
+  readonly maxSendFileBytes?: number;
+  /** Outbound image size limit (default 10 MiB). */
+  readonly maxSendImageBytes?: number;
+  /** Allowed roots for MEDIA paths; empty = session cwd only. */
+  readonly mediaRoots?: readonly string[];
 }
 
 /** Schemastery schema for the `caduceus-gateway` entry. */
@@ -82,6 +90,10 @@ export const Config = z.object({
   images: z.boolean().required(false),
   files: z.boolean().required(false),
   maxAttachmentBytes: z.natural().min(1).required(false),
+  sendMedia: z.boolean().required(false),
+  maxSendFileBytes: z.natural().min(1).required(false),
+  maxSendImageBytes: z.natural().min(1).required(false),
+  mediaRoots: z.array(z.string()).required(false),
 });
 
 /** Default card patch throttle: half of Feishu's 5 QPS budget. */
@@ -106,6 +118,11 @@ export const DEFAULT_AGENT_PRESET = 'standard';
 export const DEFAULT_IMAGES = true;
 export const DEFAULT_FILES = true;
 export const DEFAULT_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+
+/** Default outbound media switches/limits. */
+export const DEFAULT_SEND_MEDIA = true;
+export const DEFAULT_MAX_SEND_FILE_BYTES = 30 * 1024 * 1024;
+export const DEFAULT_MAX_SEND_IMAGE_BYTES = 10 * 1024 * 1024;
 
 /** Default message reactions. */
 export const DEFAULT_REACTIONS = true;
@@ -180,6 +197,10 @@ export function resolveGatewayConfig(
     images: config.images ?? DEFAULT_IMAGES,
     files: config.files ?? DEFAULT_FILES,
     maxAttachmentBytes: config.maxAttachmentBytes ?? DEFAULT_MAX_ATTACHMENT_BYTES,
+    sendMedia: config.sendMedia ?? DEFAULT_SEND_MEDIA,
+    maxSendFileBytes: config.maxSendFileBytes ?? DEFAULT_MAX_SEND_FILE_BYTES,
+    maxSendImageBytes: config.maxSendImageBytes ?? DEFAULT_MAX_SEND_IMAGE_BYTES,
+    mediaRoots: config.mediaRoots ?? [],
   };
   return {
     ...(appId === undefined || appSecret === undefined ? {} : { credentials: { appId, appSecret } }),

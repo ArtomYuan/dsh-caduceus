@@ -89,6 +89,10 @@ onlyBuiltDependencies:
 | `images` | `true` | 接收图片消息并作为附件交给 agent |
 | `files` | `true` | 接收文件消息（附件服务或落到 cwd） |
 | `maxAttachmentBytes` | `20971520` | 单个附件下载上限（20 MiB） |
+| `sendMedia` | `true` | 把 agent 的 `MEDIA:/path` 产物发回飞书 |
+| `maxSendFileBytes` | `31457280` | 发送文件上限（30 MiB） |
+| `maxSendImageBytes` | `10485760` | 发送图片上限（10 MiB） |
+| `mediaRoots` | `[]` | 允许发送的目录（空=会话 cwd） |
 
 ## 命令
 

@@ -154,6 +154,14 @@ export class ReliableTransport implements Transport {
     return this.api.removeReaction(messageId, reactionId);
   }
 
+  uploadFile(fileName: string, bytes: Uint8Array): Promise<string> {
+    return this.api.uploadFile(fileName, bytes);
+  }
+
+  uploadImage(bytes: Uint8Array): Promise<string> {
+    return this.api.uploadImage(bytes);
+  }
+
   downloadResource(
     messageId: string,
     fileKey: string,
@@ -175,8 +183,20 @@ export class ReliableTransport implements Transport {
     options: ReplyOptions = {},
   ): Promise<SentMessage> {
     const uuid = options.uuid ?? this.uuidFactory();
-    const msgType = payload.kind === 'text' ? 'text' : 'interactive';
-    const content = payload.kind === 'text' ? textPayload(payload.text) : cardPayload(payload.card);
+    const msgType =
+      payload.kind === 'text'
+        ? 'text'
+        : payload.kind === 'card'
+          ? 'interactive'
+          : payload.kind;
+    const content =
+      payload.kind === 'text'
+        ? textPayload(payload.text)
+        : payload.kind === 'card'
+          ? cardPayload(payload.card)
+          : payload.kind === 'file'
+            ? JSON.stringify({ file_key: payload.fileKey })
+            : JSON.stringify({ image_key: payload.imageKey });
     const replyInThread = options.threadId !== undefined && options.threadId.length > 0;
     const kind = payload.kind === 'card' ? '卡片' : '消息';
     try {

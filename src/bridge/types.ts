@@ -118,6 +118,12 @@ export interface BridgeConfig {
   readonly files?: boolean;
   /** Per-attachment byte cap (default 20 MiB). */
   readonly maxAttachmentBytes?: number;
+  /** Send MEDIA:/path outputs back to Feishu (default true). */
+  readonly sendMedia?: boolean;
+  readonly maxSendFileBytes?: number;
+  readonly maxSendImageBytes?: number;
+  /** Allowed roots for outbound MEDIA paths; empty = session cwd. */
+  readonly mediaRoots?: readonly string[];
 }
 
 /** Everything the bridge needs; unit tests provide fakes for every seam. */

@@ -11,7 +11,7 @@ import type { CardAction, FeishuCard, InboundMessage } from './types.js';
 
 export interface CreateMessageInput {
   readonly chatId: string;
-  readonly msgType: 'text' | 'interactive';
+  readonly msgType: 'text' | 'interactive' | 'file' | 'image';
   /** Serialized `msg_type` content (JSON string). */
   readonly content: string;
   readonly uuid?: string;
@@ -19,7 +19,7 @@ export interface CreateMessageInput {
 
 export interface ReplyMessageInput {
   readonly messageId: string;
-  readonly msgType: 'text' | 'interactive';
+  readonly msgType: 'text' | 'interactive' | 'file' | 'image';
   readonly content: string;
   /** Post the reply inside the message's topic (`reply_in_thread`). */
   readonly replyInThread: boolean;
@@ -37,6 +37,10 @@ export interface FeishuApi {
   addReaction(messageId: string, emojiType: string): Promise<string>;
   /** Remove one reaction previously added by this bot. */
   removeReaction(messageId: string, reactionId: string): Promise<void>;
+  /** Upload one file and return its Feishu file_key. */
+  uploadFile(fileName: string, bytes: Uint8Array): Promise<string>;
+  /** Upload one image message and return its Feishu image_key. */
+  uploadImage(bytes: Uint8Array): Promise<string>;
   /** Download a message resource (image/file), enforcing a byte limit. */
   downloadResource(
     messageId: string,

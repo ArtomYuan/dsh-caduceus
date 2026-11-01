@@ -165,3 +165,30 @@ test('附件配置默认开启、20MB；可覆盖', async () => {
   assert.equal(custom.bridge.files, false);
   assert.equal(custom.bridge.maxAttachmentBytes, 1024);
 });
+
+test('发送媒体配置默认值/覆盖', async () => {
+  const {
+    DEFAULT_SEND_MEDIA,
+    DEFAULT_MAX_SEND_FILE_BYTES,
+    DEFAULT_MAX_SEND_IMAGE_BYTES,
+    resolveGatewayConfig,
+  } = await import('../src/config.js');
+  assert.equal(DEFAULT_SEND_MEDIA, true);
+  assert.equal(DEFAULT_MAX_SEND_FILE_BYTES, 30 * 1024 * 1024);
+  assert.equal(DEFAULT_MAX_SEND_IMAGE_BYTES, 10 * 1024 * 1024);
+  const defaults = resolveGatewayConfig({});
+  assert.equal(defaults.bridge.sendMedia, true);
+  assert.equal(defaults.bridge.maxSendFileBytes, 30 * 1024 * 1024);
+  assert.equal(defaults.bridge.maxSendImageBytes, 10 * 1024 * 1024);
+  assert.deepEqual(defaults.bridge.mediaRoots, []);
+  const custom = resolveGatewayConfig({
+    sendMedia: false,
+    maxSendFileBytes: 100,
+    maxSendImageBytes: 50,
+    mediaRoots: ['/tmp'],
+  });
+  assert.equal(custom.bridge.sendMedia, false);
+  assert.equal(custom.bridge.maxSendFileBytes, 100);
+  assert.equal(custom.bridge.maxSendImageBytes, 50);
+  assert.deepEqual(custom.bridge.mediaRoots, ['/tmp']);
+});

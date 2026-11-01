@@ -90,6 +90,11 @@ export class FakeTransport implements Transport {
     readonly fileKey: string;
     readonly type: 'image' | 'file';
   }[] = [];
+  readonly uploadedFiles: { readonly fileName: string; readonly bytes: Uint8Array }[] = [];
+  readonly uploadedImages: Uint8Array[] = [];
+  failUploadFileWith: Error | undefined;
+  failUploadImageWith: Error | undefined;
+  #uploadSeq = 0;
   downloadResult: { readonly bytes: Uint8Array; readonly contentType?: string } = {
     bytes: new Uint8Array([1, 2, 3]),
     contentType: 'image/png',
@@ -152,6 +157,28 @@ export class FakeTransport implements Transport {
       this.failRemoveReactionWith = undefined;
       throw failure;
     }
+  }
+
+  async uploadFile(fileName: string, bytes: Uint8Array): Promise<string> {
+    if (this.failUploadFileWith !== undefined) {
+      const failure = this.failUploadFileWith;
+      this.failUploadFileWith = undefined;
+      throw failure;
+    }
+    this.uploadedFiles.push({ fileName, bytes });
+    this.#uploadSeq += 1;
+    return `file-key-${this.#uploadSeq}`;
+  }
+
+  async uploadImage(bytes: Uint8Array): Promise<string> {
+    if (this.failUploadImageWith !== undefined) {
+      const failure = this.failUploadImageWith;
+      this.failUploadImageWith = undefined;
+      throw failure;
+    }
+    this.uploadedImages.push(bytes);
+    this.#uploadSeq += 1;
+    return `image-key-${this.#uploadSeq}`;
   }
 
   async downloadResource(
@@ -335,6 +362,14 @@ export class FakeFeishuApi implements FeishuApi {
     _maxBytes: number,
   ): Promise<{ readonly bytes: Uint8Array; readonly contentType?: string }> {
     return { bytes: new Uint8Array([1, 2, 3]), contentType: 'image/png' };
+  }
+
+  async uploadFile(_fileName: string, _bytes: Uint8Array): Promise<string> {
+    return 'api-file-key';
+  }
+
+  async uploadImage(_bytes: Uint8Array): Promise<string> {
+    return 'api-image-key';
   }
 }
 
