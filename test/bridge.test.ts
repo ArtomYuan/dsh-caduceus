@@ -2528,3 +2528,64 @@ test('附件：音频等不支持类型 → 暂不支持回复 + CROSS_MARK', as
     ),
   );
 });
+
+test('终态卡：turn/end completed 时状态行以事件为准显示「完成」', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('你好'));
+  const session = liveAgent(h).session;
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 100));
+  await h.bridge.handleSessionEvent(
+    session,
+    event('assistant/message', { message: { content: [{ type: 'text', text: '答复正文' }] } }, 150),
+  );
+  await h.bridge.handleSessionEvent(
+    session,
+    event('turn/end', { turn: 1, reason: { kind: 'completed' } }, 200),
+  );
+  const cards = recordedCards(h.transport);
+  const processCard = cardOfTitle(cards, PROCESS_CARD_TITLE);
+  assert.ok(processCard !== undefined);
+  const cardText = JSON.stringify(finalPatchOfCard(h.transport, processCard.messageId));
+  assert.match(cardText, /完成/);
+  assert.ok(!cardText.includes('运行中'), 'stale running label must not survive');
+  assert.match(cardText, /答复正文/);
+});
+
+test('终态卡：error → 失败，interrupted → 已中断（事件优先于快照）', async (t) => {
+  for (const [kind, label] of [
+    ['error', '失败'],
+    ['interrupted', '已中断'],
+  ] as const) {
+    const h = makeHarness(t);
+    await h.bridge.handleInbound(inbound('会结束的一轮'));
+    const session = liveAgent(h).session;
+    await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 100));
+    await h.bridge.handleSessionEvent(
+      session,
+      event('turn/end', { turn: 1, reason: { kind } }, 200),
+    );
+    const cards = recordedCards(h.transport);
+    const processCard = cardOfTitle(cards, PROCESS_CARD_TITLE);
+    assert.ok(processCard !== undefined);
+    const cardText = JSON.stringify(finalPatchOfCard(h.transport, processCard.messageId));
+    assert.match(cardText, new RegExp(label));
+    assert.ok(!cardText.includes('运行中'), `stale running label for ${kind}`);
+  }
+});
+
+test('终态卡：正文为空仍显示终态 + 「本轮已结束」占位', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('空答复'));
+  const session = liveAgent(h).session;
+  await h.bridge.handleSessionEvent(session, event('turn/start', { turn: 1 }, 100));
+  await h.bridge.handleSessionEvent(
+    session,
+    event('turn/end', { turn: 1, reason: { kind: 'completed' } }, 200),
+  );
+  const cards = recordedCards(h.transport);
+  const processCard = cardOfTitle(cards, PROCESS_CARD_TITLE);
+  assert.ok(processCard !== undefined);
+  const cardText = JSON.stringify(finalPatchOfCard(h.transport, processCard.messageId));
+  assert.match(cardText, /完成/);
+  assert.match(cardText, /本轮已结束（完成）/);
+});

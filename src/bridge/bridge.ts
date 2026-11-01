@@ -50,12 +50,14 @@ import { mintSessionId, scopeKey, SCOPE_KEY_SEPARATOR, type SessionStore } from 
 import {
   StatusTracker,
   shouldNotifyTerminal,
+  stateForTurnEnd,
   recentEventText,
   statusLabel,
   statusTemplate,
   statusText,
   terminalNotice,
   type StatusEventLike,
+  type StatusState,
   type StatusSnapshot,
 } from '../status.js';
 import type {
@@ -695,12 +697,18 @@ export class Bridge {
 
   async #settleTurn(state: ScopeState, event: StatusEventLike): Promise<void> {
     state.running = false;
+    const kind = turnEndReasonKind(event.data);
+    const finalState = stateForTurnEnd(kind);
+    const finalStateLabel = statusLabel(finalState);
+    // The tracker is usually already terminal (apply ran before this method),
+    // but re-apply to guarantee /status never disagrees with the final card.
+    state.status.apply(event);
     const snapshot = state.status.get();
     const body =
       state.lastOutput.trim().length > 0
         ? state.lastOutput
-        : `本轮已结束（${statusLabel(snapshot.state)}）。`;
-    const finalInput = this.#finalCardInput(state, snapshot, body);
+        : `本轮已结束（${finalStateLabel}）。`;
+    const finalInput = this.#finalCardInput(state, snapshot, body, finalState, finalStateLabel);
 
     const stream = state.progress;
     const messageId = stream?.messageId;
@@ -725,7 +733,6 @@ export class Bridge {
       }
     }
 
-    const kind = turnEndReasonKind(event.data);
     if (shouldNotifyTerminal(kind)) {
       const notice = terminalNotice(kind, snapshot.errorMessage);
       if (notice !== undefined) await this.#replyText(state, notice);
@@ -738,11 +745,14 @@ export class Bridge {
     state: ScopeState,
     snapshot: StatusSnapshot,
     body: string,
+    finalState: StatusState,
+    finalStateLabel: string,
   ): FinalCardInput {
     const sessionTitle = this.#titleOf(state)?.trim() ?? state.title;
     return {
       title: '飞书会话 · 过程',
-      stateLabel: statusLabel(snapshot.state),
+      // Event-derived, never the (possibly stale) tracker snapshot.
+      stateLabel: finalStateLabel,
       steps: snapshot.steps,
       tools: snapshot.tools,
       ...(sessionTitle === undefined ? {} : { sessionTitle }),
@@ -750,7 +760,7 @@ export class Bridge {
       ...(snapshot.startedAt === undefined ? {} : { startedAt: snapshot.startedAt }),
       ...(snapshot.endedAt === undefined ? {} : { endedAt: snapshot.endedAt }),
       body,
-      template: statusTemplate(snapshot.state),
+      template: statusTemplate(finalState),
     };
   }
 
