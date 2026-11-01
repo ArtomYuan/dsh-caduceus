@@ -54,7 +54,7 @@ try {
 
   // 2. Command classification: nine owned commands, everything else passes
   //    through with the original bytes.
-  assert.deepEqual([...COMMAND_NAMES], ['new', 'sessions', 'rename', 'resume', 'adopt', 'selfcheck', 'doctor', 'stop', 'status', 'persona', 'whoami', 'help']);
+  assert.deepEqual([...COMMAND_NAMES], ['new', 'sessions', 'rename', 'resume', 'adopt', 'selfcheck', 'doctor', 'stop', 'status', 'persona', 'whoami', 'export', 'help']);
   assert.deepEqual(parseCommand('/selfcheck'), { kind: 'selfcheck' });
   assert.deepEqual(parseCommand('/doctor --json'), { kind: 'doctor', json: true });
   assert.deepEqual(parseCommand('/adopt feishu-1793463503786'), {
@@ -64,7 +64,7 @@ try {
   assert.deepEqual(parseCommand('/new'), { kind: 'new' });
   assert.deepEqual(parseCommand('/status'), { kind: 'status' });
   assert.deepEqual(parseCommand('/compact'), { kind: 'passthrough', raw: '/compact' });
-  assert.deepEqual(parseCommand('/export'), { kind: 'passthrough', raw: '/export' });
+  assert.deepEqual(parseCommand('/export'), { kind: 'export' });
 
   // 3. Truncation: keep a UTF-8-safe tail and say how much was dropped.
   const long = '汉😀'.repeat(4000);
@@ -411,9 +411,9 @@ try {
   const newSessionId = bridgeStore.get('oc_bridge');
   assert.ok(newSessionId !== undefined);
   assert.ok(fakeAgents.live.has(newSessionId), 'new session must be live, not a ghost id');
-  const lastReply = calls.filter((call) => call.op === 'reply' && call.payload.kind === 'text').at(-1);
-  assert.ok(lastReply !== undefined && lastReply.payload.kind === 'text');
-  assert.ok(lastReply.payload.text.includes('已新建会话'));
+  const lastSend = calls.filter((call) => call.op === 'sendText').at(-1);
+  assert.ok(lastSend !== undefined && lastSend.op === 'sendText');
+  assert.ok(lastSend.text.includes('已新建会话'));
   assert.ok(
     bridgeStore.history('oc_bridge').includes(newSessionId),
     'history keeps the current id',

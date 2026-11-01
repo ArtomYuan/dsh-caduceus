@@ -29,6 +29,7 @@ import type {
   SessionTitleLike,
 } from './bridge/types.js';
 import { runHarnessCommand } from './commands/harness.js';
+import { parseSessionEvents } from './export.js';
 import {
   Config,
   accessControlWarning,
@@ -249,6 +250,22 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
     rootCtx: ctx,
     approvalProvider: () => ctx.get('approval') as ApprovalServiceLike | undefined,
     attachmentProvider: () => ctx.get('attachments') as AttachmentStoreLike | undefined,
+    exportProvider: async (sessionId) => {
+      const query = ctx.get('sessionQuery') as
+        | { readSession?: (id: string) => Promise<{ events?: readonly unknown[] }> }
+        | undefined;
+      if (query?.readSession === undefined) return undefined;
+      try {
+        const snapshot = await query.readSession(sessionId);
+        const events = snapshot.events ?? [];
+        return {
+          messages: parseSessionEvents(events),
+          rawJsonl: events.map((event) => JSON.stringify(event)).join('\n') + '\n',
+        };
+      } catch {
+        return undefined;
+      }
+    },
     approvalPolicy: resolved.approvalPolicy,
     sessionPresetLookup: (sessionId) =>
       (ctx.get('sessions') as SessionsServiceLike | undefined)?.get(sessionId)?.header

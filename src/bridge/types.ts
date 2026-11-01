@@ -14,6 +14,7 @@ import type { HarnessCommandResult } from '../commands/harness.js';
 import type { LoggerLike } from '../logger.js';
 import type { Clock } from '../render/stream.js';
 import type { DoctorInputs, DoctorSessionInfo } from '../doctor.js';
+import type { SessionExportProvider } from '../export.js';
 import type { InteractiveRuntime } from '../interactive/runtime.js';
 import type { SessionStore } from '../session-key.js';
 import type { Transport } from '../transport/types.js';
@@ -161,6 +162,8 @@ export interface BridgeOptions {
   readonly rootCtx?: unknown;
   /** Lazily resolve dsh's attachment service (image admission / file refs). */
   readonly attachmentProvider?: () => AttachmentStoreLike | undefined;
+  /** Optional session-log provider; falls back to reading $DSH_HOME on disk. */
+  readonly exportProvider?: SessionExportProvider;
   /** Lazily resolve dsh's approval service (agent-scoped setPolicy). */
   readonly approvalProvider?: () => ApprovalServiceLike | undefined;
   /** Desired session approval policy (default `ask`). */

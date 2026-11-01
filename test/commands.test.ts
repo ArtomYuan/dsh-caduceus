@@ -115,9 +115,8 @@ test('dispatch：自有命令 owned、/export 拒绝、其余透传原文', () =
     command: { kind: 'status' },
   });
   assert.deepEqual(planSlashLine('/export'), {
-    kind: 'denied',
-    name: 'export',
-    line: '/export',
+    kind: 'owned',
+    command: { kind: 'export' },
   });
   assert.deepEqual(planSlashLine('/compact'), {
     kind: 'forward',
@@ -132,10 +131,10 @@ test('dispatch：自有命令 owned、/export 拒绝、其余透传原文', () =
   assert.equal(planSlashLine('/').kind, 'forward');
 });
 
-test('denylist 至少包含 /export，且大小写不敏感', () => {
-  assert.ok(WEB_ONLY_DENYLIST.includes('export'));
-  assert.equal(isWebOnlyCommand('export'), true);
-  assert.equal(isWebOnlyCommand('EXPORT'), true);
+test('denylist 不再包含 /export（自有实现），仍可检查其他名字', () => {
+  assert.equal(WEB_ONLY_DENYLIST.length, 0);
+  assert.equal(isWebOnlyCommand('export'), false);
+  assert.equal(isWebOnlyCommand('EXPORT'), false);
   assert.equal(isWebOnlyCommand('compact'), false);
 });
 
@@ -185,4 +184,13 @@ test('前导 @提及：@_user_N / 昵称 + 命令仍被识别，普通文本不�
   assert.deepEqual(parseCommand(plain), { kind: 'passthrough', raw: plain });
   const mentioned = '@_user_1 随便说 /stop';
   assert.deepEqual(parseCommand(mentioned), { kind: 'passthrough', raw: mentioned });
+});
+
+test('/help 分两段：自有命令 + dsh 原生命令透传', () => {
+  const help = helpText();
+  assert.ok(help.includes('dsh-caduceus 命令：'));
+  assert.ok(help.includes('dsh 原生命令（透传）：'));
+  for (const name of ['compact', 'goal', 'plan', 'permission', 'feedback']) {
+    assert.match(help, new RegExp(`/${name}`));
+  }
 });

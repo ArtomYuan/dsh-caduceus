@@ -18,7 +18,7 @@
  */
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { planSlashLine, type OwnedCommand } from '../commands/dispatch.js';
 import { helpText, parseCommand } from '../commands/parse.js';
@@ -39,6 +39,13 @@ import {
 } from '../doctor.js';
 import { writeOwnership, type SessionScopeKind } from '../ownership.js';
 import { extractMediaMarkers, resolveMedia } from '../media.js';
+import {
+  readSessionLogFile,
+  renderExportJsonl,
+  renderExportMarkdown,
+  truncateExport,
+  writeExportFile,
+} from '../export.js';
 import {
   finalCard,
   finalCardPlainText,
@@ -546,6 +553,10 @@ export class Bridge {
         await this.#replyText(state, result.text);
         return;
       }
+      case 'export': {
+        await this.#exportSession(state, command.json === true);
+        return;
+      }
       case 'whoami': {
         const openId = state.ownerOpenId ?? '';
         const identity = this.#isAdmin(openId) ? '管理员' : '访客';
@@ -730,6 +741,52 @@ export class Bridge {
         agent.steer(message);
         return;
     }
+  }
+
+  /** `/export`: write a local markdown/JSONL file and hand it to the MEDIA chain. */
+  async #exportSession(state: ScopeState, json: boolean): Promise<void> {
+    const sessionId = state.sessionId ?? this.#sessionMap.get(state.key);
+    if (sessionId === undefined) {
+      await this.#replyText(state, '当前没有可导出的会话。');
+      return;
+    }
+    let data;
+    try {
+      data = await this.#options.exportProvider?.(sessionId);
+      if (data === undefined) data = readSessionLogFile(sessionId);
+    } catch (error) {
+      await this.#replyText(state, `导出失败：${errorMessage(error)}`);
+      return;
+    }
+    if (data === undefined || (data.messages.length === 0 && data.rawJsonl === undefined)) {
+      await this.#replyText(state, '本会话没有可导出的日志。');
+      return;
+    }
+    const extension = json ? 'jsonl' : 'md';
+    const content = json
+      ? truncateExport(data.rawJsonl ?? renderExportJsonl(data.messages))
+      : renderExportMarkdown({
+          sessionId,
+          ...(state.title === undefined ? {} : { title: state.title }),
+          now: this.#now(),
+          messages: data.messages,
+        });
+    const cwd = this.#sessionMap.getCwd(state.key) ?? this.#config.defaultCwd;
+    let path: string;
+    try {
+      path = writeExportFile(cwd, sessionId, extension, content, this.#now());
+    } catch (error) {
+      await this.#replyText(state, `导出失败：写入文件失败（${errorMessage(error)}）。`);
+      return;
+    }
+    const label = json ? 'JSONL' : 'markdown';
+    await this.#replyText(
+      state,
+      `MEDIA:${path}\n已导出会话 ${sessionId.slice(0, 8)}（${data.messages.length} 条消息，${label}）。`,
+    );
+    await this.#sendOutboundMedia(state, [
+      { path, name: basename(path), image: false },
+    ]);
   }
 
   async #settleTurn(state: ScopeState, event: StatusEventLike): Promise<void> {

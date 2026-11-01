@@ -12,7 +12,7 @@
 import { stripLeadingMentions } from '../mentions.js';
 
 /** Commands dsh-caduceus owns. Keep in sync with README's command table. */
-export const COMMAND_NAMES = ['new', 'sessions', 'rename', 'resume', 'adopt', 'selfcheck', 'doctor', 'stop', 'status', 'persona', 'whoami', 'help'] as const;
+export const COMMAND_NAMES = ['new', 'sessions', 'rename', 'resume', 'adopt', 'selfcheck', 'doctor', 'stop', 'status', 'persona', 'whoami', 'export', 'help'] as const;
 
 export type CommandName = (typeof COMMAND_NAMES)[number];
 
@@ -36,6 +36,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   { name: 'status', usage: '/status', description: '显示本会话的运行状态、步数与起止时间' },
   { name: 'persona', usage: '/persona [show|sync]', description: '查看或同步 SOUL 人格块' },
   { name: 'whoami', usage: '/whoami', description: '显示你的 open_id、当前会话与身份' },
+  { name: 'export', usage: '/export [--json]', description: '把当前会话导出为 markdown 或 JSONL 并发回文件' },
   { name: 'help', usage: '/help', description: '显示命令表' },
 ];
 
@@ -53,6 +54,7 @@ export type ParsedCommand =
   | { readonly kind: 'status' }
   | { readonly kind: 'persona'; readonly action: PersonaAction }
   | { readonly kind: 'whoami' }
+  | { readonly kind: 'export'; readonly json?: boolean }
   | { readonly kind: 'help' }
   | { readonly kind: 'usage'; readonly command: string; readonly usage: string; readonly reason: string }
   | { readonly kind: 'passthrough'; readonly raw: string };
@@ -96,6 +98,11 @@ export function parseCommand(raw: string): ParsedCommand {
       return rest === '' ? { kind: 'status' } : usageResult('status', '/status 不接受参数');
     case 'whoami':
       return rest === '' ? { kind: 'whoami' } : usageResult('whoami', '/whoami 不接受参数');
+    case 'export': {
+      if (rest === '') return { kind: 'export' };
+      if (rest === '--json') return { kind: 'export', json: true };
+      return usageResult('export', '用法：/export [--json]');
+    }
     case 'help':
       return { kind: 'help' };
     case 'rename':
@@ -131,10 +138,23 @@ export function parseCommand(raw: string): ParsedCommand {
   }
 }
 
-/** The reply body for `/help`, one line per owned command. */
+/** dsh commands that already pass through the harness registry. */
+export const DSH_NATIVE_COMMANDS: readonly { readonly name: string; readonly description: string }[] = [
+  { name: 'compact', description: '压缩当前会话上下文' },
+  { name: 'goal', description: '查看/管理当前目标' },
+  { name: 'plan', description: '查看/切换计划模式' },
+  { name: 'permission', description: '查看/切换审批策略' },
+  { name: 'feedback', description: '提交反馈' },
+];
+
+/** The reply body for `/help`: owned commands plus dsh native passthroughs. */
 export function helpText(): string {
   const lines = ['dsh-caduceus 命令：'];
   for (const spec of COMMAND_SPECS) lines.push(`${spec.usage} — ${spec.description}`);
-  lines.push('其他 /命令 与普通消息原样交给 dsh。');
+  lines.push('', 'dsh 原生命令（透传）：');
+  for (const command of DSH_NATIVE_COMMANDS) {
+    lines.push(`/${command.name} — ${command.description}`);
+  }
+  lines.push('', '其他 /命令 与普通消息原样交给 dsh。');
   return lines.join('\n');
 }

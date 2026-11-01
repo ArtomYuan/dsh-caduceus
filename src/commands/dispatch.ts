@@ -4,15 +4,15 @@
  *
  * The surface owns eight commands; every other slash line is forwarded to the
  * harness command registry (`runHarnessCommand`), except Web-only commands that
- * make no sense on a chat surface. `/export` is the required minimum; the list
- * is intentionally small and explicit.
+ * make no sense on a chat surface. `/export` is now implemented by the surface
+ * itself, so the list is intentionally empty; keep the seam for future entries.
  *
  * @module dsh-caduceus/commands/dispatch
  */
 import { parseCommand, type ParsedCommand } from './parse.js';
 
 /** Commands that exist only in the Web UI and are refused on Feishu. */
-export const WEB_ONLY_DENYLIST: readonly string[] = ['export'];
+export const WEB_ONLY_DENYLIST: readonly string[] = [];
 
 /** True when a slash-command name must not be forwarded to the harness. */
 export function isWebOnlyCommand(name: string): boolean {

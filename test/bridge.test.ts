@@ -109,6 +109,7 @@ interface HarnessOptions {
   readonly maxSendImageBytes?: number;
   readonly mediaRoots?: readonly string[];
   readonly admins?: readonly string[];
+  readonly exportProvider?: import('../src/export.js').SessionExportProvider;
   /** `/doctor` data collector (optional; tests inject deterministic data). */
   readonly doctorInputs?: (
     session: import('../src/doctor.js').DoctorSessionInfo,
@@ -248,6 +249,9 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
       : { approvalProvider: options.approvalProvider }),
     ...(options.approvalPolicy === undefined ? {} : { approvalPolicy: options.approvalPolicy }),
     ...(options.doctorInputs === undefined ? {} : { doctorInputs: options.doctorInputs }),
+    ...(options.exportProvider === undefined
+      ? {}
+      : { exportProvider: options.exportProvider }),
   });
   return { dir, store, presets: agentPresets, transport, agents, clock, logger, titles, bridge };
 }
@@ -503,7 +507,7 @@ test('/rename 成功与 SessionTitleInvalidError 翻译', async (t) => {
   assert.match(recordedTexts(h.transport).at(-1) ?? '', /标题不能为空或太短/);
 });
 
-test('未知命令：denylist 拒绝 /export，其余转交命令注册表', async (t) => {
+test('未知命令：/export 自有处理，其余转交命令注册表', async (t) => {
   const forwarded: string[] = [];
   const h = makeHarness(t, {
     commandRunner: async (_agent, line) => {
@@ -514,8 +518,8 @@ test('未知命令：denylist 拒绝 /export，其余转交命令注册表', asy
   });
 
   await h.bridge.handleInbound(inbound('/export'));
-  assert.match(recordedTexts(h.transport).at(-1) ?? '', /仅 Web/);
-  assert.deepEqual(forwarded, [], 'denylisted commands must not reach the registry');
+  assert.match(recordedTexts(h.transport).at(-1) ?? '', /没有可导出的会话|没有可导出的日志/);
+  assert.deepEqual(forwarded, [], 'owned export must not reach the registry');
 
   await h.bridge.handleInbound(inbound('/compact'));
   assert.match(recordedTexts(h.transport).at(-1) ?? '', /压缩完成/);
@@ -2878,4 +2882,80 @@ test('话题：/whoami 走 reply + threadId，不漂到主流程', async (t) => 
   assert.equal(replies[0]?.threadId, 'omt_t');
   assert.equal(replies[0]?.replyTo, msg.messageId);
   assert.ok(!h.transport.calls.some((call) => call.op === 'sendText'));
+});
+
+test('/helper 与 /export：markdown 导出写文件并回复 MEDIA', async (t) => {
+  const h = makeHarness(t, {
+    exportProvider: () => ({
+      messages: [
+        { role: 'user', text: '你好' },
+        { role: 'assistant', text: '你好呀' },
+        { role: 'tool', toolName: 'bash', text: 'ok' },
+      ],
+    }),
+  });
+  await h.bridge.handleInbound(inbound('hi'));
+  await h.bridge.handleInbound(inbound('/export'));
+  const reply = recordedTexts(h.transport).at(-1) ?? '';
+  assert.match(reply, /^MEDIA:\/.*\.md/m);
+  assert.match(reply, /已导出会话/);
+  const path = reply.split('\n')[0]!.slice('MEDIA:'.length);
+  assert.ok(existsSync(path), `export file must exist: ${path}`);
+  const content = readFileSync(path, 'utf8');
+  assert.match(content, /# dsh 会话导出/);
+  assert.match(content, /## user/);
+  assert.match(content, /## assistant/);
+  assert.match(content, /## tool: bash/);
+  assert.ok(content.split('\n').length > 0);
+  assert.equal(
+    h.transport.uploadedFiles.filter((entry) => entry.fileName.endsWith('.md')).length,
+    1,
+  );
+});
+
+test('/export --json：写 .jsonl 并回复 MEDIA', async (t) => {
+  const h = makeHarness(t, {
+    exportProvider: () => ({
+      messages: [{ role: 'user', text: '你好' }],
+      rawJsonl: '{"type":"user/message","data":{"message":{"content":[{"type":"text","text":"你好"}]}}}\n',
+    }),
+  });
+  await h.bridge.handleInbound(inbound('hi'));
+  await h.bridge.handleInbound(inbound('/export --json'));
+  const reply = recordedTexts(h.transport).at(-1) ?? '';
+  assert.match(reply, /^MEDIA:\/.*\.jsonl/m);
+  const path = reply.split('\n')[0]!.slice('MEDIA:'.length);
+  assert.ok(existsSync(path));
+  assert.match(readFileSync(path, 'utf8'), /user\/message/);
+});
+
+test('/export：没有日志 → 明确回复，不写文件', async (t) => {
+  const saved = process.env['DSH_HOME'];
+  const emptyHome = mkdtempSync(join(tmpdir(), 'dsh-export-empty-'));
+  process.env['DSH_HOME'] = emptyHome;
+  t.after(() => {
+    if (saved === undefined) delete process.env['DSH_HOME'];
+    else process.env['DSH_HOME'] = saved;
+    rmSync(emptyHome, { recursive: true, force: true });
+  });
+  const h = makeHarness(t, { exportProvider: () => undefined });
+  await h.bridge.handleInbound(inbound('hi'));
+  await h.bridge.handleInbound(inbound('/export'));
+  assert.match(recordedTexts(h.transport).at(-1) ?? '', /本会话没有可导出的日志/);
+  assert.equal(h.transport.uploadedFiles.length, 0);
+});
+
+test('/export：超过 5MB 截断并注明', async (t) => {
+  const h = makeHarness(t, {
+    exportProvider: () => ({
+      messages: [{ role: 'assistant', text: 'x'.repeat(6 * 1024 * 1024) }],
+    }),
+  });
+  await h.bridge.handleInbound(inbound('hi'));
+  await h.bridge.handleInbound(inbound('/export'));
+  const reply = recordedTexts(h.transport).at(-1) ?? '';
+  const path = reply.split('\n')[0]!.slice('MEDIA:'.length);
+  const content = readFileSync(path, 'utf8');
+  assert.ok(Buffer.byteLength(content, 'utf8') <= 5 * 1024 * 1024);
+  assert.match(content, /已截断/);
 });
