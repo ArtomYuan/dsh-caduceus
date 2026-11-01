@@ -2109,9 +2109,26 @@ test('交互答者在插件根 ctx 注册一次，不在每个 agent setup 上�
   assert.equal(listeners.size, 2, 'root registration must happen once');
 });
 
-test('审批策略：创建会话默认调用 setPolicy(agent, ask) 并打日志', async (t) => {
+test('审批策略：默认不配置 → setPolicy 零调用', async (t) => {
   const calls: { agent: AgentLike; policy: ApprovalPolicy }[] = [];
   const h = makeHarness(t, {
+    approvalProvider: () => ({
+      setPolicy: (agent, policy) => {
+        calls.push({ agent, policy });
+      },
+    }),
+  });
+  await h.bridge.handleInbound(inbound('hi'));
+  assert.equal(calls.length, 0);
+  assert.ok(
+    !h.logger.entries.some((entry) => entry.message.includes('agent approval policy')),
+  );
+});
+
+test('审批策略：显式 ask → setPolicy 调用一次', async (t) => {
+  const calls: { agent: AgentLike; policy: ApprovalPolicy }[] = [];
+  const h = makeHarness(t, {
+    approvalPolicy: 'ask',
     approvalProvider: () => ({
       setPolicy: (agent, policy) => {
         calls.push({ agent, policy });
@@ -2122,11 +2139,6 @@ test('审批策略：创建会话默认调用 setPolicy(agent, ask) 并打日志
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.agent, liveAgent(h));
   assert.equal(calls[0]?.policy, 'ask');
-  assert.ok(
-    h.logger.entries.some(
-      (entry) => entry.level === 'info' && entry.message === 'agent approval policy=ask',
-    ),
-  );
 });
 
 test('审批策略：配置 never 时传 never', async (t) => {
@@ -2148,8 +2160,8 @@ test('审批策略：配置 never 时传 never', async (t) => {
   );
 });
 
-test('审批策略：服务缺失不抛、只 warn 一次', async (t) => {
-  const h = makeHarness(t, { approvalProvider: () => undefined });
+test('审批策略：显式覆盖但服务缺失 → 不抛、只 warn 一次', async (t) => {
+  const h = makeHarness(t, { approvalPolicy: 'ask', approvalProvider: () => undefined });
   await h.bridge.handleInbound(inbound('第一条'));
   await h.bridge.handleInbound(inbound('/new'));
   const warnings = h.logger.entries.filter(
@@ -2159,9 +2171,10 @@ test('审批策略：服务缺失不抛、只 warn 一次', async (t) => {
   assert.ok(liveAgent(h) !== undefined);
 });
 
-test('审批策略：resume 路径同样调用 setPolicy', async (t) => {
+test('审批策略：resume 路径同样调用 setPolicy（显式覆盖时）', async (t) => {
   const calls: { agent: AgentLike; policy: ApprovalPolicy }[] = [];
   const h = makeHarness(t, {
+    approvalPolicy: 'ask',
     approvalProvider: () => ({
       setPolicy: (agent, policy) => {
         calls.push({ agent, policy });
@@ -2964,21 +2977,59 @@ test('/export：超过 5MB 截断并注明', async (t) => {
   assert.match(content, /已截断/);
 });
 
-test('/permission 无参：中文当前档位 + 档位列表 + 用法', async (t) => {
+test('/permission 无参：档位描述来自 resolve（沙箱/审批），含 auto', async (t) => {
+  const specs: Record<string, { sandbox: string; approval?: string }> = {
+    'read-only': { sandbox: 'read-only', approval: 'ask' },
+    'workspace-write': { sandbox: 'workspace-write', approval: 'ask' },
+    'danger-full-access': { sandbox: 'danger-full-access', approval: 'never' },
+    auto: { sandbox: 'auto' },
+  };
   const h = makeHarness(t, {
     permissionPresetsProvider: () => ({
-      names: ['read-only', 'workspace-write', 'danger-full-access'],
+      names: ['read-only', 'workspace-write', 'danger-full-access', 'auto'],
       current: () => 'workspace-write',
+      resolve: (name: string) => specs[name] ?? {},
     }),
   });
   await h.bridge.handleInbound(inbound('/permission'));
   const text = recordedTexts(h.transport).at(-1) ?? '';
   assert.match(text, /当前档位：workspace-write/);
   assert.match(text, /可用档位：/);
-  assert.match(text, /- read-only：只读，不能写文件/);
-  assert.match(text, /- workspace-write：可写会话工作区，越界需审批/);
-  assert.match(text, /- danger-full-access：沙箱全开，审批 never（慎用）/);
+  assert.match(text, /- read-only：沙箱 read-only · 审批 ask（只读，不能写文件）/);
+  assert.match(text, /- workspace-write：沙箱 workspace-write · 审批 ask（可写会话工作区，越界需审批）/);
+  assert.match(text, /- danger-full-access：沙箱 danger-full-access · 审批 never（沙箱全开，审批 never（慎用））/);
+  assert.match(text, /- auto：沙箱 auto · 审批 \?/);
   assert.match(text, /用法：\/permission <档位>/);
+});
+
+test('/permission 当前 custom：人话说明 + 回到预设的指引', async (t) => {
+  const h = makeHarness(t, {
+    permissionPresetsProvider: () => ({
+      names: ['workspace-write'],
+      current: () => 'custom',
+      resolve: () => ({ sandbox: 'workspace-write', approval: 'ask' }),
+    }),
+  });
+  await h.bridge.handleInbound(inbound('/permission'));
+  const text = recordedTexts(h.transport).at(-1) ?? '';
+  assert.match(text, /当前档位：custom（当前沙箱\/审批组合不匹配任何预设）/);
+  assert.match(text, /用 \/permission <档位> 回到某个预设/);
+});
+
+test('/permission resolve 抛错：只显示档位名，不崩', async (t) => {
+  const h = makeHarness(t, {
+    permissionPresetsProvider: () => ({
+      names: ['weird'],
+      current: () => 'custom',
+      resolve: () => {
+        throw new Error('boom');
+      },
+    }),
+  });
+  await h.bridge.handleInbound(inbound('/permission'));
+  const text = recordedTexts(h.transport).at(-1) ?? '';
+  assert.match(text, /^- weird$/m);
+  assert.ok(!/- weird：沙箱/.test(text));
 });
 
 test('/permission 切换：调用底层命令一次并翻译为中文', async (t) => {

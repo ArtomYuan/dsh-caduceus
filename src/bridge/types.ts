@@ -29,6 +29,7 @@ export type ApprovalPolicy = 'ask' | 'never';
 export interface PermissionPresetsLike {
   readonly names: readonly string[];
   current(session: unknown): string;
+  resolve?(name: string): { readonly sandbox?: unknown; readonly approval?: unknown };
 }
 
 /** The slice of dsh's attachment service the bridge needs. */
@@ -174,7 +175,7 @@ export interface BridgeOptions {
   readonly permissionPresetsProvider?: () => PermissionPresetsLike | undefined;
   /** Lazily resolve dsh's approval service (agent-scoped setPolicy). */
   readonly approvalProvider?: () => ApprovalServiceLike | undefined;
-  /** Desired session approval policy (default `ask`). */
+  /** Explicit session approval policy; undefined leaves dsh untouched. */
   readonly approvalPolicy?: ApprovalPolicy;
   /** `/doctor` data collector (wired by the gateway; not available in tests by default). */
   readonly doctorInputs?: (

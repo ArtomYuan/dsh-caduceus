@@ -193,6 +193,9 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
     }),
   );
   logger.info(`agent preset=${resolved.agentPreset}`);
+  if (resolved.approvalPolicy !== undefined) {
+    logger.info(`approval policy override=${resolved.approvalPolicy}`);
+  }
   const accessWarning = accessControlWarning(resolved.bridge.admins ?? []);
   if (accessWarning !== undefined) logger.warn(accessWarning);
   const selfCheck = new SelfChecker({

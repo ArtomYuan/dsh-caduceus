@@ -37,7 +37,7 @@ export interface GatewayConfig {
   readonly questionCard?: boolean;
   /** Interactive card timeout in ms (default 300000). */
   readonly interactiveTimeoutMs?: number;
-  /** Session approval policy; IM humans are present, so default `ask`. */
+  /** Session approval policy override; undefined keeps dsh's own policy. */
   readonly approvalPolicy?: ApprovalPolicy;
   /** Emoji reactions on inbound/turn-end (default true). */
   readonly reactions?: boolean;
@@ -133,9 +133,6 @@ export const DEFAULT_REACTION_ON_START = 'OnIt';
 export const DEFAULT_REACTION_ON_DONE = 'DONE';
 export const DEFAULT_REACTION_ON_FAIL = 'CROSS_MARK';
 
-/** Default session approval policy: ask, so dangerous actions prompt a card. */
-export const DEFAULT_APPROVAL_POLICY: ApprovalPolicy = 'ask';
-
 /** Default interactive-card switches/timeout. */
 export const DEFAULT_APPROVAL_CARD = true;
 export const DEFAULT_QUESTION_CARD = true;
@@ -161,7 +158,7 @@ export interface ResolvedGatewayConfig {
   readonly approvalCard: boolean;
   readonly questionCard: boolean;
   readonly interactiveTimeoutMs: number;
-  readonly approvalPolicy: ApprovalPolicy;
+  readonly approvalPolicy?: ApprovalPolicy;
 }
 
 export interface ConfigEnv {
@@ -223,6 +220,8 @@ export function resolveGatewayConfig(
     approvalCard: config.approvalCard ?? DEFAULT_APPROVAL_CARD,
     questionCard: config.questionCard ?? DEFAULT_QUESTION_CARD,
     interactiveTimeoutMs: config.interactiveTimeoutMs ?? DEFAULT_INTERACTIVE_TIMEOUT_MS,
-    approvalPolicy: config.approvalPolicy ?? DEFAULT_APPROVAL_POLICY,
+    ...(config.approvalPolicy === undefined
+      ? {}
+      : { approvalPolicy: config.approvalPolicy }),
   };
 }

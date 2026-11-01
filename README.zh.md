@@ -80,7 +80,7 @@ onlyBuiltDependencies:
 | `approvalCard` | `true` | 发交互审批卡（允许一次 / 拒绝） |
 | `questionCard` | `true` | 发交互选项卡；单选且 ≤4 个选项时显示按钮 |
 | `interactiveTimeoutMs` | `300000` | 审批/选项卡等待多久后过期 |
-| `approvalPolicy` | `ask` | 会话审批策略：`ask`（弹卡确认，默认）或 `never` |
+| `approvalPolicy` | 未设置 | 可选覆盖：`ask` / `never`；不设置则完全不动 dsh 的审批策略 |
 | `reactions` | `true` | 消息表情反馈：处理中 `OnIt`，结束 `DONE`/`CROSS_MARK` |
 | `reactionOnStart` | `OnIt` | 收到用户消息时添加的表情 |
 | `reactionOnDone` | `DONE` | 回合完成时添加的表情 |

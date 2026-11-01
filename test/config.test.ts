@@ -92,10 +92,10 @@ test('交互卡片配置默认开启、超时 300s；显式关闭生效', async 
   assert.equal(off.interactiveTimeoutMs, 5);
 });
 
-test('approvalPolicy 默认 ask，可显式设为 never', async () => {
-  const { DEFAULT_APPROVAL_POLICY, resolveGatewayConfig } = await import('../src/config.js');
-  assert.equal(DEFAULT_APPROVAL_POLICY, 'ask');
-  assert.equal(resolveGatewayConfig({}).approvalPolicy, 'ask');
+test('approvalPolicy 默认不覆盖（undefined），可显式设置', async () => {
+  const { resolveGatewayConfig } = await import('../src/config.js');
+  assert.equal(resolveGatewayConfig({}).approvalPolicy, undefined);
+  assert.equal(resolveGatewayConfig({ approvalPolicy: 'ask' }).approvalPolicy, 'ask');
   assert.equal(resolveGatewayConfig({ approvalPolicy: 'never' }).approvalPolicy, 'never');
 });
 

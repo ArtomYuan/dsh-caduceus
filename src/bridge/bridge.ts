@@ -771,6 +771,7 @@ export class Bridge {
         renderPermissionOverview(
           service.current(resolved.agent.session),
           service.names,
+          service,
         ),
       );
       return;
@@ -1341,7 +1342,8 @@ export class Bridge {
    * agent. Missing service warns once; setPolicy errors never block the turn.
    */
   #applyApprovalPolicy(agent: AgentLike): void {
-    const policy = this.#options.approvalPolicy ?? 'ask';
+    const policy = this.#options.approvalPolicy;
+    if (policy === undefined) return; // never override dsh's own default
     this.#logger.info(`agent approval policy=${policy}`);
     const provider = this.#options.approvalProvider;
     if (provider === undefined) return;
@@ -1907,10 +1909,33 @@ function permissionDescription(name: string): string {
   return PRESET_DESCRIPTIONS[name] ?? name;
 }
 
-function renderPermissionOverview(current: string, names: readonly string[]): string {
-  const lines = [`当前档位：${current}`, '可用档位：'];
-  for (const name of names) lines.push(`- ${name}：${permissionDescription(name)}`);
+function renderPermissionOverview(
+  current: string,
+  names: readonly string[],
+  service: { resolve?(name: string): { readonly sandbox?: unknown; readonly approval?: unknown } },
+): string {
+  const currentText =
+    current === 'custom'
+      ? '当前档位：custom（当前沙箱/审批组合不匹配任何预设）'
+      : `当前档位：${current}`;
+  const lines = [currentText, '可用档位：'];
+  for (const name of names) {
+    let line = `- ${name}`;
+    try {
+      const spec = service.resolve?.(name);
+      if (spec !== undefined) {
+        const sandbox = spec.sandbox === undefined ? '?' : String(spec.sandbox);
+        const approval = spec.approval === undefined ? '?' : String(spec.approval);
+        const hint = PRESET_DESCRIPTIONS[name];
+        line = `- ${name}：沙箱 ${sandbox} · 审批 ${approval}${hint === undefined ? '' : `（${hint}）`}`;
+      }
+    } catch {
+      line = `- ${name}`;
+    }
+    lines.push(line);
+  }
   lines.push('用法：/permission <档位>');
+  if (current === 'custom') lines.push('用 /permission <档位> 回到某个预设');
   return lines.join('\n');
 }
 
