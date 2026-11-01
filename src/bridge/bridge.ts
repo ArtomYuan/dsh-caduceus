@@ -232,15 +232,22 @@ export class Bridge {
       }
       case 'step/start': {
         await this.#renderProgress(state);
-        // tools:count is only meaningful after the preset mount finished and
-        // the first request was assembled; do it once per session.
-        await this.#maybeSelfCheckTools(session);
         break;
       }
       case 'step/end':
       case 'tool/call':
       case 'tool/result': {
         await this.#renderProgress(state);
+        break;
+      }
+      case 'request/header': {
+        // First request header of the session = the exact tool list the model
+        // receives. This is the only authoritative tools:count source.
+        const data = event.data as
+          | { readonly header?: { readonly tools?: readonly unknown[] } }
+          | undefined;
+        const toolCount = Array.isArray(data?.header?.tools) ? data.header.tools.length : 0;
+        await this.#maybeSelfCheckTools(session, toolCount);
         break;
       }
       case 'assistant/message': {
@@ -912,14 +919,17 @@ export class Bridge {
     await this.#selfCheck.runStageB(this.#agentCtxBySession.get(sessionId));
   }
 
-  /** First `step/start` of a session: count tools from the live snapshot/header. */
-  async #maybeSelfCheckTools(session: { readonly id: string }): Promise<void> {
+  /** First `request/header` of a session: record the model's actual tool count. */
+  async #maybeSelfCheckTools(
+    session: { readonly id: string },
+    toolCount: number,
+  ): Promise<void> {
     const checker = this.#selfCheck;
     if (checker === undefined) return;
     const sessionId = String(session.id);
     if (this.#toolsCheckedSessions.has(sessionId)) return;
     this.#toolsCheckedSessions.add(sessionId);
-    await checker.checkTools(this.#agentCtxBySession.get(sessionId), session);
+    await checker.checkTools(toolCount);
   }
 
   /**

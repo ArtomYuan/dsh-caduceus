@@ -59,10 +59,6 @@ export interface SelfCheckOptions {
   readonly getAgentPresets?: () => AgentPresetsLike | undefined;
   /** `ctx.get('tools')` (lazy). */
   readonly getTools?: () => unknown;
-  /** Count the tools visible to one agent context; undefined = API unavailable. */
-  readonly toolCount?: (agentCtx: unknown) => number | undefined;
-  /** Length of the first request's `request/header.tools`; undefined = unavailable. */
-  readonly requestHeaderTools?: (session: unknown) => number | undefined;
 }
 
 function errorMessage(error: unknown): string {
@@ -124,6 +120,7 @@ export class SelfChecker {
   #lastAgentCtx: unknown;
   #lastSession: unknown;
   #hasLastSession = false;
+  #lastToolCount: number | undefined;
 
   constructor(options: SelfCheckOptions = {}) {
     this.#options = options;
@@ -150,7 +147,7 @@ export class SelfChecker {
     // create() returns before the async preset mount has registered every tool.
     const items: SelfCheckItem[] = [
       this.#checkPresetApplied(),
-      item('tools:count', 'skip', '等待首次 step/start 后判定（create 时工具注册未完成）'),
+      item('tools:count', 'skip', 'pending：等待首条 request/header（模型实际工具清单）'),
     ];
     // First-touch validation: if a service was skipped during startup, refresh
     // its stage-A item now that a real create/resume succeeded.
@@ -172,58 +169,33 @@ export class SelfChecker {
   async runAll(): Promise<SelfCheckReport> {
     await this.runStageA();
     await this.runStageB(this.#lastAgentCtx);
-    if (this.#hasLastSession || this.#lastAgentCtx !== undefined) {
-      await this.checkTools(this.#lastAgentCtx, this.#lastSession);
+    if (this.#lastToolCount !== undefined) {
+      await this.checkTools(this.#lastToolCount);
     }
     const items = combineReports(this.#stageA, this.#stageB);
     return reportOf('B', items);
   }
 
   /**
-   * Decide `tools:count` from the session's first step/start.
-   * Prefer the live agent tools snapshot; fall back to the request header tool
-   * list. When both are available they MUST agree, otherwise this is a fail
-   * with both numbers (a partial/async registration is a stronger signal).
+   * Decide `tools:count` from the session's FIRST `request/header` event.
+   * The header's `tools` array is exactly what the model receives — the only
+   * authoritative source. No tools-service counting, no second source.
    */
-  async checkTools(agentCtx?: unknown, session?: unknown): Promise<SelfCheckReport> {
-    if (agentCtx !== undefined) this.#lastAgentCtx = agentCtx;
-    if (session !== undefined) {
-      this.#lastSession = session;
-      this.#hasLastSession = true;
-    }
-    const actual = this.#safeCount(() => this.#options.toolCount?.(this.#lastAgentCtx));
-    const header = this.#safeCount(() => this.#options.requestHeaderTools?.(this.#lastSession));
-    let toolsItem: SelfCheckItem;
-    if (actual !== undefined && header !== undefined && actual !== header) {
-      const detail = `自检 ${actual} ≠ 实际 ${header}`;
-      toolsItem = item('tools:count', 'fail', detail, detail);
-    } else {
-      const effective = actual ?? header;
-      if (effective === undefined) {
-        toolsItem = item('tools:count', 'skip', '工具快照与 request/header 均不可用');
-      } else if (effective === 0) {
-        toolsItem = item('tools:count', 'fail', 'agent 无可用工具', 'agent 无法执行任何操作');
-      } else {
-        toolsItem = item('tools:count', 'ok', `tools=${effective}`);
-      }
-    }
+  async checkTools(toolCount: number): Promise<SelfCheckReport> {
+    this.#lastToolCount = toolCount;
+    const toolsItem: SelfCheckItem =
+      toolCount === 0
+        ? item('tools:count', 'fail', 'request/header.tools 为空', 'request/header.tools 为空')
+        : item('tools:count', 'ok', `tools=${toolCount}`);
     const baseItems = this.#stageB?.items ?? [
       this.#checkPresetApplied(),
-      item('tools:count', 'skip', '等待 step/start'),
+      item('tools:count', 'skip', 'pending：等待首条 request/header'),
     ];
     const items = baseItems.map((entry) => (entry.id === 'tools:count' ? toolsItem : entry));
     const report = reportOf('B', items);
     this.#stageB = report;
     this.#maybeLog();
     return report;
-  }
-
-  #safeCount(read: () => number | undefined): number | undefined {
-    try {
-      return read();
-    } catch {
-      return undefined;
-    }
   }
 
   /** Combined report for display. */

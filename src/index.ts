@@ -148,24 +148,6 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
     logger,
     getAgentPresets: () => ctx.get('agentPresets') as AgentPresetsLike | undefined,
     getTools: () => ctx.get('tools'),
-    toolCount: (agentCtx) => {
-      try {
-        const scoped = agentCtx as { get?: (name: string) => unknown };
-        const tools = scoped.get?.('tools') as { schemas?: () => readonly unknown[] } | undefined;
-        return tools?.schemas?.().length;
-      } catch {
-        return undefined;
-      }
-    },
-    requestHeaderTools: (session) => {
-      try {
-        const live = session as { requestHeader?: () => unknown };
-        const header = live.requestHeader?.() as { tools?: readonly unknown[] } | undefined;
-        return Array.isArray(header?.tools) ? header.tools.length : undefined;
-      } catch {
-        return undefined;
-      }
-    },
   });
   const sessionMap = new SessionStore();
   sessionMap.load();
