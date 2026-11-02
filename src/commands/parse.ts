@@ -12,7 +12,7 @@
 import { stripLeadingMentions } from '../mentions.js';
 
 /** Commands dsh-caduceus owns. Keep in sync with README's command table. */
-export const COMMAND_NAMES = ['new', 'sessions', 'rename', 'resume', 'adopt', 'selfcheck', 'doctor', 'stop', 'status', 'persona', 'whoami', 'export', 'permission', 'help'] as const;
+export const COMMAND_NAMES = ['new', 'sessions', 'rename', 'resume', 'adopt', 'selfcheck', 'doctor', 'stop', 'status', 'persona', 'whoami', 'export', 'permission', 'usage', 'help'] as const;
 
 export type CommandName = (typeof COMMAND_NAMES)[number];
 
@@ -38,6 +38,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   { name: 'whoami', usage: '/whoami', description: '显示你的 open_id、当前会话与身份' },
   { name: 'export', usage: '/export [--json]', description: '把当前会话导出为 markdown 或 JSONL 并发回文件' },
   { name: 'permission', usage: '/permission [档位]', description: '查看或切换当前会话的权限档位（中文）' },
+  { name: 'usage', usage: '/usage', description: '查看本会话 token 用量（本回合/上回合/合计）' },
   { name: 'help', usage: '/help', description: '显示命令表' },
 ];
 
@@ -57,6 +58,7 @@ export type ParsedCommand =
   | { readonly kind: 'whoami' }
   | { readonly kind: 'export'; readonly json?: boolean }
   | { readonly kind: 'permission'; readonly preset?: string }
+  | { readonly kind: 'usage-report' }
   | { readonly kind: 'help' }
   | { readonly kind: 'usage'; readonly command: string; readonly usage: string; readonly reason: string }
   | { readonly kind: 'passthrough'; readonly raw: string };
@@ -105,6 +107,8 @@ export function parseCommand(raw: string): ParsedCommand {
       if (rest === '--json') return { kind: 'export', json: true };
       return usageResult('export', '用法：/export [--json]');
     }
+    case 'usage':
+      return rest === '' ? { kind: 'usage-report' } : usageResult('usage', '/usage 不接受参数');
     case 'permission': {
       if (rest === '') return { kind: 'permission' };
       const parts = rest.split(/\s+/);

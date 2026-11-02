@@ -26,6 +26,8 @@ export interface InteractiveRuntimeOptions {
   updateCard(messageId: string, card: FeishuCard): Promise<void>;
   /** Button callback for the permission card (`caduceus.permission.switch`). */
   permissionSwitch?(action: CardAction, name: string): void | Promise<void>;
+  /** Button callback for the process-card stop button. */
+  turnStop?(action: CardAction): void | Promise<void>;
 }
 
 export class InteractiveRuntime {
@@ -36,6 +38,7 @@ export class InteractiveRuntime {
   readonly #sendCard: InteractiveRuntimeOptions['sendCard'];
   readonly #updateCard: InteractiveRuntimeOptions['updateCard'];
   readonly #permissionSwitch: InteractiveRuntimeOptions['permissionSwitch'];
+  readonly #turnStop: InteractiveRuntimeOptions['turnStop'];
 
   constructor(options: InteractiveRuntimeOptions) {
     this.config = options.config;
@@ -44,6 +47,7 @@ export class InteractiveRuntime {
     this.#sendCard = options.sendCard;
     this.#updateCard = options.updateCard;
     this.#permissionSwitch = options.permissionSwitch;
+    this.#turnStop = options.turnStop;
   }
 
   /**
@@ -108,6 +112,11 @@ export class InteractiveRuntime {
    * a warning and do not resolve or patch anything.
    */
   async handleCardAction(action: CardAction): Promise<void> {
+    if (action.value['action'] === 'caduceus.turn.stop') {
+      this.logger.info(`card action stop operator=${logPrefix(action.operatorOpenId)}`);
+      await this.#turnStop?.(action);
+      return;
+    }
     if (
       action.value['action'] === 'caduceus.permission.switch' &&
       typeof action.value['name'] === 'string'

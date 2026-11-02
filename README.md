@@ -15,7 +15,7 @@
 - **One scope, one session** — p2p, topic, and group-per-user sessions are kept separate.
 - **Visible titles** — generated from the first prompt and shown on the turn card.
 - **One card per turn** — status and answer live in the same card, edited in place; the final answer is not a second message.
-- **14 commands** — `/new`, `/sessions`, `/rename`, `/resume`, `/adopt`, `/status`, `/stop`, `/doctor`, `/selfcheck`, `/persona`, `/whoami`, `/export`, `/permission`, `/help`.
+- **15 commands** — `/new`, `/sessions`, `/rename`, `/resume`, `/adopt`, `/status`, `/stop`, `/doctor`, `/selfcheck`, `/persona`, `/whoami`, `/export`, `/permission`, `/usage`, `/help`.
 - **Persona** — `SOUL.md` is synced into the `AGENTS.md` block, automatically at startup.
 - **Observability** — two-stage self-check, `/doctor`, and in-chat degradation warnings.
 
@@ -114,6 +114,7 @@ onlyBuiltDependencies:
 | `/whoami` | Show your open_id, current chat/topic, and admin/guest role |
 | `/export [--json]` | Export the current session as markdown or raw JSONL and send it as a file |
 | `/permission [preset]` | Permission card: current preset, usage line, and one switch button per preset; labels and copy follow the dsh locale |
+| `/usage` | Token usage: this turn, previous turn, and session total |
 | `/help` | Command table |
 
 ## Troubleshooting

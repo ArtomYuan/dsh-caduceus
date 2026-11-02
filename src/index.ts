@@ -240,6 +240,7 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
     permissionSwitch: (action, name) => {
       void bridge.handlePermissionCardAction(action, name);
     },
+    turnStop: (action) => bridge.handleStopCardAction(action),
     updateCard: (messageId, card) => transport.updateCard(messageId, card),
   });
   transport.onCardAction?.((action) => {

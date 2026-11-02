@@ -62,6 +62,10 @@ export function tailText(text: string, maxBytes = CARD_TAIL_BYTES): string {
 
 export interface ProgressCardInput {
   readonly title: string;
+  /** Extra status lines (compaction, teammate, stop requested). */
+  readonly extraLines?: readonly string[];
+  /** Show the stop button (running turns only). */
+  readonly stopButton?: boolean;
   readonly stateLabel: string;
   readonly steps: number;
   readonly tools: number;
@@ -106,8 +110,24 @@ export function progressCard(input: ProgressCardInput): FeishuCard {
     div(stateLine.join(' · ')),
     div(`最近：${clipLabel(input.recentEvent ?? '（无）')}`),
   ];
+  for (const line of input.extraLines ?? []) {
+    if (line.trim().length > 0) elements.push(div(line));
+  }
   const tail = input.tail === undefined ? '' : tailText(input.tail);
   if (tail.trim().length > 0) elements.push(div(tail));
+  if (input.stopButton === true) {
+    elements.push({
+      tag: 'action',
+      actions: [
+        {
+          tag: 'button',
+          text: { tag: 'plain_text', content: '停止' },
+          type: 'danger',
+          value: { action: 'caduceus.turn.stop' },
+        },
+      ],
+    });
+  }
   elements.push(div('_过程消息；收尾会把终稿更新到本卡。_'));
   return buildCard({ title: input.title, template: 'blue', elements });
 }

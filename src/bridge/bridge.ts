@@ -112,6 +112,8 @@ interface ScopeState {
   readonly status: StatusTracker;
   progress?: CardStream;
   lastOutput: string;
+  /** Stop button was accepted for the current turn. */
+  stopRequested?: boolean;
   /** Cached most recent agent request (used by /doctor on command turns). */
   lastAgentTurn?: DoctorLastTurn;
   /** Latest session title (from a `session/title` event or `/rename`). */
@@ -186,6 +188,8 @@ export class Bridge {
   readonly #states = new Map<string, ScopeState>();
   readonly #chatIdBySession = new Map<string, string>();
   readonly #permissionCards = new Map<string, { key: string; ownerOpenId?: string }>();
+  readonly #stopCards = new Map<string, string>();
+  readonly #stopClicks = new Map<string, number>();
   readonly #scopeBySession = new Map<string, string>();
 
   constructor(options: BridgeOptions) {
@@ -328,6 +332,7 @@ export class Bridge {
     switch (event.type) {
       case 'turn/start': {
         state.running = true;
+        state.stopRequested = false;
         state.lastOutput = '';
         state.progress?.dispose();
         state.progress = this.#makeCardStream(state);
@@ -377,6 +382,13 @@ export class Bridge {
         // Re-render the EXISTING process card in place (throttled); never
         // create a new message just because the title arrived late.
         if (state.progress?.messageId !== undefined) await this.#renderProgress(state);
+        break;
+      }
+      case 'compaction/start':
+      case 'compaction/end':
+      case 'team/member':
+      case 'team/task': {
+        await this.#renderProgress(state);
         break;
       }
       default:
@@ -568,6 +580,10 @@ export class Bridge {
       }
       case 'permission': {
         await this.#handlePermission(state, command.preset);
+        return;
+      }
+      case 'usage-report': {
+        await this.#replyText(state, renderUsageText(state.status.get()));
         return;
       }
       case 'whoami': {
@@ -1001,6 +1017,7 @@ export class Bridge {
       if (notice !== undefined) await this.#replyText(state, notice);
     }
     await this.#finishReactions(state, kind);
+    state.stopRequested = false;
     state.lastOutput = '';
   }
 
@@ -1264,19 +1281,51 @@ export class Bridge {
     }
   }
 
-  async #stop(state: ScopeState): Promise<void> {
+  async #cancelCurrentTurn(
+    state: ScopeState,
+  ): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }> {
     const sessionId = state.sessionId ?? this.#sessionMap.get(state.key);
-    if (sessionId === undefined) {
-      await this.#replyText(state, '本聊天/话题还没有会话。');
-      return;
-    }
+    if (sessionId === undefined) return { ok: false, reason: '本聊天/话题还没有会话。' };
     const agent = this.#agents.get(sessionId);
-    if (agent === undefined) {
-      await this.#replyText(state, '当前没有在跑的会话。');
+    if (agent === undefined) return { ok: false, reason: '当前没有在跑的会话。' };
+    try {
+      agent.cancel({ kind: 'user' });
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, reason: `取消失败：${errorMessage(error)}` };
+    }
+  }
+
+  async #stop(state: ScopeState): Promise<void> {
+    const result = await this.#cancelCurrentTurn(state);
+    if (!result.ok) {
+      await this.#replyText(state, result.reason);
       return;
     }
-    agent.cancel({ kind: 'user' });
     await this.#replyText(state, '已请求停止当前一轮（cancel kind=user）。');
+  }
+
+  /** Stop button callback: same cancel path as `/stop`, once per second. */
+  async handleStopCardAction(action: CardAction): Promise<void> {
+    const key = this.#stopCards.get(action.messageId);
+    if (key === undefined) return;
+    const state = this.#states.get(key);
+    if (state === undefined || !state.running) return;
+    const now = this.#now();
+    const last = this.#stopClicks.get(action.messageId);
+    if (last !== undefined && now - last < 1000) return;
+    this.#stopClicks.set(action.messageId, now);
+
+    const result = await this.#cancelCurrentTurn(state);
+    if (!result.ok) {
+      this.#logger.warn(`stop card failed: ${result.reason}`);
+      return;
+    }
+    state.stopRequested = true;
+    if (state.progress?.messageId === action.messageId) {
+      await this.#renderProgress(state);
+      await state.progress?.flush();
+    }
   }
 
   async #rename(state: ScopeState, title: string): Promise<void> {
@@ -1899,7 +1948,11 @@ export class Bridge {
 
   #makeCardStream(state: ScopeState): CardStream {
     const channel: CardChannel = {
-      create: (card: FeishuCard) => this.#sendNewCard(state, card),
+      create: async (card: FeishuCard) => {
+        const sent = await this.#sendNewCard(state, card);
+        this.#stopCards.set(sent.messageId, state.key);
+        return sent;
+      },
       update: async (messageId: string, card: FeishuCard) => {
         await this.#transport.updateCard(messageId, card);
       },
@@ -1935,6 +1988,17 @@ export class Bridge {
   }
 
   #progressCardFor(state: ScopeState, snapshot: StatusSnapshot): FeishuCard {
+    const extraLines: string[] = [];
+    if (snapshot.compaction === 'running') extraLines.push('上下文压缩中…');
+    else if (snapshot.compaction === 'done') {
+      extraLines.push(
+        snapshot.compactionKept === undefined
+          ? '已压缩'
+          : `已压缩 · 保留 ${snapshot.compactionKept} 条`,
+      );
+    } else if (snapshot.compaction === 'failed') extraLines.push('上下文压缩失败');
+    if (snapshot.teamLine !== undefined) extraLines.push(snapshot.teamLine);
+    if (state.stopRequested === true) extraLines.push('已请求停止');
     return progressCardForSnapshot(
       snapshot,
       state.title,
@@ -1942,6 +2006,8 @@ export class Bridge {
       state.lastOutput,
       this.#now(),
       state.sessionId !== undefined && this.#presetFailures.has(state.sessionId),
+      extraLines,
+      state.running && state.stopRequested !== true,
     );
   }
 
@@ -1973,9 +2039,13 @@ export function progressCardForSnapshot(
   tail: string,
   now: number,
   presetMissing = false,
+  extraLines: readonly string[] = [],
+  stopButton = false,
 ): FeishuCard {
   return progressCard({
     title: '飞书会话 · 过程',
+    ...(extraLines.length === 0 ? {} : { extraLines }),
+    ...(stopButton ? { stopButton: true } : {}),
     stateLabel: statusLabel(snapshot.state),
     steps: snapshot.steps,
     tools: snapshot.tools,
@@ -1986,6 +2056,17 @@ export function progressCardForSnapshot(
     ...(snapshot.startedAt === undefined ? {} : { startedAt: snapshot.startedAt }),
     now,
   });
+}
+
+function renderUsageText(snapshot: StatusSnapshot): string {
+  if (snapshot.usageSeen !== true) return '暂无用量数据';
+  const line = (label: string, usage: NonNullable<StatusSnapshot['usageTurn']>): string =>
+    `${label}：输入 ${usage.input} · 输出 ${usage.output} · 缓存命中 ${usage.cacheRead} · 合计 ${usage.total}`;
+  const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+  const lines = [line('本回合', snapshot.usageTurn ?? zero)];
+  lines.push(snapshot.usagePrevious === undefined ? '上回合：暂无' : line('上回合', snapshot.usagePrevious));
+  lines.push(line('会话合计', snapshot.usageTotal ?? zero));
+  return lines.join('\n');
 }
 
 /** Normalize a resource content-type to one of dsh's accepted image types. */

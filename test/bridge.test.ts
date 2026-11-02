@@ -3280,3 +3280,254 @@ test('权限卡片：切档后原地刷新为新档位标签', async (t) => {
   assert.ok(patched !== undefined);
   assert.match(JSON.stringify(patched), /权限 · 当前：仅可查看/);
 });
+
+function runningProcessCardText(h: ReturnType<typeof makeHarness>): string {
+  const card = cardOfTitle(recordedCards(h.transport), PROCESS_CARD_TITLE);
+  assert.ok(card !== undefined);
+  const patch = finalPatchOfCard(h.transport, card.messageId);
+  return JSON.stringify(patch ?? card.card);
+}
+
+async function settleRender(h: ReturnType<typeof makeHarness>): Promise<void> {
+  h.clock.advance(400);
+  await tick();
+}
+
+async function startRunningTurn(h: ReturnType<typeof makeHarness>): Promise<ReturnType<typeof liveAgent>> {
+  const agent = liveAgent(h);
+  await h.bridge.handleSessionEvent(agent.session, event('turn/start', { turn: 1 }, 100));
+  await settleRender(h);
+  return agent;
+}
+
+test('/usage：本回合/上回合/合计，含缓存命中', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('hi'));
+  const agent = await startRunningTurn(h);
+  await h.bridge.handleSessionEvent(
+    agent.session,
+    event('assistant/message', { usage: { inputTokens: 10, outputTokens: 2, cacheReadTokens: 4, totalTokens: 16 } }, 120),
+  );
+  await h.bridge.handleSessionEvent(
+    agent.session,
+    event('assistant/message', { usage: { inputTokens: 5, outputTokens: 3, cacheReadTokens: 1, totalTokens: 9 } }, 130),
+  );
+  await h.bridge.handleSessionEvent(agent.session, event('turn/end', { reason: { kind: 'completed' } }, 140));
+  await h.bridge.handleInbound(inbound('/usage'));
+  const text = recordedTexts(h.transport).at(-1) ?? '';
+  assert.match(text, /本回合：输入 15 · 输出 5 · 缓存命中 5 · 合计 25/);
+  assert.match(text, /上回合：暂无/);
+  assert.match(text, /会话合计：输入 15 · 输出 5 · 缓存命中 5 · 合计 25/);
+});
+
+test('/usage：缺字段按 0 处理', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('hi'));
+  const agent = await startRunningTurn(h);
+  await h.bridge.handleSessionEvent(
+    agent.session,
+    event('assistant/message', { usage: { inputTokens: 7 } }, 120),
+  );
+  await h.bridge.handleSessionEvent(agent.session, event('turn/end', { reason: { kind: 'completed' } }, 140));
+  await h.bridge.handleInbound(inbound('/usage'));
+  const text = recordedTexts(h.transport).at(-1) ?? '';
+  assert.match(text, /本回合：输入 7 · 输出 0 · 缓存命中 0 · 合计 7/);
+});
+
+test('/usage：无数据 → 暂无用量数据', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('hi'));
+  await h.bridge.handleInbound(inbound('/usage'));
+  assert.equal(recordedTexts(h.transport).at(-1), '暂无用量数据');
+});
+
+test('压缩：compaction/start 在过程卡显示“上下文压缩中…”', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('hi'));
+  const agent = await startRunningTurn(h);
+  await h.bridge.handleSessionEvent(agent.session, event('compaction/start', {}, 150));
+  await settleRender(h);
+  assert.match(runningProcessCardText(h), /上下文压缩中…/);
+});
+
+test('压缩：end 带保留条数；缺字段只写已压缩', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('hi'));
+  const agent = await startRunningTurn(h);
+  await h.bridge.handleSessionEvent(agent.session, event('compaction/end', { kept: 3 }, 150));
+  await settleRender(h);
+  assert.match(runningProcessCardText(h), /已压缩 · 保留 3 条/);
+
+  const h2 = makeHarness(t);
+  await h2.bridge.handleInbound(inbound('hi'));
+  const agent2 = await startRunningTurn(h2);
+  await h2.bridge.handleSessionEvent(agent2.session, event('compaction/end', {}, 150));
+  await settleRender(h2);
+  const text = runningProcessCardText(h2);
+  assert.match(text, /已压缩/);
+  assert.ok(!text.includes('保留'));
+});
+
+test('压缩：end 先于 start 不崩（乱序）', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('hi'));
+  const agent = await startRunningTurn(h);
+  await assert.doesNotReject(async () => {
+    await h.bridge.handleSessionEvent(agent.session, event('compaction/end', {}, 150));
+    await h.bridge.handleSessionEvent(agent.session, event('compaction/start', {}, 160));
+    await settleRender(h);
+  });
+});
+
+test('队友：team/member 显示一行；team/task 覆盖同一行不堆叠', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('hi'));
+  const agent = await startRunningTurn(h);
+  await h.bridge.handleSessionEvent(
+    agent.session,
+    event('team/member', { member: { name: '研究员', phase: 'running' } }, 150),
+  );
+  await settleRender(h);
+  assert.match(runningProcessCardText(h), /队友 研究员：running/);
+
+  await h.bridge.handleSessionEvent(
+    agent.session,
+    event('team/task', { task: { subject: '调研', status: 'in_progress' } }, 160),
+  );
+  await settleRender(h);
+  const text = runningProcessCardText(h);
+  assert.match(text, /队友 调研：in_progress/);
+  assert.ok(!text.includes('队友 研究员'));
+});
+
+test('停止按钮：运行中出现在过程卡，payload 正确', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('hi'));
+  await startRunningTurn(h);
+  const text = runningProcessCardText(h);
+  assert.match(text, /caduceus.turn.stop/);
+  assert.match(text, /停止/);
+});
+
+test('停止按钮：非运行态不出现', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('hi'));
+  const agent = await startRunningTurn(h);
+  await h.bridge.handleSessionEvent(agent.session, event('turn/end', { reason: { kind: 'completed' } }, 200));
+  const text = runningProcessCardText(h);
+  assert.ok(!text.includes('caduceus.turn.stop'));
+  assert.ok(!text.includes('停止'));
+});
+
+test('停止按钮：点击调用 cancel 一次并卡片改为已请求停止', async (t) => {
+  const { InteractiveRuntime } = await import('../src/interactive/runtime.js');
+  const runtime = new InteractiveRuntime({
+    config: { approvalCard: true, questionCard: true, timeoutMs: 300_000 },
+    logger: new FakeLogger(),
+    clock: new FakeClock(),
+    sendCard: async () => ({ messageId: 'unused' }),
+    updateCard: async () => undefined,
+    turnStop: (action) => h.bridge.handleStopCardAction(action),
+  });
+  const h = makeHarness(t, { interactive: runtime });
+  await h.bridge.handleInbound(inbound('hi'));
+  const agent = await startRunningTurn(h);
+  const card = cardOfTitle(recordedCards(h.transport), PROCESS_CARD_TITLE);
+  assert.ok(card !== undefined);
+  await runtime.handleCardAction({
+    operatorOpenId: 'ou_user',
+    messageId: card.messageId,
+    chatId: 'oc_chat',
+    value: { action: 'caduceus.turn.stop' },
+  });
+  assert.equal(agent.cancels.length, 1);
+  await settleRender(h);
+  assert.match(runningProcessCardText(h), /已请求停止/);
+});
+
+test('停止按钮：连点 1 秒内只 cancel 一次', async (t) => {
+  const { InteractiveRuntime } = await import('../src/interactive/runtime.js');
+  const runtime = new InteractiveRuntime({
+    config: { approvalCard: true, questionCard: true, timeoutMs: 300_000 },
+    logger: new FakeLogger(),
+    clock: new FakeClock(),
+    sendCard: async () => ({ messageId: 'unused' }),
+    updateCard: async () => undefined,
+    turnStop: (action) => h.bridge.handleStopCardAction(action),
+  });
+  const h = makeHarness(t, { interactive: runtime });
+  await h.bridge.handleInbound(inbound('hi'));
+  const agent = await startRunningTurn(h);
+  const card = cardOfTitle(recordedCards(h.transport), PROCESS_CARD_TITLE);
+  assert.ok(card !== undefined);
+  const action = {
+    operatorOpenId: 'ou_user',
+    messageId: card.messageId,
+    chatId: 'oc_chat',
+    value: { action: 'caduceus.turn.stop' },
+  };
+  await runtime.handleCardAction(action);
+  await runtime.handleCardAction(action);
+  assert.equal(agent.cancels.length, 1);
+});
+
+test('停止按钮：cancel 抛错只记 warn', async (t) => {
+  const { InteractiveRuntime } = await import('../src/interactive/runtime.js');
+  const runtime = new InteractiveRuntime({
+    config: { approvalCard: true, questionCard: true, timeoutMs: 300_000 },
+    logger: new FakeLogger(),
+    clock: new FakeClock(),
+    sendCard: async () => ({ messageId: 'unused' }),
+    updateCard: async () => undefined,
+    turnStop: (action) => h.bridge.handleStopCardAction(action),
+  });
+  const h = makeHarness(t, { interactive: runtime });
+  await h.bridge.handleInbound(inbound('hi'));
+  const agent = await startRunningTurn(h);
+  agent.cancel = () => {
+    throw new Error('cancel boom');
+  };
+  const card = cardOfTitle(recordedCards(h.transport), PROCESS_CARD_TITLE);
+  assert.ok(card !== undefined);
+  await runtime.handleCardAction({
+    operatorOpenId: 'ou_user',
+    messageId: card.messageId,
+    chatId: 'oc_chat',
+    value: { action: 'caduceus.turn.stop' },
+  });
+  assert.ok(
+    h.logger.entries.some(
+      (entry) => entry.level === 'warn' && entry.message.includes('stop card failed'),
+    ),
+  );
+  assert.ok(!runningProcessCardText(h).includes('已请求停止'));
+});
+
+test('/usage：第二轮开始时上回合有值', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('hi'));
+  const agent = await startRunningTurn(h);
+  await h.bridge.handleSessionEvent(
+    agent.session,
+    event('assistant/message', { usage: { inputTokens: 3, outputTokens: 1 } }, 120),
+  );
+  await h.bridge.handleSessionEvent(agent.session, event('turn/end', { reason: { kind: 'completed' } }, 130));
+  await h.bridge.handleInbound(inbound('再来一轮'));
+  await h.bridge.handleSessionEvent(agent.session, event('turn/start', { turn: 2 }, 200));
+  await h.bridge.handleInbound(inbound('/usage'));
+  const text = recordedTexts(h.transport).at(-1) ?? '';
+  assert.match(text, /本回合：输入 0 · 输出 0 · 缓存命中 0 · 合计 0/);
+  assert.match(text, /上回合：输入 3 · 输出 1 · 缓存命中 0 · 合计 4/);
+});
+
+test('压缩：compaction/end error 显示失败，不崩', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('hi'));
+  const agent = await startRunningTurn(h);
+  await h.bridge.handleSessionEvent(
+    agent.session,
+    event('compaction/end', { error: 'summary failed' }, 150),
+  );
+  await settleRender(h);
+  assert.match(runningProcessCardText(h), /上下文压缩失败/);
+});

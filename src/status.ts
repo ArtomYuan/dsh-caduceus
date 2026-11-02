@@ -30,6 +30,15 @@ export type StatusState =
   | 'waiting-approval'
   | 'interrupted';
 
+/** Disjoint token totals for one or more model calls. */
+export interface UsageTotals {
+  readonly input: number;
+  readonly output: number;
+  readonly cacheRead: number;
+  readonly cacheWrite: number;
+  readonly total: number;
+}
+
 /** Immutable status snapshot. */
 export interface StatusSnapshot {
   readonly state: StatusState;
@@ -50,6 +59,59 @@ export interface StatusSnapshot {
   readonly terminalKind?: string;
   /** Provider failure text for `turn/end error`. */
   readonly errorMessage?: string;
+  /** Token usage for the current turn (`assistant/message.usage`). */
+  readonly usageTurn?: UsageTotals;
+  /** Usage of the previous turn. */
+  readonly usagePrevious?: UsageTotals;
+  /** Cumulative usage of the session. */
+  readonly usageTotal?: UsageTotals;
+  /** True once at least one usage-bearing assistant message was seen. */
+  readonly usageSeen?: boolean;
+  /** Context compaction lifecycle. */
+  readonly compaction?: 'running' | 'done' | 'failed';
+  /** Messages retained after compaction when the event reports it. */
+  readonly compactionKept?: number;
+  /** Latest teammate/task line (only one, later overwrites earlier). */
+  readonly teamLine?: string;
+}
+
+const ZERO_USAGE: UsageTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+
+function usageFromEvent(data: Record<string, unknown> | undefined): UsageTotals | undefined {
+  const usage = data?.['usage'];
+  if (typeof usage !== 'object' || usage === null) return undefined;
+  const record = usage as Record<string, unknown>;
+  const number = (key: string): number =>
+    typeof record[key] === 'number' ? (record[key] as number) : 0;
+  const input = number('inputTokens');
+  const output = number('outputTokens');
+  const cacheRead = number('cacheReadTokens');
+  const cacheWrite = number('cacheWriteTokens');
+  if (input === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0) return undefined;
+  const total =
+    typeof record['totalTokens'] === 'number'
+      ? (record['totalTokens'] as number)
+      : input + output + cacheRead + cacheWrite;
+  return { input, output, cacheRead, cacheWrite, total };
+}
+
+function addUsage(base: UsageTotals | undefined, delta: UsageTotals): UsageTotals {
+  const left = base ?? ZERO_USAGE;
+  return {
+    input: left.input + delta.input,
+    output: left.output + delta.output,
+    cacheRead: left.cacheRead + delta.cacheRead,
+    cacheWrite: left.cacheWrite + delta.cacheWrite,
+    total: left.total + delta.total,
+  };
+}
+
+function keptFromEvent(data: Record<string, unknown> | undefined): number | undefined {
+  for (const key of ['kept', 'retained', 'messages', 'messageCount']) {
+    const value = data?.[key];
+    if (typeof value === 'number') return value;
+  }
+  return undefined;
 }
 
 /** Structural subset of a dsh `SessionEvent` used by the reducer. */
@@ -97,11 +159,14 @@ export class StatusTracker {
       case 'turn/start': {
         const turn = typeof data?.['turn'] === 'number' ? (data['turn'] as number) : base.turn + 1;
         this.snapshot = {
+          ...base,
           state: 'running',
           steps: 0,
           tools: 0,
           turn,
           ...(time === undefined ? {} : { startedAt: time }),
+          ...(base.usageTurn === undefined ? {} : { usagePrevious: base.usageTurn }),
+          usageTurn: ZERO_USAGE,
           ...common,
         };
         return this.snapshot;
@@ -116,6 +181,46 @@ export class StatusTracker {
       }
       case 'tool/call': {
         this.snapshot = { ...base, tools: base.tools + 1, ...common };
+        return this.snapshot;
+      }
+      case 'assistant/message': {
+        const usage = usageFromEvent(data);
+        if (usage === undefined) {
+          this.snapshot = { ...base, ...common };
+          return this.snapshot;
+        }
+        this.snapshot = {
+          ...base,
+          usageSeen: true,
+          usageTurn: addUsage(base.usageTurn, usage),
+          usageTotal: addUsage(base.usageTotal, usage),
+          ...common,
+        };
+        return this.snapshot;
+      }
+      case 'compaction/start': {
+        this.snapshot = { ...base, compaction: 'running', ...common };
+        return this.snapshot;
+      }
+      case 'compaction/end': {
+        const failed = typeof data?.['error'] === 'string';
+        const kept = keptFromEvent(data);
+        this.snapshot = {
+          ...base,
+          compaction: failed ? 'failed' : 'done',
+          ...(kept === undefined ? {} : { compactionKept: kept }),
+          ...common,
+        };
+        return this.snapshot;
+      }
+      case 'team/member':
+      case 'team/task': {
+        const line = teamLineFromEvent(event.type, data);
+        this.snapshot = {
+          ...base,
+          ...(line === undefined ? {} : { teamLine: line }),
+          ...common,
+        };
         return this.snapshot;
       }
       case 'turn/end': {
@@ -149,6 +254,24 @@ export class StatusTracker {
   reset(): void {
     this.snapshot = INITIAL;
   }
+}
+
+function teamLineFromEvent(
+  type: string,
+  data: Record<string, unknown> | undefined,
+): string | undefined {
+  if (type === 'team/member') {
+    const member = asRecord(data?.['member']);
+    const name = typeof member?.['name'] === 'string' ? member['name'] : undefined;
+    const phase = typeof member?.['phase'] === 'string' ? member['phase'] : undefined;
+    if (name === undefined) return undefined;
+    return `队友 ${name}：${phase ?? '更新'}`;
+  }
+  const task = asRecord(data?.['task']);
+  const subject = typeof task?.['subject'] === 'string' ? task['subject'] : undefined;
+  const status = typeof task?.['status'] === 'string' ? task['status'] : undefined;
+  if (subject === undefined) return undefined;
+  return `队友 ${subject}：${status ?? '更新'}`;
 }
 
 /** Map a `turn/end` reason kind to the derived state. */
