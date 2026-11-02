@@ -24,6 +24,8 @@ export interface InteractiveRuntimeOptions {
     card: FeishuCard,
   ): Promise<{ readonly messageId: string; readonly threadId?: string }>;
   updateCard(messageId: string, card: FeishuCard): Promise<void>;
+  /** Button callback for the permission card (`caduceus.permission.switch`). */
+  permissionSwitch?(action: CardAction, name: string): void | Promise<void>;
 }
 
 export class InteractiveRuntime {
@@ -33,6 +35,7 @@ export class InteractiveRuntime {
   readonly pending = new PendingRegistry();
   readonly #sendCard: InteractiveRuntimeOptions['sendCard'];
   readonly #updateCard: InteractiveRuntimeOptions['updateCard'];
+  readonly #permissionSwitch: InteractiveRuntimeOptions['permissionSwitch'];
 
   constructor(options: InteractiveRuntimeOptions) {
     this.config = options.config;
@@ -40,6 +43,7 @@ export class InteractiveRuntime {
     this.clock = options.clock ?? systemClock;
     this.#sendCard = options.sendCard;
     this.#updateCard = options.updateCard;
+    this.#permissionSwitch = options.permissionSwitch;
   }
 
   /**
@@ -104,6 +108,16 @@ export class InteractiveRuntime {
    * a warning and do not resolve or patch anything.
    */
   async handleCardAction(action: CardAction): Promise<void> {
+    if (
+      action.value['action'] === 'caduceus.permission.switch' &&
+      typeof action.value['name'] === 'string'
+    ) {
+      this.logger.info(
+        `card action permission switch name=${action.value['name']} operator=${logPrefix(action.operatorOpenId)}`,
+      );
+      await this.#permissionSwitch?.(action, action.value['name']);
+      return;
+    }
     const id = typeof action.value['id'] === 'string' ? action.value['id'] : undefined;
     if (id === undefined) {
       this.logger.info('card action ignored (unknown id)');

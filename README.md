@@ -112,7 +112,7 @@ onlyBuiltDependencies:
 | `/persona [show\|sync]` | Show or sync the SOUL persona block |
 | `/whoami` | Show your open_id, current chat/topic, and admin/guest role |
 | `/export [--json]` | Export the current session as markdown or raw JSONL and send it as a file |
-| `/permission [preset]` | Show/switch the permission preset in Chinese |
+| `/permission [preset]` | Permission card: current preset, measured sandbox/approval, switch buttons; UI follows dsh locale |
 | `/help` | Command table |
 
 ## Troubleshooting

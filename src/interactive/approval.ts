@@ -64,6 +64,7 @@ export function createApprovalAnswerer(
       context.sessionId,
       request.toolName,
       request.reason,
+      context.permissionLine,
     );
 
     let timer: unknown;

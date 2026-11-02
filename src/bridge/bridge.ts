@@ -39,6 +39,12 @@ import {
 } from '../doctor.js';
 import { writeOwnership, type SessionScopeKind } from '../ownership.js';
 import { extractMediaMarkers, resolveMedia } from '../media.js';
+import { presetHint, resolveLang, t, type Lang } from '../i18n.js';
+import {
+  buildPermissionCard,
+  renderPermissionText,
+  type PermissionView,
+} from '../render/permission-card.js';
 import {
   readSessionLogFile,
   renderExportJsonl,
@@ -69,6 +75,7 @@ import {
   type StatusSnapshot,
 } from '../status.js';
 import type {
+  CardAction,
   ChatType,
   FeishuCard,
   InboundAttachment,
@@ -178,6 +185,7 @@ export class Bridge {
   readonly #queue = new ScopeQueue();
   readonly #states = new Map<string, ScopeState>();
   readonly #chatIdBySession = new Map<string, string>();
+  readonly #permissionCards = new Map<string, { key: string; ownerOpenId?: string }>();
   readonly #scopeBySession = new Map<string, string>();
 
   constructor(options: BridgeOptions) {
@@ -487,12 +495,13 @@ export class Bridge {
           fails.length > 0 && failAt !== undefined
             ? `\n最近异常：${fails.join(',')} @ ${sessionTimeLabel(failAt, this.#now())}`
             : '';
+        const permissionLine = this.#permissionLineFor(state);
         await this.#replyText(
           state,
           `${selfLine === undefined ? '' : `${selfLine}\n`}${statusText(state.status.get(), {
             ...(title === undefined ? {} : { title }),
             ...(state.sessionId === undefined ? {} : { sessionId: state.sessionId }),
-          })}${anomaly}`,
+          })}${permissionLine === undefined ? '' : `\n${permissionLine}`}${anomaly}`,
         );
         return;
       }
@@ -748,6 +757,87 @@ export class Bridge {
   }
 
   /** `/permission`: Chinese overview; switches still go through dsh's command. */
+  /** Permission-card button callback: run the same dsh switch, then patch the card. */
+  async handlePermissionCardAction(action: CardAction, name: string): Promise<void> {
+    const meta = this.#permissionCards.get(action.messageId);
+    if (meta === undefined) return;
+    const state = this.#states.get(meta.key);
+    if (state === undefined) return;
+    if (meta.ownerOpenId !== undefined && action.operatorOpenId !== meta.ownerOpenId) {
+      this.#logger.warn(
+        `permission card ignored for non-owner ${action.operatorOpenId}`,
+      );
+      return;
+    }
+    const service = this.#options.permissionPresetsProvider?.();
+    const sessionId = state.sessionId;
+    if (service === undefined || sessionId === undefined) return;
+    if (!service.names.includes(name)) {
+      await this.#replyText(
+        state,
+        t(this.#lang()).unknownPreset(name, service.names.join(', ')),
+      );
+      return;
+    }
+    const agent = this.#agents.get(sessionId);
+    if (agent === undefined) return;
+    const result = await this.#options.runHarnessCommand?.(
+      agent,
+      `/permission ${name}`,
+    );
+    if (result === undefined) {
+      await this.#replyText(state, '切换失败：dsh 命令未返回结果。');
+      return;
+    }
+    const view = this.#permissionViewFor(state);
+    if (view !== undefined) {
+      try {
+        await this.#transport.updateCard(action.messageId, buildPermissionCard(view));
+      } catch (error) {
+        this.#logger.warn(`permission card patch failed: ${errorMessage(error)}`);
+      }
+    }
+    await this.#replyText(
+      state,
+      translatePermissionOutput(result.text, name, this.#lang()),
+    );
+  }
+
+  #lang(): Lang {
+    return this.#options.languageProvider?.() ?? 'zh';
+  }
+
+  #permissionViewFor(state: ScopeState): PermissionView | undefined {
+    const service = this.#options.permissionPresetsProvider?.();
+    const sessionId = state.sessionId;
+    if (service === undefined || sessionId === undefined) return undefined;
+    const agent = this.#agents.get(sessionId);
+    if (agent === undefined) return undefined;
+    const current = service.current(agent.session);
+    const presets = service.names.map((name) => {
+      try {
+        const spec = service.resolve?.(name);
+        return {
+          name,
+          resolved: spec !== undefined,
+          ...(spec?.sandbox === undefined ? {} : { sandbox: String(spec.sandbox) }),
+          ...(spec?.approval === undefined ? {} : { approval: String(spec.approval) }),
+        };
+      } catch {
+        return { name, resolved: false };
+      }
+    });
+    return { lang: this.#lang(), current, presets };
+  }
+
+  #permissionLineFor(state: ScopeState): string | undefined {
+    const view = this.#permissionViewFor(state);
+    if (view === undefined) return undefined;
+    const current = view.presets.find((preset) => preset.name === view.current);
+    const approval = current?.approval ?? '?';
+    return t(view.lang).approvalLine(view.current, t(view.lang).approvalLabel(approval));
+  }
+
   async #handlePermission(state: ScopeState, preset: string | undefined): Promise<void> {
     const resolved = await this.#tryResolve(state);
     if (resolved === undefined) {
@@ -766,14 +856,22 @@ export class Bridge {
       return;
     }
     if (preset === undefined) {
-      await this.#replyText(
-        state,
-        renderPermissionOverview(
-          service.current(resolved.agent.session),
-          service.names,
-          service,
-        ),
-      );
+      const view = this.#permissionViewFor(state);
+      if (view === undefined) {
+        const raw = await this.#runDshCommandLine(resolved.agent, '/permission');
+        await this.#replyText(state, `（dsh 原文）\n${raw}`);
+        return;
+      }
+      const card = buildPermissionCard(view);
+      try {
+        const sent = await this.#sendNewCard(state, card);
+        this.#permissionCards.set(sent.messageId, {
+          key: state.key,
+          ...(state.ownerOpenId === undefined ? {} : { ownerOpenId: state.ownerOpenId }),
+        });
+      } catch {
+        await this.#replyText(state, renderPermissionText(view));
+      }
       return;
     }
 
@@ -798,7 +896,10 @@ export class Bridge {
       );
       return;
     }
-    await this.#replyText(state, translatePermissionOutput(result.text, preset));
+    await this.#replyText(
+      state,
+      translatePermissionOutput(result.text, preset, this.#lang()),
+    );
   }
 
   async #runDshCommandLine(agent: AgentLike, line: string): Promise<string> {
@@ -1371,11 +1472,13 @@ export class Bridge {
     if (key === undefined) return undefined;
     const state = this.#states.get(key);
     if (state === undefined || state.ownerOpenId === undefined) return undefined;
+    const permissionLine = this.#permissionLineFor(state);
     return {
       scopeKey: state.key,
       chatId: state.chatId,
       ownerOpenId: state.ownerOpenId,
       sessionId,
+      ...(permissionLine === undefined ? {} : { permissionLine }),
     };
   }
 
@@ -1899,55 +2002,17 @@ function imageMediaType(contentType: string | undefined): string {
   return 'image/jpeg';
 }
 
-const PRESET_DESCRIPTIONS: Readonly<Record<string, string>> = {
-  'read-only': '只读，不能写文件',
-  'workspace-write': '可写会话工作区，越界需审批',
-  'danger-full-access': '沙箱全开，审批 never（慎用）',
-};
 
-function permissionDescription(name: string): string {
-  return PRESET_DESCRIPTIONS[name] ?? name;
-}
-
-function renderPermissionOverview(
-  current: string,
-  names: readonly string[],
-  service: { resolve?(name: string): { readonly sandbox?: unknown; readonly approval?: unknown } },
-): string {
-  const currentText =
-    current === 'custom'
-      ? '当前档位：custom（当前沙箱/审批组合不匹配任何预设）'
-      : `当前档位：${current}`;
-  const lines = [currentText, '可用档位：'];
-  for (const name of names) {
-    let line = `- ${name}`;
-    try {
-      const spec = service.resolve?.(name);
-      if (spec !== undefined) {
-        const sandbox = spec.sandbox === undefined ? '?' : String(spec.sandbox);
-        const approval = spec.approval === undefined ? '?' : String(spec.approval);
-        const hint = PRESET_DESCRIPTIONS[name];
-        line = `- ${name}：沙箱 ${sandbox} · 审批 ${approval}${hint === undefined ? '' : `（${hint}）`}`;
-      }
-    } catch {
-      line = `- ${name}`;
-    }
-    lines.push(line);
-  }
-  lines.push('用法：/permission <档位>');
-  if (current === 'custom') lines.push('用 /permission <档位> 回到某个预设');
-  return lines.join('\n');
-}
-
-function translatePermissionOutput(text: string, requested: string): string {
+function translatePermissionOutput(text: string, requested: string, lang: Lang): string {
+  const dict = t(lang);
   const success = /^preset\s+(\S+)\s*$/.exec(text.trim());
   if (success !== null) {
     const name = success[1] as string;
-    return `已切换到 ${name}（${permissionDescription(name)}）`;
+    return dict.switchSucceeded(name, presetHint(lang, name));
   }
   const unknown = /^unknown preset "([^"]+)" \(available: ([^)]*)\)\s*$/.exec(text.trim());
   if (unknown !== null) {
-    return `未知档位 ${unknown[1] as string}，可用：${unknown[2] as string}`;
+    return dict.unknownPreset(unknown[1] as string, unknown[2] as string);
   }
-  return `已执行 /permission ${requested}（dsh 原文：${text}）`;
+  return dict.switchedElsewhere(text);
 }

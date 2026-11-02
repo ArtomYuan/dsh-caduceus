@@ -28,6 +28,8 @@ export interface InteractiveContext {
   readonly chatId: string;
   readonly ownerOpenId: string;
   readonly sessionId: string;
+  /** Optional permission summary line for approval cards. */
+  readonly permissionLine?: string;
 }
 
 /** A Cordis context (the plugin root or an agent scope); only `on` is needed. */

@@ -54,8 +54,10 @@ export function approvalCard(
   sessionId: string,
   toolName: string,
   reason: string | undefined,
+  permissionLine?: string,
 ): FeishuCard {
   return interactiveCard(`审批请求 · ${toolName}`, [
+    ...(permissionLine === undefined ? [] : [permissionLine]),
     reason === undefined || reason.trim().length === 0 ? '（无说明）' : reason,
   ], [
     {

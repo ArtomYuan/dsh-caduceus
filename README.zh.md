@@ -111,7 +111,7 @@ onlyBuiltDependencies:
 | `/persona [show\|sync]` | 查看或同步 SOUL 人格块 |
 | `/whoami` | 显示你的 open_id、当前会话与身份 |
 | `/export [--json]` | 把当前会话导出为 markdown 或原始 JSONL 并发回文件 |
-| `/permission [档位]` | 查看或切换当前会话权限档位（中文） |
+| `/permission [档位]` | 权限卡片：当前档位、实测沙箱/审批、切换按钮；文案跟随 dsh 语言 |
 | `/help` | 命令表 |
 
 ## Troubleshooting（故障排查）

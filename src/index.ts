@@ -34,6 +34,7 @@ import type {
 } from './bridge/types.js';
 import { runHarnessCommand } from './commands/harness.js';
 import { parseSessionEvents } from './export.js';
+import { resolveLang } from './i18n.js';
 import {
   Config,
   accessControlWarning,
@@ -236,6 +237,9 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
     },
     logger,
     sendCard: (sessionId, card) => bridge.sendInteractiveCard(sessionId, card),
+    permissionSwitch: (action, name) => {
+      void bridge.handlePermissionCardAction(action, name);
+    },
     updateCard: (messageId, card) => transport.updateCard(messageId, card),
   });
   transport.onCardAction?.((action) => {
@@ -259,6 +263,7 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
     attachmentProvider: () => ctx.get('attachments') as AttachmentStoreLike | undefined,
     permissionPresetsProvider: () =>
       ctx.get('permissionPresets') as PermissionPresetsLike | undefined,
+    languageProvider: () => resolveLang(() => ctx.get('settings')),
     exportProvider: async (sessionId) => {
       const query = ctx.get('sessionQuery') as
         | { readSession?: (id: string) => Promise<{ events?: readonly unknown[] }> }

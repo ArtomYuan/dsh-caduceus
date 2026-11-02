@@ -2977,6 +2977,14 @@ test('/export：超过 5MB 截断并注明', async (t) => {
   assert.match(content, /已截断/);
 });
 
+
+function lastPermissionCardText(transport: FakeTransport): string {
+  const card = recordedCards(transport)
+    .filter((entry) => entry.card.header?.title.content === '权限档位')
+    .at(-1)?.card;
+  return JSON.stringify(card);
+}
+
 test('/permission 无参：档位描述来自 resolve（沙箱/审批），含 auto', async (t) => {
   const specs: Record<string, { sandbox: string; approval?: string }> = {
     'read-only': { sandbox: 'read-only', approval: 'ask' },
@@ -2992,7 +3000,7 @@ test('/permission 无参：档位描述来自 resolve（沙箱/审批），含 a
     }),
   });
   await h.bridge.handleInbound(inbound('/permission'));
-  const text = recordedTexts(h.transport).at(-1) ?? '';
+  const text = lastPermissionCardText(h.transport);
   assert.match(text, /当前档位：workspace-write/);
   assert.match(text, /可用档位：/);
   assert.match(text, /- read-only：沙箱 read-only · 审批 ask（只读，不能写文件）/);
@@ -3011,7 +3019,7 @@ test('/permission 当前 custom：人话说明 + 回到预设的指引', async (
     }),
   });
   await h.bridge.handleInbound(inbound('/permission'));
-  const text = recordedTexts(h.transport).at(-1) ?? '';
+  const text = lastPermissionCardText(h.transport);
   assert.match(text, /当前档位：custom（当前沙箱\/审批组合不匹配任何预设）/);
   assert.match(text, /用 \/permission <档位> 回到某个预设/);
 });
@@ -3027,8 +3035,8 @@ test('/permission resolve 抛错：只显示档位名，不崩', async (t) => {
     }),
   });
   await h.bridge.handleInbound(inbound('/permission'));
-  const text = recordedTexts(h.transport).at(-1) ?? '';
-  assert.match(text, /^- weird$/m);
+  const text = lastPermissionCardText(h.transport);
+  assert.match(text, /- weird/);
   assert.ok(!/- weird：沙箱/.test(text));
 });
 
@@ -3096,4 +3104,126 @@ test('/permission 服务缺失 + 带参：透传英文并标注（dsh 原文）'
   assert.match(text, /（dsh 原文）/);
   assert.match(text, /preset read-only/);
   assert.ok(!text.includes('已切换到'));
+});
+
+test('权限卡片：发送失败 → 同一数据的文本降级', async (t) => {
+  const h = makeHarness(t, {
+    permissionPresetsProvider: () => ({
+      names: ['workspace-write'],
+      current: () => 'workspace-write',
+      resolve: () => ({ sandbox: 'workspace-write', approval: 'ask' }),
+    }),
+  });
+  h.transport.sendCard = async () => {
+    throw new Error('card send boom');
+  };
+  await h.bridge.handleInbound(inbound('/permission'));
+  const text = recordedTexts(h.transport).at(-1) ?? '';
+  assert.match(text, /当前档位：workspace-write/);
+  assert.match(text, /可用档位：/);
+  assert.match(text, /沙箱 workspace-write · 审批 ask/);
+});
+
+test('权限卡片：按钮回调执行 /permission 切换并 patch 卡片', async (t) => {
+  const forwarded: string[] = [];
+  const { InteractiveRuntime } = await import('../src/interactive/runtime.js');
+  const runtime = new InteractiveRuntime({
+    config: { approvalCard: true, questionCard: true, timeoutMs: 300_000 },
+    logger: new FakeLogger(),
+    clock: new FakeClock(),
+    sendCard: async () => ({ messageId: 'unused' }),
+    updateCard: async () => undefined,
+    permissionSwitch: (action, name) => h.bridge.handlePermissionCardAction(action, name),
+  });
+  const h = makeHarness(t, {
+    interactive: runtime,
+    commandRunner: async (_agent, line) => {
+      forwarded.push(line);
+      return { kind: 'success', text: 'preset workspace-write' };
+    },
+    permissionPresetsProvider: () => ({
+      names: ['workspace-write'],
+      current: () => 'workspace-write',
+      resolve: () => ({ sandbox: 'workspace-write', approval: 'ask' }),
+    }),
+  });
+  await h.bridge.handleInbound(inbound('/permission'));
+  const card = recordedCards(h.transport).find(
+    (entry) => entry.card.header?.title.content === '权限档位',
+  );
+  assert.ok(card !== undefined);
+  const button = buttonsOf(card.card)[0]!;
+  await runtime.handleCardAction({
+    operatorOpenId: 'ou_user',
+    messageId: card.messageId,
+    chatId: 'oc_chat',
+    value: button.value,
+  });
+  assert.deepEqual(forwarded, ['/permission workspace-write']);
+  assert.ok(
+    h.transport.calls.some((call) => call.op === 'updateCard' && call.messageId === card.messageId),
+    'permission card must be patched after switching',
+  );
+  assert.match(recordedTexts(h.transport).at(-1) ?? '', /已切换到 workspace-write/);
+});
+
+test('审批卡片：顶部带当前档位/审批行', async (t) => {
+  const { InteractiveRuntime } = await import('../src/interactive/runtime.js');
+  let h: ReturnType<typeof makeHarness>;
+  const runtime = new InteractiveRuntime({
+    config: { approvalCard: true, questionCard: true, timeoutMs: 300_000 },
+    logger: new FakeLogger(),
+    clock: new FakeClock(),
+    sendCard: (sessionId, card) => h.bridge.sendInteractiveCard(sessionId, card),
+    updateCard: async () => undefined,
+  });
+  const listeners = new Map<string, (...args: any[]) => any>();
+  h = makeHarness(t, {
+    interactive: runtime,
+    rootCtx: {
+      on(name: string, listener: (...args: any[]) => any) {
+        listeners.set(name, listener);
+        return listener;
+      },
+    },
+    permissionPresetsProvider: () => ({
+      names: ['workspace-write'],
+      current: () => 'workspace-write',
+      resolve: () => ({ sandbox: 'workspace-write', approval: 'ask' }),
+    }),
+  });
+  await h.bridge.handleInbound(inbound('hi'));
+  const sessionId = liveAgent(h).session.id;
+  const promise = listeners.get('approval/request')!(
+    { agent: { session: { id: sessionId } }, toolName: 'bash' },
+    async () => 'unavailable',
+  );
+  await tick();
+  const card = recordedCards(h.transport).find((entry) =>
+    entry.card.header?.title.content.startsWith('审批请求'),
+  );
+  assert.ok(card !== undefined);
+  assert.match(JSON.stringify(card.card), /档位 workspace-write · 审批 人工确认/);
+  // resolve it so the pending approval doesn't linger.
+  const buttons = buttonsOf(card.card);
+  await runtime.handleCardAction({
+    operatorOpenId: 'ou_user',
+    messageId: card.messageId,
+    chatId: 'oc_chat',
+    value: buttons[0]!.value,
+  });
+  assert.equal(await promise, 'allowed-once');
+});
+
+test('/status：带当前档位/审批行', async (t) => {
+  const h = makeHarness(t, {
+    permissionPresetsProvider: () => ({
+      names: ['workspace-write'],
+      current: () => 'workspace-write',
+      resolve: () => ({ sandbox: 'workspace-write', approval: 'ask' }),
+    }),
+  });
+  await h.bridge.handleInbound(inbound('hi'));
+  await h.bridge.handleInbound(inbound('/status'));
+  assert.match(recordedTexts(h.transport).at(-1) ?? '', /档位 workspace-write · 审批 人工确认/);
 });
