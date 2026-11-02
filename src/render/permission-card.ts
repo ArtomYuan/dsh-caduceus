@@ -25,41 +25,29 @@ export interface PermissionView {
 
 export const PERMISSION_SWITCH_ACTION = 'caduceus.permission.switch';
 
-function currentLabel(view: PermissionView, dict: Dict): string {
-  return view.current === 'custom'
-    ? dict.customLabel
-    : presetLabel(view.lang, view.current);
+function title(view: PermissionView, dict: Dict): string {
+  const label =
+    view.current === 'custom' ? dict.customLabel : presetLabel(view.lang, view.current);
+  return dict.permissionTitle(label);
 }
 
-function lines(view: PermissionView, dict: Dict): string[] {
-  const result = [
-    view.current === 'custom' ? dict.currentCustom : dict.currentLine(currentLabel(view, dict)),
-    dict.availableHeading,
-  ];
-  for (const preset of view.presets) {
-    result.push(
-      preset.resolved === false
-        ? '- ' + preset.name
-        : dict.presetLine(preset, presetLabel(view.lang, preset.name)),
-    );
-  }
-  result.push(dict.usage);
-  if (view.current === 'custom') result.push(dict.backHint);
-  return result;
+function buttonLabels(view: PermissionView): string[] {
+  return view.presets.map((preset) => presetLabel(view.lang, preset.name));
 }
-
 export function buildPermissionCard(view: PermissionView): FeishuCard {
   const dict = t(view.lang);
   return interactiveCard(
-    dict.permissionTitle(currentLabel(view, dict)),
-    lines(view, dict),
+    title(view, dict),
+    [dict.usage],
     view.presets.map((preset) => ({
       label: presetLabel(view.lang, preset.name),
+      disabled: preset.name === view.current,
       value: { action: PERMISSION_SWITCH_ACTION, name: preset.name },
     })),
   );
 }
 
 export function renderPermissionText(view: PermissionView): string {
-  return lines(view, t(view.lang)).join('\n');
+  const dict = t(view.lang);
+  return [title(view, dict), dict.usage, buttonLabels(view).join(' / ')].join('\n');
 }

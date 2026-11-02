@@ -9,6 +9,7 @@ import type { FeishuCard, FeishuCardElement } from '../transport/types.js';
 export interface CardButton {
   readonly label: string;
   readonly type?: 'primary' | 'danger' | 'default';
+  readonly disabled?: boolean;
   readonly value: Record<string, unknown>;
 }
 
@@ -23,6 +24,7 @@ function actionRow(buttons: readonly CardButton[]): FeishuCardElement {
       tag: 'button',
       text: { tag: 'plain_text', content: button.label },
       type: button.type ?? 'default',
+      ...(button.disabled === true ? { disabled: true } : {}),
       value: button.value,
     })),
   };

@@ -2980,7 +2980,7 @@ test('/export：超过 5MB 截断并注明', async (t) => {
 
 function lastPermissionCardText(transport: FakeTransport): string {
   const card = recordedCards(transport)
-    .filter((entry) => entry.card.header?.title.content?.startsWith('权限 · 当前 '))
+    .filter((entry) => entry.card.header?.title.content?.startsWith('权限 · 当前：'))
     .at(-1)?.card;
   return JSON.stringify(card);
 }
@@ -3001,13 +3001,14 @@ test('/permission 无参：档位描述来自 resolve（沙箱/审批），含 a
   });
   await h.bridge.handleInbound(inbound('/permission'));
   const text = lastPermissionCardText(h.transport);
-  assert.match(text, /当前档位：工作区内修改/);
-  assert.match(text, /可用档位：/);
-  assert.match(text, /- 仅可查看：沙箱 read-only · 审批 ask/);
-  assert.match(text, /- 工作区内修改：沙箱 workspace-write · 审批 ask/);
-  assert.match(text, /- 完全权限：沙箱 danger-full-access · 审批 never/);
-  assert.match(text, /- 自动审查（EXP）：沙箱 auto · 审批 \?/);
-  assert.match(text, /用法：\/permission <档位>/);
+  assert.match(text, /权限 · 当前：工作区内修改/);
+  assert.match(text, /用法：\/permission <档位>，或点下方按钮/);
+  for (const label of ['仅可查看', '工作区内修改', '完全权限', '自动审查（EXP）']) {
+    assert.match(text, new RegExp(label));
+  }
+  for (const word of ['沙箱', '审批', 'sandbox', 'approval']) {
+    assert.ok(!text.includes(word), `permission card must not contain ${word}`);
+  }
 });
 
 test('/permission 当前 custom：人话说明 + 回到预设的指引', async (t) => {
@@ -3020,8 +3021,10 @@ test('/permission 当前 custom：人话说明 + 回到预设的指引', async (
   });
   await h.bridge.handleInbound(inbound('/permission'));
   const text = lastPermissionCardText(h.transport);
-  assert.match(text, /当前档位：自定义（不匹配任何预设）/);
-  assert.match(text, /用 \/permission <档位> 回到某个预设/);
+  assert.match(text, /权限 · 当前：自定义（不匹配任何预设）/);
+  assert.match(text, /用法：\/permission <档位>，或点下方按钮/);
+  assert.ok(!text.includes('沙箱'));
+  assert.ok(!text.includes('审批'));
 });
 
 test('/permission resolve 抛错：只显示档位名，不崩', async (t) => {
@@ -3036,8 +3039,10 @@ test('/permission resolve 抛错：只显示档位名，不崩', async (t) => {
   });
   await h.bridge.handleInbound(inbound('/permission'));
   const text = lastPermissionCardText(h.transport);
-  assert.match(text, /- weird/);
-  assert.ok(!/- weird：沙箱/.test(text));
+  assert.match(text, /权限 · 当前：自定义（不匹配任何预设）/);
+  assert.match(text, /"content":"weird"/);
+  assert.ok(!text.includes('沙箱'));
+  assert.ok(!text.includes('审批'));
 });
 
 test('/permission 切换：调用底层命令一次并翻译为中文', async (t) => {
@@ -3119,9 +3124,11 @@ test('权限卡片：发送失败 → 同一数据的文本降级', async (t) =>
   };
   await h.bridge.handleInbound(inbound('/permission'));
   const text = recordedTexts(h.transport).at(-1) ?? '';
-  assert.match(text, /当前档位：工作区内修改/);
-  assert.match(text, /可用档位：/);
-  assert.match(text, /沙箱 workspace-write · 审批 ask/);
+  assert.match(text, /权限 · 当前：工作区内修改/);
+  assert.match(text, /用法：\/permission <档位>，或点下方按钮/);
+  assert.match(text, /工作区内修改/);
+  assert.ok(!text.includes('沙箱'));
+  assert.ok(!text.includes('审批'));
 });
 
 test('权限卡片：按钮回调执行 /permission 切换并 patch 卡片', async (t) => {
@@ -3149,7 +3156,7 @@ test('权限卡片：按钮回调执行 /permission 切换并 patch 卡片', asy
   });
   await h.bridge.handleInbound(inbound('/permission'));
   const card = recordedCards(h.transport).find(
-    (entry) => entry.card.header?.title.content?.startsWith('权限 · 当前 '),
+    (entry) => entry.card.header?.title.content?.startsWith('权限 · 当前：'),
   );
   assert.ok(card !== undefined);
   const button = buttonsOf(card.card)[0]!;
@@ -3226,4 +3233,50 @@ test('/status：带当前档位/审批行', async (t) => {
   await h.bridge.handleInbound(inbound('hi'));
   await h.bridge.handleInbound(inbound('/status'));
   assert.match(recordedTexts(h.transport).at(-1) ?? '', /档位 workspace-write · 审批 人工确认/);
+});
+
+test('权限卡片：切档后原地刷新为新档位标签', async (t) => {
+  let current = 'workspace-write';
+  const { InteractiveRuntime } = await import('../src/interactive/runtime.js');
+  const runtime = new InteractiveRuntime({
+    config: { approvalCard: true, questionCard: true, timeoutMs: 300_000 },
+    logger: new FakeLogger(),
+    clock: new FakeClock(),
+    sendCard: async () => ({ messageId: 'unused' }),
+    updateCard: async () => undefined,
+    permissionSwitch: (action, name) => h.bridge.handlePermissionCardAction(action, name),
+  });
+  const h = makeHarness(t, {
+    interactive: runtime,
+    commandRunner: async (_agent, line) => {
+      if (line === '/permission read-only') {
+        current = 'read-only';
+        return { kind: 'success', text: 'preset read-only' };
+      }
+      return { kind: 'success', text: 'preset ' + line.split(' ')[1] };
+    },
+    permissionPresetsProvider: () => ({
+      names: ['read-only', 'workspace-write'],
+      current: () => current,
+      resolve: () => ({ sandbox: 'read-only', approval: 'ask' }),
+    }),
+  });
+  await h.bridge.handleInbound(inbound('/permission'));
+  const card = recordedCards(h.transport).find(
+    (entry) => entry.card.header?.title.content?.startsWith('权限 · 当前：'),
+  );
+  assert.ok(card !== undefined);
+  const readOnly = buttonsOf(card.card).find((button) => button.label === '仅可查看');
+  assert.ok(readOnly !== undefined);
+  await runtime.handleCardAction({
+    operatorOpenId: 'ou_user',
+    messageId: card.messageId,
+    chatId: 'oc_chat',
+    value: readOnly.value,
+  });
+  const patched = h.transport.calls.find(
+    (call) => call.op === 'updateCard' && call.messageId === card.messageId,
+  );
+  assert.ok(patched !== undefined);
+  assert.match(JSON.stringify(patched), /权限 · 当前：仅可查看/);
 });

@@ -24,16 +24,10 @@ export interface PermissionLineData {
 
 export interface Dict {
   permissionTitle(currentLabel: string): string;
-  currentLine(label: string): string;
-  currentCustom: string;
   customLabel: string;
-  availableHeading: string;
-  presetLine(preset: PermissionLineData, label: string): string;
   usage: string;
-  backHint: string;
   approvalLine(label: string, approval: string): string;
   approvalLabel(value: string): string;
-  cardSendFailed: string;
   switchSucceeded(label: string, hint: string): string;
   unknownPreset(name: string, available: string): string;
   switchedElsewhere(text: string): string;
@@ -73,40 +67,28 @@ function approvalLabelEn(value: string): string {
 }
 
 const ZH: Dict = {
-  permissionTitle: (label) => '权限 · 当前 ' + label,
-  currentLine: (label) => '当前档位：' + label,
-  currentCustom: '当前档位：自定义（不匹配任何预设）',
+  permissionTitle: (label) => '权限 · 当前：' + label,
   customLabel: '自定义（不匹配任何预设）',
-  availableHeading: '可用档位：',
-  presetLine: (preset, label) =>
-    '- ' + label + '：沙箱 ' + (preset.sandbox ?? '?') + ' · 审批 ' + (preset.approval ?? '?'),
-  usage: '用法：/permission <档位>',
-  backHint: '用 /permission <档位> 回到某个预设',
+  usage: '用法：/permission <档位>，或点下方按钮',
   approvalLine: (label, approval) => '档位 ' + label + ' · 审批 ' + approval,
   approvalLabel: approvalLabelZh,
-  cardSendFailed: '权限卡片发送失败，以下为文本版：',
   switchSucceeded: (label, hint) => '已切换到 ' + label + '（' + hint + '）',
   unknownPreset: (name, available) => '未知档位 ' + name + '，可用：' + available,
   switchedElsewhere: (text) => '已执行 /permission（dsh 原文：' + text + '）',
 };
 
+
 const EN: Dict = {
-  permissionTitle: (label) => 'Permissions · current ' + label,
-  currentLine: (label) => 'Current preset: ' + label,
-  currentCustom: 'Current preset: custom (matches no preset)',
-  customLabel: 'custom (matches no preset)',
-  availableHeading: 'Available presets:',
-  presetLine: (preset, label) =>
-    '- ' + label + ': sandbox ' + (preset.sandbox ?? '?') + ' · approval ' + (preset.approval ?? '?'),
-  usage: 'Usage: /permission <preset>',
-  backHint: 'Use /permission <preset> to return to a preset',
+  permissionTitle: (label) => 'Permission · current: ' + label,
+  customLabel: 'Custom (matches no preset)',
+  usage: 'Usage: /permission <preset>, or tap a button below',
   approvalLine: (label, approval) => 'preset ' + label + ' · approval ' + approval,
   approvalLabel: approvalLabelEn,
-  cardSendFailed: 'Permission card failed to send; text version follows:',
   switchSucceeded: (label, hint) => 'Switched to ' + label + ' (' + hint + ')',
   unknownPreset: (name, available) => 'Unknown preset ' + name + '; available: ' + available,
   switchedElsewhere: (text) => 'Ran /permission (dsh output: ' + text + ')',
 };
+
 
 export function t(lang: Lang): Dict {
   return lang === 'en' ? EN : ZH;
