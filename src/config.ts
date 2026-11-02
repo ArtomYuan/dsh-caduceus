@@ -13,6 +13,7 @@ import { resolve } from 'node:path';
 import z from '@deepseek-ai/schemastery';
 
 import type { ApprovalPolicy, BridgeConfig, BusyMode } from './bridge/types.js';
+import type { LangSetting } from './i18n.js';
 
 /** Raw entry config as written in the profile. */
 export interface GatewayConfig {
@@ -65,6 +66,8 @@ export interface GatewayConfig {
   readonly mediaRoots?: readonly string[];
   /** Admin open-id allowlist; empty disables access control (default). */
   readonly admins?: readonly string[];
+  /** UI language: zh (default), en, or auto (settings/env, fallback zh). */
+  readonly lang?: LangSetting;
 }
 
 /** Schemastery schema for the `caduceus-gateway` entry. */
@@ -97,6 +100,7 @@ export const Config = z.object({
   maxSendImageBytes: z.natural().min(1).required(false),
   mediaRoots: z.array(z.string()).required(false),
   admins: z.array(z.string()).required(false),
+  lang: z.union([z.const('zh'), z.const('en'), z.const('auto')]).required(false),
 });
 
 /** Default card patch throttle: half of Feishu's 5 QPS budget. */
@@ -159,6 +163,7 @@ export interface ResolvedGatewayConfig {
   readonly questionCard: boolean;
   readonly interactiveTimeoutMs: number;
   readonly approvalPolicy?: ApprovalPolicy;
+  readonly lang: LangSetting;
 }
 
 export interface ConfigEnv {
@@ -223,5 +228,6 @@ export function resolveGatewayConfig(
     ...(config.approvalPolicy === undefined
       ? {}
       : { approvalPolicy: config.approvalPolicy }),
+    lang: config.lang ?? 'zh',
   };
 }

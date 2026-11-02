@@ -1,13 +1,20 @@
 /**
- * Minimal surface i18n for the permission UI.
+ * Surface i18n for the permission UI.
  *
- * Language source: host `locale.preference` through the settings service when
- * readable, then LC_ALL/LANG, then zh. Settings access is deliberately
- * best-effort and never cached: a missing service must not break or stick.
+ * Language order:
+ * 1. explicit plugin config `lang: zh|en` (never consults settings/env);
+ * 2. `lang: auto` -> host `locale.preference`;
+ * 3. `lang: auto` -> LC_ALL/LANG, accepted only when the value starts with
+ *    `zh` or `en` (C/C.UTF-8/POSIX/empty are ignored);
+ * 4. zh.
+ *
+ * Settings access is best-effort and never cached: a missing service must not
+ * break or stick on a failure.
  *
  * @module dsh-caduceus/i18n
  */
 export type Lang = 'zh' | 'en';
+export type LangSetting = Lang | 'auto';
 
 export interface PermissionLineData {
   readonly name: string;
@@ -16,32 +23,42 @@ export interface PermissionLineData {
 }
 
 export interface Dict {
-  permissionTitle: string;
-  currentLine(name: string): string;
+  permissionTitle(currentLabel: string): string;
+  currentLine(label: string): string;
   currentCustom: string;
+  customLabel: string;
   availableHeading: string;
-  presetLine(preset: PermissionLineData): string;
+  presetLine(preset: PermissionLineData, label: string): string;
   usage: string;
   backHint: string;
-  approvalLine(preset: string, approval: string): string;
+  approvalLine(label: string, approval: string): string;
   approvalLabel(value: string): string;
   cardSendFailed: string;
-  switchSucceeded(preset: string, hint: string): string;
+  switchSucceeded(label: string, hint: string): string;
   unknownPreset(name: string, available: string): string;
   switchedElsewhere(text: string): string;
 }
 
-const ZH_HINTS: Readonly<Record<string, string>> = {
-  'read-only': '只读，不能写文件',
-  'workspace-write': '可写会话工作区，越界需审批',
-  'danger-full-access': '沙箱全开，审批 never（慎用）',
+/** Official dsh preset labels (client ui-permission-presets locales). */
+const ZH_LABELS: Readonly<Record<string, string>> = {
+  'read-only': '仅可查看',
+  'workspace-write': '工作区内修改',
+  'danger-full-access': '完全权限',
+  auto: '自动审查（EXP）',
 };
 
-const EN_HINTS: Readonly<Record<string, string>> = {
-  'read-only': 'read-only, no file writes',
-  'workspace-write': 'write the session workspace; outside needs approval',
-  'danger-full-access': 'full sandbox, approval never (use with care)',
+const EN_LABELS: Readonly<Record<string, string>> = {
+  'read-only': 'Read Only',
+  'workspace-write': 'Workspace Write',
+  'danger-full-access': 'Full access',
+  auto: 'Auto review (EXP)',
 };
+
+/** Official display label for one preset; unknown presets keep their raw name. */
+export function presetLabel(lang: Lang, name: string): string {
+  const labels = lang === 'en' ? EN_LABELS : ZH_LABELS;
+  return labels[name] ?? name;
+}
 
 function approvalLabelZh(value: string): string {
   if (value === 'ask') return '人工确认';
@@ -55,65 +72,65 @@ function approvalLabelEn(value: string): string {
   return value;
 }
 
-function presetLineZh(preset: PermissionLineData): string {
-  const hint = ZH_HINTS[preset.name];
-  const sandbox = preset.sandbox ?? '?';
-  const approval = preset.approval ?? '?';
-  return '- ' + preset.name + '：沙箱 ' + sandbox + ' · 审批 ' + approval + (hint === undefined ? '' : '（' + hint + '）');
-}
-
-function presetLineEn(preset: PermissionLineData): string {
-  const hint = EN_HINTS[preset.name];
-  const sandbox = preset.sandbox ?? '?';
-  const approval = preset.approval ?? '?';
-  return '- ' + preset.name + ': sandbox ' + sandbox + ' · approval ' + approval + (hint === undefined ? '' : ' (' + hint + ')');
-}
-
 const ZH: Dict = {
-  permissionTitle: '权限档位',
-  currentLine: (name) => '当前档位：' + name,
-  currentCustom: '当前档位：custom（当前沙箱/审批组合不匹配任何预设）',
+  permissionTitle: (label) => '权限 · 当前 ' + label,
+  currentLine: (label) => '当前档位：' + label,
+  currentCustom: '当前档位：自定义（不匹配任何预设）',
+  customLabel: '自定义（不匹配任何预设）',
   availableHeading: '可用档位：',
-  presetLine: presetLineZh,
+  presetLine: (preset, label) =>
+    '- ' + label + '：沙箱 ' + (preset.sandbox ?? '?') + ' · 审批 ' + (preset.approval ?? '?'),
   usage: '用法：/permission <档位>',
   backHint: '用 /permission <档位> 回到某个预设',
-  approvalLine: (preset, approval) => '档位 ' + preset + ' · 审批 ' + approval,
+  approvalLine: (label, approval) => '档位 ' + label + ' · 审批 ' + approval,
   approvalLabel: approvalLabelZh,
   cardSendFailed: '权限卡片发送失败，以下为文本版：',
-  switchSucceeded: (preset, hint) => '已切换到 ' + preset + '（' + hint + '）',
+  switchSucceeded: (label, hint) => '已切换到 ' + label + '（' + hint + '）',
   unknownPreset: (name, available) => '未知档位 ' + name + '，可用：' + available,
   switchedElsewhere: (text) => '已执行 /permission（dsh 原文：' + text + '）',
 };
 
 const EN: Dict = {
-  permissionTitle: 'Permission preset',
-  currentLine: (name) => 'Current preset: ' + name,
-  currentCustom: 'Current preset: custom (sandbox/approval combination matches no preset)',
+  permissionTitle: (label) => 'Permissions · current ' + label,
+  currentLine: (label) => 'Current preset: ' + label,
+  currentCustom: 'Current preset: custom (matches no preset)',
+  customLabel: 'custom (matches no preset)',
   availableHeading: 'Available presets:',
-  presetLine: presetLineEn,
+  presetLine: (preset, label) =>
+    '- ' + label + ': sandbox ' + (preset.sandbox ?? '?') + ' · approval ' + (preset.approval ?? '?'),
   usage: 'Usage: /permission <preset>',
   backHint: 'Use /permission <preset> to return to a preset',
-  approvalLine: (preset, approval) => 'preset ' + preset + ' · approval ' + approval,
+  approvalLine: (label, approval) => 'preset ' + label + ' · approval ' + approval,
   approvalLabel: approvalLabelEn,
   cardSendFailed: 'Permission card failed to send; text version follows:',
-  switchSucceeded: (preset, hint) => 'Switched to ' + preset + ' (' + hint + ')',
+  switchSucceeded: (label, hint) => 'Switched to ' + label + ' (' + hint + ')',
   unknownPreset: (name, available) => 'Unknown preset ' + name + '; available: ' + available,
   switchedElsewhere: (text) => 'Ran /permission (dsh output: ' + text + ')',
 };
-
-export function presetHint(lang: Lang, name: string): string {
-  const hints = lang === 'en' ? EN_HINTS : ZH_HINTS;
-  return hints[name] ?? name;
-}
 
 export function t(lang: Lang): Dict {
   return lang === 'en' ? EN : ZH;
 }
 
-/** Best-effort host locale resolution; settings failures fall through to env. */
-export function resolveLang(settingsProvider?: () => unknown): Lang {
+/**
+ * Resolve the effective language.
+ *
+ * Overload note: `resolveLang(provider)` is treated as `lang: auto` with that
+ * settings provider (kept for the original call sites).
+ */
+export function resolveLang(
+  langOrProvider?: LangSetting | (() => unknown),
+  maybeProvider?: () => unknown,
+): Lang {
+  const configured: LangSetting =
+    typeof langOrProvider === 'function' ? 'auto' : (langOrProvider ?? 'auto');
+  const provider = typeof langOrProvider === 'function' ? langOrProvider : maybeProvider;
+
+  // Explicit configuration always wins over settings and environment.
+  if (configured === 'zh' || configured === 'en') return configured;
+
   try {
-    const settings = settingsProvider?.();
+    const settings = provider?.();
     if (settings !== undefined && settings !== null) {
       const candidate = settings as {
         get?: (ns: string) => unknown;
@@ -127,15 +144,16 @@ export function resolveLang(settingsProvider?: () => unknown): Lang {
       const record = section as
         | { get?: () => unknown; preference?: unknown }
         | undefined;
-      const value =
-        typeof record?.get === 'function' ? record.get() : record;
+      const value = typeof record?.get === 'function' ? record.get() : record;
       const preference = (value as { preference?: unknown } | undefined)?.preference;
       if (preference === 'zh' || preference === 'en') return preference;
     }
   } catch {
     // Missing/partial settings service: fall through to environment.
   }
-  const locale = process.env['LC_ALL'] ?? process.env['LANG'] ?? '';
-  if (locale.length === 0) return 'zh';
-  return locale.toLowerCase().startsWith('zh') ? 'zh' : 'en';
+
+  const locale = (process.env['LC_ALL'] ?? process.env['LANG'] ?? '').trim().toLowerCase();
+  if (locale.startsWith('zh')) return 'zh';
+  if (locale.startsWith('en')) return 'en';
+  return 'zh';
 }

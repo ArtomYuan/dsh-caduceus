@@ -207,3 +207,10 @@ test('accessControlWarning：空 admins 返回禁用警告', async () => {
   );
   assert.equal(accessControlWarning(['ou_admin']), undefined);
 });
+
+test('lang 默认 zh，可设 en/auto', async () => {
+  const { resolveGatewayConfig } = await import('../src/config.js');
+  assert.equal(resolveGatewayConfig({}).lang, 'zh');
+  assert.equal(resolveGatewayConfig({ lang: 'en' }).lang, 'en');
+  assert.equal(resolveGatewayConfig({ lang: 'auto' }).lang, 'auto');
+});

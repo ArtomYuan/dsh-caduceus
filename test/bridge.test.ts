@@ -2980,7 +2980,7 @@ test('/export：超过 5MB 截断并注明', async (t) => {
 
 function lastPermissionCardText(transport: FakeTransport): string {
   const card = recordedCards(transport)
-    .filter((entry) => entry.card.header?.title.content === '权限档位')
+    .filter((entry) => entry.card.header?.title.content?.startsWith('权限 · 当前 '))
     .at(-1)?.card;
   return JSON.stringify(card);
 }
@@ -3001,12 +3001,12 @@ test('/permission 无参：档位描述来自 resolve（沙箱/审批），含 a
   });
   await h.bridge.handleInbound(inbound('/permission'));
   const text = lastPermissionCardText(h.transport);
-  assert.match(text, /当前档位：workspace-write/);
+  assert.match(text, /当前档位：工作区内修改/);
   assert.match(text, /可用档位：/);
-  assert.match(text, /- read-only：沙箱 read-only · 审批 ask（只读，不能写文件）/);
-  assert.match(text, /- workspace-write：沙箱 workspace-write · 审批 ask（可写会话工作区，越界需审批）/);
-  assert.match(text, /- danger-full-access：沙箱 danger-full-access · 审批 never（沙箱全开，审批 never（慎用））/);
-  assert.match(text, /- auto：沙箱 auto · 审批 \?/);
+  assert.match(text, /- 仅可查看：沙箱 read-only · 审批 ask/);
+  assert.match(text, /- 工作区内修改：沙箱 workspace-write · 审批 ask/);
+  assert.match(text, /- 完全权限：沙箱 danger-full-access · 审批 never/);
+  assert.match(text, /- 自动审查（EXP）：沙箱 auto · 审批 \?/);
   assert.match(text, /用法：\/permission <档位>/);
 });
 
@@ -3020,7 +3020,7 @@ test('/permission 当前 custom：人话说明 + 回到预设的指引', async (
   });
   await h.bridge.handleInbound(inbound('/permission'));
   const text = lastPermissionCardText(h.transport);
-  assert.match(text, /当前档位：custom（当前沙箱\/审批组合不匹配任何预设）/);
+  assert.match(text, /当前档位：自定义（不匹配任何预设）/);
   assert.match(text, /用 \/permission <档位> 回到某个预设/);
 });
 
@@ -3056,7 +3056,7 @@ test('/permission 切换：调用底层命令一次并翻译为中文', async (t
   assert.deepEqual(forwarded, ['/permission workspace-write']);
   assert.match(
     recordedTexts(h.transport).at(-1) ?? '',
-    /已切换到 workspace-write（可写会话工作区，越界需审批）/,
+    /已切换到 工作区内修改（workspace-write）/,
   );
 });
 
@@ -3119,7 +3119,7 @@ test('权限卡片：发送失败 → 同一数据的文本降级', async (t) =>
   };
   await h.bridge.handleInbound(inbound('/permission'));
   const text = recordedTexts(h.transport).at(-1) ?? '';
-  assert.match(text, /当前档位：workspace-write/);
+  assert.match(text, /当前档位：工作区内修改/);
   assert.match(text, /可用档位：/);
   assert.match(text, /沙箱 workspace-write · 审批 ask/);
 });
@@ -3149,7 +3149,7 @@ test('权限卡片：按钮回调执行 /permission 切换并 patch 卡片', asy
   });
   await h.bridge.handleInbound(inbound('/permission'));
   const card = recordedCards(h.transport).find(
-    (entry) => entry.card.header?.title.content === '权限档位',
+    (entry) => entry.card.header?.title.content?.startsWith('权限 · 当前 '),
   );
   assert.ok(card !== undefined);
   const button = buttonsOf(card.card)[0]!;
@@ -3164,7 +3164,7 @@ test('权限卡片：按钮回调执行 /permission 切换并 patch 卡片', asy
     h.transport.calls.some((call) => call.op === 'updateCard' && call.messageId === card.messageId),
     'permission card must be patched after switching',
   );
-  assert.match(recordedTexts(h.transport).at(-1) ?? '', /已切换到 workspace-write/);
+  assert.match(recordedTexts(h.transport).at(-1) ?? '', /已切换到 工作区内修改/);
 });
 
 test('审批卡片：顶部带当前档位/审批行', async (t) => {

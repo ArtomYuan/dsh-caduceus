@@ -39,7 +39,7 @@ import {
 } from '../doctor.js';
 import { writeOwnership, type SessionScopeKind } from '../ownership.js';
 import { extractMediaMarkers, resolveMedia } from '../media.js';
-import { presetHint, resolveLang, t, type Lang } from '../i18n.js';
+import { presetLabel, t, type Lang } from '../i18n.js';
 import {
   buildPermissionCard,
   renderPermissionText,
@@ -2008,7 +2008,7 @@ function translatePermissionOutput(text: string, requested: string, lang: Lang):
   const success = /^preset\s+(\S+)\s*$/.exec(text.trim());
   if (success !== null) {
     const name = success[1] as string;
-    return dict.switchSucceeded(name, presetHint(lang, name));
+    return dict.switchSucceeded(presetLabel(lang, name), name);
   }
   const unknown = /^unknown preset "([^"]+)" \(available: ([^)]*)\)\s*$/.exec(text.trim());
   if (unknown !== null) {

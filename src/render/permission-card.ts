@@ -5,7 +5,7 @@
  * @module dsh-caduceus/render/permission-card
  */
 import type { FeishuCard } from '../transport/types.js';
-import { t } from '../i18n.js';
+import { presetLabel, t } from '../i18n.js';
 import type { Dict, Lang } from '../i18n.js';
 import { interactiveCard } from '../interactive/cards.js';
 
@@ -25,13 +25,23 @@ export interface PermissionView {
 
 export const PERMISSION_SWITCH_ACTION = 'caduceus.permission.switch';
 
+function currentLabel(view: PermissionView, dict: Dict): string {
+  return view.current === 'custom'
+    ? dict.customLabel
+    : presetLabel(view.lang, view.current);
+}
+
 function lines(view: PermissionView, dict: Dict): string[] {
   const result = [
-    view.current === 'custom' ? dict.currentCustom : dict.currentLine(view.current),
+    view.current === 'custom' ? dict.currentCustom : dict.currentLine(currentLabel(view, dict)),
     dict.availableHeading,
   ];
   for (const preset of view.presets) {
-    result.push(preset.resolved === false ? '- ' + preset.name : dict.presetLine(preset));
+    result.push(
+      preset.resolved === false
+        ? '- ' + preset.name
+        : dict.presetLine(preset, presetLabel(view.lang, preset.name)),
+    );
   }
   result.push(dict.usage);
   if (view.current === 'custom') result.push(dict.backHint);
@@ -41,10 +51,10 @@ function lines(view: PermissionView, dict: Dict): string[] {
 export function buildPermissionCard(view: PermissionView): FeishuCard {
   const dict = t(view.lang);
   return interactiveCard(
-    dict.permissionTitle,
+    dict.permissionTitle(currentLabel(view, dict)),
     lines(view, dict),
     view.presets.map((preset) => ({
-      label: preset.name,
+      label: presetLabel(view.lang, preset.name),
       value: { action: PERMISSION_SWITCH_ACTION, name: preset.name },
     })),
   );

@@ -94,6 +94,7 @@ onlyBuiltDependencies:
 | `maxSendImageBytes` | `10485760` | 发送图片上限（10 MiB） |
 | `mediaRoots` | `[]` | 允许发送的目录（空=会话 cwd） |
 | `admins` | `[]` | 管理员 open_id 白名单；空=关闭访问控制 |
+| `lang` | `zh` | 权限面语言：`zh`（默认）、`en`、`auto`（设置/环境，最后回退 zh） |
 
 ## 命令
 

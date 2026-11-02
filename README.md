@@ -95,6 +95,7 @@ onlyBuiltDependencies:
 | `maxSendImageBytes` | `10485760` | Outbound image limit (10 MiB) |
 | `mediaRoots` | `[]` | Allowed roots for outbound paths (empty = session cwd) |
 | `admins` | `[]` | Admin open-id allowlist; empty disables access control |
+| `lang` | `zh` | Permission UI language: `zh` (default), `en`, or `auto` (settings/env, then zh) |
 
 ## Commands
 

@@ -10,5 +10,7 @@
 - insert:
     - id: caduceus-gateway
       name: 'dsh-caduceus'
+      config:
+        lang: zh
     - id: caduceus-persona
       name: 'dsh-caduceus/persona'
