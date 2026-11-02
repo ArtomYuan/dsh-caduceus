@@ -21,6 +21,7 @@ import {
 } from './normalize.js';
 import { formatGateLine } from '../gate.js';
 import { FeishuApiError } from './types.js';
+import { unwrapFeishuData } from './feishu-response.js';
 import type { CardAction, FeishuCard, InboundMessage } from './types.js';
 
 export interface LarkFeishuApiOptions {
@@ -237,8 +238,8 @@ export class LarkFeishuApi implements FeishuApi {
         file: Buffer.from(bytes),
       },
     })) as UploadResponse;
-    this.assertOk(response, 'im.v1.file.create');
-    const fileKey = response.data?.file_key;
+    const data = unwrapFeishuData<{ readonly file_key?: string }>(response, 'im.v1.file.create');
+    const fileKey = data.file_key;
     if (fileKey === undefined || fileKey.length === 0) {
       throw new FeishuApiError('feishu im.v1.file.create returned no file_key', -1);
     }
@@ -252,8 +253,8 @@ export class LarkFeishuApi implements FeishuApi {
         image: Buffer.from(bytes),
       },
     })) as UploadResponse;
-    this.assertOk(response, 'im.v1.image.create');
-    const imageKey = response.data?.image_key;
+    const data = unwrapFeishuData<{ readonly image_key?: string }>(response, 'im.v1.image.create');
+    const imageKey = data.image_key;
     if (imageKey === undefined || imageKey.length === 0) {
       throw new FeishuApiError('feishu im.v1.image.create returned no image_key', -1);
     }
