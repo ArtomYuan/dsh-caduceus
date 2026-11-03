@@ -511,6 +511,19 @@ test('/rename 成功与 SessionTitleInvalidError 翻译', async (t) => {
   assert.match(recordedTexts(h.transport).at(-1) ?? '', /标题不能为空或太短/);
 });
 
+
+function tempDshHome(t: TestContext): string {
+  const saved = process.env['DSH_HOME'];
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-export-cache-'));
+  process.env['DSH_HOME'] = dir;
+  t.after(() => {
+    if (saved === undefined) delete process.env['DSH_HOME'];
+    else process.env['DSH_HOME'] = saved;
+    rmSync(dir, { recursive: true, force: true });
+  });
+  return dir;
+}
+
 test('未知命令：/export 自有处理，其余转交命令注册表', async (t) => {
   const forwarded: string[] = [];
   const h = makeHarness(t, {
@@ -2902,6 +2915,7 @@ test('话题：/whoami 走 reply + threadId，不漂到主流程', async (t) => 
 });
 
 test('/helper 与 /export：markdown 导出写文件并回复 MEDIA', async (t) => {
+  const dshHome = tempDshHome(t);
   const h = makeHarness(t, {
     exportProvider: () => ({
       messages: [
@@ -2917,6 +2931,11 @@ test('/helper 与 /export：markdown 导出写文件并回复 MEDIA', async (t) 
   assert.match(reply, /^MEDIA:\/.*\.md/m);
   assert.match(reply, /已导出会话/);
   const path = reply.split('\n')[0]!.slice('MEDIA:'.length);
+  const cacheRoot = join(dshHome, 'caduceus', 'cache', 'exports');
+  assert.ok(path.startsWith(cacheRoot), `export must live in cache: ${path}`);
+  assert.ok(!path.startsWith(h.dir), 'export must not live in the session cwd');
+  assert.ok(!path.split(/[\\/]/).at(-1)!.startsWith('.'));
+  assert.match(path.split(/[\\/]/).at(-1)!, /^caduceus-[a-z0-9-]+-\d{8}-\d{6}\.md$/);
   assert.ok(existsSync(path), `export file must exist: ${path}`);
   const content = readFileSync(path, 'utf8');
   assert.match(content, /# dsh 会话导出/);
@@ -2931,6 +2950,7 @@ test('/helper 与 /export：markdown 导出写文件并回复 MEDIA', async (t) 
 });
 
 test('/export --json：写 .jsonl 并回复 MEDIA', async (t) => {
+  tempDshHome(t);
   const h = makeHarness(t, {
     exportProvider: () => ({
       messages: [{ role: 'user', text: '你好' }],
@@ -2942,19 +2962,34 @@ test('/export --json：写 .jsonl 并回复 MEDIA', async (t) => {
   const reply = recordedTexts(h.transport).at(-1) ?? '';
   assert.match(reply, /^MEDIA:\/.*\.jsonl/m);
   const path = reply.split('\n')[0]!.slice('MEDIA:'.length);
-  assert.ok(existsSync(path));
+  assert.ok(existsSync(path), 'successful upload must not delete the export');
   assert.match(readFileSync(path, 'utf8'), /user\/message/);
 });
 
-test('/export：没有日志 → 明确回复，不写文件', async (t) => {
-  const saved = process.env['DSH_HOME'];
-  const emptyHome = mkdtempSync(join(tmpdir(), 'dsh-export-empty-'));
-  process.env['DSH_HOME'] = emptyHome;
-  t.after(() => {
-    if (saved === undefined) delete process.env['DSH_HOME'];
-    else process.env['DSH_HOME'] = saved;
-    rmSync(emptyHome, { recursive: true, force: true });
+test('/export：上传失败保留文件并 warn 全路径', async (t) => {
+  tempDshHome(t);
+  const h = makeHarness(t, {
+    exportProvider: () => ({ messages: [{ role: 'user', text: '你好' }] }),
   });
+  h.transport.failUploadFileWith = new Error('upload boom');
+  await h.bridge.handleInbound(inbound('hi'));
+  await h.bridge.handleInbound(inbound('/export'));
+  const reply = recordedTexts(h.transport).at(-1) ?? '';
+  const path = reply.split('\n')[0]!.slice('MEDIA:'.length);
+  assert.ok(existsSync(path), 'failed upload must keep the export file');
+  assert.ok(
+    h.logger.entries.some(
+      (entry) =>
+        entry.level === 'warn' &&
+        entry.message.includes('media send failed') &&
+        entry.message.includes(path),
+    ),
+    h.logger.entries.map((entry) => entry.message).join(' | '),
+  );
+});
+
+test('/export：没有日志 → 明确回复，不写文件', async (t) => {
+  tempDshHome(t);
   const h = makeHarness(t, { exportProvider: () => undefined });
   await h.bridge.handleInbound(inbound('hi'));
   await h.bridge.handleInbound(inbound('/export'));
@@ -2963,6 +2998,7 @@ test('/export：没有日志 → 明确回复，不写文件', async (t) => {
 });
 
 test('/export：超过 5MB 截断并注明', async (t) => {
+  tempDshHome(t);
   const h = makeHarness(t, {
     exportProvider: () => ({
       messages: [{ role: 'assistant', text: 'x'.repeat(6 * 1024 * 1024) }],

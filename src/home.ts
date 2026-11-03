@@ -79,6 +79,11 @@ export function legacyAgentsFile(env?: HomeEnv): string {
   return join(agentsHome(env), 'AGENTS.md');
 }
 
+/** Export cache directory: `<DSH_HOME>/caduceus/cache/exports`. */
+export function defaultExportCacheDir(env?: HomeEnv): string {
+  return join(dshHome(env), 'caduceus', 'cache', 'exports');
+}
+
 /** Default durable log file: `<DSH_HOME>/caduceus/caduceus.log`. */
 export function defaultLogPath(env?: HomeEnv): string {
   return join(dshHome(env), 'caduceus', 'caduceus.log');

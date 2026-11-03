@@ -33,7 +33,7 @@ import type {
   SessionTitleLike,
 } from './bridge/types.js';
 import { runHarnessCommand } from './commands/harness.js';
-import { parseSessionEvents } from './export.js';
+import { cleanupExportCache, parseSessionEvents } from './export.js';
 import { resolveLang } from './i18n.js';
 import {
   Config,
@@ -42,7 +42,7 @@ import {
   type GatewayConfig,
 } from './config.js';
 import { FileLogger } from './file-logger.js';
-import { defaultLogPath } from './home.js';
+import { defaultExportCacheDir, defaultLogPath } from './home.js';
 import { adaptLogger, teeLoggers, type LoggerLike } from './logger.js';
 import { formatStartupLine } from './observability.js';
 import { autoSyncPersona } from './persona/auto-sync.js';
@@ -347,6 +347,18 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
       logger.error(`inbound message failed: ${errorText(error)}`);
     });
   });
+
+  const exportCacheDir = defaultExportCacheDir();
+  try {
+    mkdirSync(exportCacheDir, { recursive: true });
+  } catch (error) {
+    logger.warn(`export cache dir unavailable (${exportCacheDir}): ${errorText(error)}`);
+  }
+  try {
+    cleanupExportCache(exportCacheDir, resolved.exportCacheMaxAgeHours, Date.now(), logger);
+  } catch (error) {
+    logger.warn(`export cache cleanup failed: ${errorText(error)}`);
+  }
 
   ctx.on('session/event', (session, event: SessionEvent) => {
     const sessionId = String(session.id);

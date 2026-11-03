@@ -68,6 +68,8 @@ export interface GatewayConfig {
   readonly admins?: readonly string[];
   /** UI language: zh (default), en, or auto (settings/env, fallback zh). */
   readonly lang?: LangSetting;
+  /** Export cache retention in hours (default 24). */
+  readonly exportCacheMaxAgeHours?: number;
 }
 
 /** Schemastery schema for the `caduceus-gateway` entry. */
@@ -101,6 +103,7 @@ export const Config = z.object({
   mediaRoots: z.array(z.string()).required(false),
   admins: z.array(z.string()).required(false),
   lang: z.union([z.const('zh'), z.const('en'), z.const('auto')]).required(false),
+  exportCacheMaxAgeHours: z.natural().min(1).required(false),
 });
 
 /** Default card patch throttle: half of Feishu's 5 QPS budget. */
@@ -164,6 +167,7 @@ export interface ResolvedGatewayConfig {
   readonly interactiveTimeoutMs: number;
   readonly approvalPolicy?: ApprovalPolicy;
   readonly lang: LangSetting;
+  readonly exportCacheMaxAgeHours: number;
 }
 
 export interface ConfigEnv {
@@ -229,5 +233,6 @@ export function resolveGatewayConfig(
       ? {}
       : { approvalPolicy: config.approvalPolicy }),
     lang: config.lang ?? 'zh',
+    exportCacheMaxAgeHours: config.exportCacheMaxAgeHours ?? 24,
   };
 }

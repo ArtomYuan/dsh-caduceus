@@ -38,6 +38,7 @@ import {
   type DoctorSessionInfo,
 } from '../doctor.js';
 import { writeOwnership, type SessionScopeKind } from '../ownership.js';
+import { defaultExportCacheDir } from '../home.js';
 import { extractMediaMarkers, resolveMedia } from '../media.js';
 import { presetLabel, t, type Lang } from '../i18n.js';
 import {
@@ -953,10 +954,16 @@ export class Bridge {
           now: this.#now(),
           messages: data.messages,
         });
-    const cwd = this.#sessionMap.getCwd(state.key) ?? this.#config.defaultCwd;
     let path: string;
     try {
-      path = writeExportFile(cwd, sessionId, extension, content, this.#now());
+      path = writeExportFile(
+        defaultExportCacheDir(),
+        this.#scopeKind(state),
+        sessionId,
+        extension,
+        content,
+        this.#now(),
+      );
     } catch (error) {
       await this.#replyText(state, `导出失败：写入文件失败（${errorMessage(error)}）。`);
       return;
@@ -1091,7 +1098,9 @@ export class Bridge {
           );
         }
       } catch (error) {
-        this.#logger.warn(`media send failed for ${entry.name}: ${errorMessage(error)}`);
+        this.#logger.warn(
+          `media send failed for ${entry.name} (${entry.path}): ${errorMessage(error)}`,
+        );
       }
     }
   }

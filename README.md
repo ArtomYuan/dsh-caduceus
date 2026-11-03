@@ -96,6 +96,7 @@ onlyBuiltDependencies:
 | `mediaRoots` | `[]` | Allowed roots for outbound paths (empty = session cwd) |
 | `admins` | `[]` | Admin open-id allowlist; empty disables access control |
 | `lang` | `zh` | Permission UI language: `zh` (default), `en`, or `auto` (settings/env, then zh) |
+| `exportCacheMaxAgeHours` | `24` | Delete `/export` cache files older than this on startup |
 
 ## Commands
 

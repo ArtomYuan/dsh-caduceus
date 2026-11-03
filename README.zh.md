@@ -95,6 +95,7 @@ onlyBuiltDependencies:
 | `mediaRoots` | `[]` | 允许发送的目录（空=会话 cwd） |
 | `admins` | `[]` | 管理员 open_id 白名单；空=关闭访问控制 |
 | `lang` | `zh` | 权限面语言：`zh`（默认）、`en`、`auto`（设置/环境，最后回退 zh） |
+| `exportCacheMaxAgeHours` | `24` | 启动时清理超过该小时数的 `/export` 缓存文件 |
 
 ## 命令
 

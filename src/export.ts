@@ -8,8 +8,9 @@
  *
  * @module dsh-caduceus/export
  */
-import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
+import type { LoggerLike } from './logger.js';
 import { basename, join, sep } from 'node:path';
 import { zstdDecompressSync } from 'node:zlib';
 
@@ -181,19 +182,86 @@ export function renderExportJsonl(messages: readonly ExportMessage[]): string {
   return truncateUtf8(raw, TRUNCATED_MARKER.trim());
 }
 
-/** Write one export file under the session cwd; returns the absolute path. */
+/** Timestamp used in readable export filenames. */
+function exportStamp(now: number): string {
+  const date = new Date(now);
+  const pad = (value: number): string => String(value).padStart(2, '0');
+  return (
+    String(date.getFullYear()) +
+    pad(date.getMonth() + 1) +
+    pad(date.getDate()) +
+    '-' +
+    pad(date.getHours()) +
+    pad(date.getMinutes()) +
+    pad(date.getSeconds())
+  );
+}
+
+/** Write one export file into the cache directory; returns the absolute path. */
 export function writeExportFile(
-  cwd: string,
+  directory: string,
+  scopeKind: string,
   sessionId: string,
   extension: 'md' | 'jsonl',
   content: string,
   now: number,
 ): string {
-  mkdirSync(cwd, { recursive: true });
+  mkdirSync(directory, { recursive: true });
+  const kind = scopeKind.replace(/[^a-z0-9-]+/gi, '-') || 'chat';
   const target = join(
-    cwd,
-    `.caduceus-export-${sessionId.slice(0, 8)}-${now}.${extension}`,
+    directory,
+    `caduceus-${kind}-${sessionId.slice(-8)}-${exportStamp(now)}.${extension}`,
   );
   writeFileSync(target, content);
   return target;
+}
+
+export interface ExportCacheCleanupResult {
+  readonly removed: number;
+  readonly kept: number;
+}
+
+/**
+ * Remove export-cache files older than `maxAgeHours`. A missing directory is
+ * fine; any filesystem error is logged as one warn and never thrown.
+ */
+export function cleanupExportCache(
+  directory: string,
+  maxAgeHours: number,
+  now = Date.now(),
+  logger?: LoggerLike,
+): ExportCacheCleanupResult {
+  let entries;
+  try {
+    entries = readdirSync(directory, { withFileTypes: true });
+  } catch (error) {
+    if ((error as { code?: string }).code !== 'ENOENT') {
+      logger?.warn(
+        `export cache cleanup failed for ${directory}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    return { removed: 0, kept: 0 };
+  }
+  const maxAgeMs = maxAgeHours * 60 * 60 * 1000;
+  let removed = 0;
+  let kept = 0;
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.startsWith('caduceus-')) continue;
+    const path = join(directory, entry.name);
+    try {
+      const age = now - statSync(path).mtimeMs;
+      if (age > maxAgeMs) {
+        unlinkSync(path);
+        removed += 1;
+      } else {
+        kept += 1;
+      }
+    } catch (error) {
+      logger?.warn(
+        `export cache cleanup skipped ${path}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  logger?.info(`export cache: removed=${removed} kept=${kept}`);
+  return { removed, kept };
 }
