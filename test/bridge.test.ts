@@ -3337,6 +3337,7 @@ function runningProcessCardText(h: ReturnType<typeof makeHarness>): string {
 async function settleRender(h: ReturnType<typeof makeHarness>): Promise<void> {
   h.clock.advance(400);
   await tick();
+  await tick();
 }
 
 async function startRunningTurn(h: ReturnType<typeof makeHarness>): Promise<ReturnType<typeof liveAgent>> {
@@ -3671,5 +3672,205 @@ test('/stop 命令：使用新的诚实停止文案', async (t) => {
   assert.equal(
     recordedTexts(h.transport).at(-1),
     '已停止当前回合。后台任务仍在运行，完成后结果会回来。',
+  );
+});
+
+test('metrics 全量：重启后冷缓存读历史日志，不显示 0', async (t) => {
+  const history = [
+    { type: 'turn/start', data: { turn: 1 }, time: 1_000 },
+    { type: 'assistant/message', data: { turn: 1, usage: { inputTokens: 288, outputTokens: 225, cacheReadTokens: 155776, totalTokens: 156289 } }, time: 2_000 },
+    { type: 'turn/end', data: { turn: 1 }, time: 2_000 },
+  ];
+  const h = makeHarness(t, { metrics: 'compact', usageProvider: () => history });
+  await h.bridge.handleInbound(inbound('hi'));
+  const agent = await startRunningTurn(h);
+  await settleRender(h);
+  const text = runningProcessCardText(h);
+  assert.match(text, /1 轮/);
+  assert.match(text, /156\.3k tok/);
+  assert.ok(!text.includes('0 tok'));
+  await h.bridge.handleSessionEvent(agent.session, event('turn/end', { turn: 1, reason: { kind: 'completed' } }, 3_000));
+});
+
+test('metrics 回合中：缓存全量 + 本回合增量，数字单调递增', async (t) => {
+  const events: unknown[] = [
+    { type: 'turn/start', data: { turn: 1 }, time: 1_000 },
+  ];
+  const h = makeHarness(t, { metrics: 'compact', usageProvider: () => events });
+  await h.bridge.handleInbound(inbound('hi'));
+  const agent = liveAgent(h);
+  await h.bridge.handleSessionEvent(agent.session, event('turn/start', { turn: 1 }, 1_000));
+  events.push({ type: 'assistant/message', data: { turn: 1, usage: { inputTokens: 100, outputTokens: 10, totalTokens: 1_000 } }, time: 2_000 });
+  await h.bridge.handleSessionEvent(
+    agent.session,
+    event('assistant/message', { turn: 1, usage: { inputTokens: 100, outputTokens: 10, totalTokens: 1_000 } }, 2_000),
+  );
+  await h.bridge.handleSessionEvent(agent.session, event('turn/end', { turn: 1 }, 2_000));
+  await h.bridge.handleSessionEvent(agent.session, event('turn/start', { turn: 2 }, 3_000));
+  await h.bridge.handleSessionEvent(
+    agent.session,
+    event('assistant/message', { turn: 2, usage: { inputTokens: 200, outputTokens: 20, totalTokens: 500 } }, 4_000),
+  );
+  await settleRender(h);
+  const text = runningProcessCardText(h);
+  assert.match(text, /2 轮/);
+  assert.match(text, /1\.5k tok/);
+  await h.bridge.handleSessionEvent(agent.session, event('turn/end', { turn: 2, reason: { kind: 'completed' } }, 5_000));
+});
+
+test('metrics 缓存：turn/end 后刷新，下一回合沿用全量', async (t) => {
+  const events: unknown[] = [
+    { type: 'turn/start', data: { turn: 1 }, time: 1_000 },
+    { type: 'assistant/message', data: { turn: 1, usage: { inputTokens: 100, outputTokens: 10, totalTokens: 1_000 } }, time: 2_000 },
+  ];
+  const h = makeHarness(t, { metrics: 'compact', usageProvider: () => events });
+  await h.bridge.handleInbound(inbound('hi'));
+  const agent = liveAgent(h);
+  await h.bridge.handleSessionEvent(agent.session, event('turn/start', { turn: 1 }, 1_000));
+  await h.bridge.handleSessionEvent(agent.session, event('assistant/message', { turn: 1, usage: { inputTokens: 100, outputTokens: 10, totalTokens: 1_000 } }, 2_000));
+  await h.bridge.handleSessionEvent(agent.session, event('turn/end', { turn: 1, reason: { kind: 'completed' } }, 2_000));
+  await h.bridge.handleSessionEvent(agent.session, event('turn/start', { turn: 2 }, 3_000));
+  await settleRender(h);
+  assert.match(runningProcessCardText(h), /2 轮/);
+  assert.match(runningProcessCardText(h), /1\.0k tok/);
+});
+
+test('metrics /new 后清缓存，新会话显示小数值', async (t) => {
+  const provider = (sessionId: string): readonly unknown[] =>
+    sessionId === 'feishu-bridge-1'
+      ? [{ type: 'assistant/message', data: { turn: 1, usage: { totalTokens: 1_100 } } }]
+      : [];
+  const h = makeHarness(t, { metrics: 'compact', usageProvider: provider });
+  await h.bridge.handleInbound(inbound('hi'));
+  await h.bridge.handleSessionEvent(liveAgent(h).session, event('turn/start', { turn: 1 }, 1_000));
+  await settleRender(h);
+  assert.match(runningProcessCardText(h), /1\.1k tok/);
+  await h.bridge.handleInbound(inbound('/new'));
+  const newSessionId = h.store.get('oc_chat');
+  const newAgent = newSessionId === undefined ? undefined : h.agents.get(newSessionId);
+  assert.ok(newAgent !== undefined);
+  await h.bridge.handleSessionEvent(newAgent.session, event('turn/start', { turn: 1 }, 2_000));
+  await settleRender(h);
+  const text = runningProcessCardText(h);
+  assert.ok(!text.includes('1.1k tok'), text);
+});
+
+test('metrics readSession 抛错：回退 logEvents 且 warn 一次', async (t) => {
+  const h = makeHarness(t, {
+    metrics: 'compact',
+    usageProvider: () => Promise.reject(new Error('log boom')),
+  });
+  await h.bridge.handleInbound(inbound('hi'));
+  const agent = await startRunningTurn(h);
+  await settleRender(h);
+  await h.bridge.handleSessionEvent(
+    agent.session,
+    event('assistant/message', { turn: 1, usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } }, 200),
+  );
+  await settleRender(h);
+  const warnings = h.logger.entries.filter(
+    (entry) => entry.level === 'warn' && entry.message === 'metrics fallback: process buffer',
+  );
+  assert.equal(warnings.length, 1);
+  assert.match(runningProcessCardText(h), /15 tok/);
+});
+
+test('metrics 一致性：卡片与 /usage 同一日志算出同一 totalTokens', async (t) => {
+  const events = [
+    { type: 'turn/start', data: { turn: 1 }, time: 1_000 },
+    { type: 'assistant/message', data: { turn: 1, usage: { inputTokens: 500, outputTokens: 100, cacheReadTokens: 500, totalTokens: 1_100 } }, time: 2_000 },
+    { type: 'turn/end', data: { turn: 1 }, time: 2_000 },
+  ];
+  const h = makeHarness(t, { metrics: 'compact', usageProvider: () => events });
+  await h.bridge.handleInbound(inbound('hi'));
+  const agent = await startRunningTurn(h);
+  await settleRender(h);
+  const card = runningProcessCardText(h);
+  assert.match(card, /1\.1k tok/);
+  await h.bridge.handleInbound(inbound('/usage'));
+  const usage = recordedTexts(h.transport).at(-1) ?? '';
+  assert.match(usage, /合计 1100/);
+  assert.match(usage, /1\.1k tok/);
+  await h.bridge.handleSessionEvent(agent.session, event('turn/end', { turn: 1, reason: { kind: 'completed' } }, 3_000));
+});
+
+test('metrics 缓存按 scope 隔离', async (t) => {
+  const provider = (sessionId: string): readonly unknown[] => [
+    { type: 'assistant/message', data: { turn: 1, usage: { totalTokens: sessionId.endsWith('1') ? 1_000 : 2_000 } } },
+  ];
+  const h = makeHarness(t, { metrics: 'compact', usageProvider: provider });
+  await h.bridge.handleInbound(inbound('hi'));
+  await h.bridge.handleSessionEvent(liveAgent(h).session, event('turn/start', { turn: 1 }, 1_000));
+  await settleRender(h);
+  const first = runningProcessCardText(h);
+  assert.match(first, /1\.0k tok/);
+  await h.bridge.handleInbound(inbound('/new'));
+  const newSessionId = h.store.get('oc_chat');
+  const newAgent = newSessionId === undefined ? undefined : h.agents.get(newSessionId);
+  assert.ok(newAgent !== undefined);
+  await h.bridge.handleSessionEvent(newAgent.session, event('turn/start', { turn: 1 }, 2_000));
+  await settleRender(h);
+  assert.match(runningProcessCardText(h), /2\.0k tok/);
+});
+
+test('metrics 刷新失败只 warn，不影响已有缓存', async (t) => {
+  let calls = 0;
+  const h = makeHarness(t, {
+    metrics: 'compact',
+    usageProvider: () => {
+      calls += 1;
+      if (calls === 1) {
+        return [{ type: 'assistant/message', data: { turn: 1, usage: { totalTokens: 2_000 } } }];
+      }
+      throw new Error('refresh boom');
+    },
+  });
+  await h.bridge.handleInbound(inbound('hi'));
+  const agent = liveAgent(h);
+  await h.bridge.handleSessionEvent(agent.session, event('turn/start', { turn: 1 }, 1_000));
+  await settleRender(h);
+  assert.match(runningProcessCardText(h), /2\.0k tok/);
+  await h.bridge.handleSessionEvent(agent.session, event('turn/end', { turn: 1, reason: { kind: 'completed' } }, 2_000));
+  assert.ok(
+    h.logger.entries.some(
+      (entry) => entry.level === 'warn' && entry.message.includes('metrics refresh failed'),
+    ),
+  );
+  await h.bridge.handleSessionEvent(agent.session, event('turn/start', { turn: 2 }, 3_000));
+  await settleRender(h);
+  assert.match(runningProcessCardText(h), /2\.0k tok/);
+});
+
+test('metrics 冷读已含本回合事件时不再重复加增量', async (t) => {
+  const events = [
+    { type: 'turn/start', data: { turn: 1 }, time: 1_000 },
+    { type: 'assistant/message', data: { turn: 1, usage: { inputTokens: 100, outputTokens: 10, totalTokens: 1_000 } }, time: 2_000 },
+  ];
+  const h = makeHarness(t, { metrics: 'compact', usageProvider: () => events });
+  await h.bridge.handleInbound(inbound('hi'));
+  const agent = liveAgent(h);
+  await h.bridge.handleSessionEvent(agent.session, event('turn/start', { turn: 1 }, 1_000));
+  await h.bridge.handleSessionEvent(
+    agent.session,
+    event('assistant/message', { turn: 1, usage: { inputTokens: 100, outputTokens: 10, totalTokens: 1_000 } }, 2_000),
+  );
+  await settleRender(h);
+  const text = runningProcessCardText(h);
+  assert.match(text, /1\.0k tok/);
+  assert.ok(!text.includes('2.0k'), 'cold read must not double count');
+});
+
+test('metrics 无 provider：回退 logEvents 并 warn', async (t) => {
+  const h = makeHarness(t, { metrics: 'compact' });
+  await h.bridge.handleInbound(inbound('hi'));
+  const agent = await startRunningTurn(h);
+  await h.bridge.handleSessionEvent(
+    agent.session,
+    event('assistant/message', { turn: 1, usage: { inputTokens: 4, outputTokens: 2, totalTokens: 6 } }, 200),
+  );
+  await settleRender(h);
+  assert.match(runningProcessCardText(h), /6 tok/);
+  assert.ok(
+    h.logger.entries.some((entry) => entry.message === 'metrics fallback: process buffer'),
   );
 });

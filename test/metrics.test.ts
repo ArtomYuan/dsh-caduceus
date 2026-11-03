@@ -90,6 +90,9 @@ test('compact/detailed/off 行格式', () => {
     steps: 12,
     tokensPerSecond: 156,
     totalTokens: 7_860_000,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
     cacheHitPercent: 99,
     contextPercent: 18,
   };

@@ -35,11 +35,13 @@ function usageOf(value: unknown): UsageTotals | undefined {
   const output = num('outputTokens');
   const cacheRead = num('cacheReadTokens');
   const cacheWrite = num('cacheWriteTokens');
-  if (input === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0) return undefined;
+  const providerTotal =
+    typeof record['totalTokens'] === 'number' ? (record['totalTokens'] as number) : 0;
+  if (input === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0 && providerTotal === 0) {
+    return undefined;
+  }
   const total =
-    typeof record['totalTokens'] === 'number'
-      ? (record['totalTokens'] as number)
-      : input + output + cacheRead + cacheWrite;
+    providerTotal > 0 ? providerTotal : input + output + cacheRead + cacheWrite;
   return { input, output, cacheRead, cacheWrite, total };
 }
 

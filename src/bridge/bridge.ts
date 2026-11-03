@@ -195,6 +195,16 @@ export class Bridge {
   readonly #permissionCards = new Map<string, { key: string; ownerOpenId?: string }>();
   readonly #stopCards = new Map<string, string>();
   readonly #stopClicks = new Map<string, number>();
+  readonly #sessionMetrics = new Map<
+    string,
+    {
+      readonly sessionId: string;
+      readonly metrics: ReturnType<typeof aggregateMetrics>;
+      readonly refreshedAtSeq: number;
+      readonly turn: number;
+    }
+  >();
+  readonly #metricsFallbackWarned = new Set<string>();
   readonly #scopeBySession = new Map<string, string>();
 
   constructor(options: BridgeOptions) {
@@ -1064,6 +1074,7 @@ export class Bridge {
       if (notice !== undefined) await this.#replyText(state, notice);
     }
     await this.#finishReactions(state, kind);
+    await this.#refreshSessionMetrics(state);
     state.stopRequested = false;
     state.lastOutput = '';
   }
@@ -1881,6 +1892,10 @@ export class Bridge {
   }
 
   #bindSession(state: ScopeState, sessionId: string): void {
+    if (state.sessionId !== undefined && state.sessionId !== sessionId) {
+      this.#sessionMetrics.delete(state.key);
+      this.#metricsFallbackWarned.delete(state.key);
+    }
     for (const [id, key] of this.#scopeBySession) {
       if (key === state.key && id !== sessionId) this.#scopeBySession.delete(id);
     }
@@ -2032,12 +2047,95 @@ export class Bridge {
     const stream = state.progress;
     if (stream === undefined) return;
     const snapshot = state.status.get();
-    await stream.set(
-      this.#progressCardFor(state, snapshot),
-    );
+    await stream.set(await this.#progressCardFor(state, snapshot));
   }
 
-  #progressCardFor(state: ScopeState, snapshot: StatusSnapshot): FeishuCard {
+  /** Full-session metrics for a card; cold cache reads the log once. */
+  async #metricsFor(state: ScopeState, snapshot: StatusSnapshot): Promise<ReturnType<typeof aggregateMetrics>> {
+    const sessionId = state.sessionId ?? this.#sessionMap.get(state.key);
+    if (sessionId === undefined) return aggregateMetrics(state.logEvents);
+    let cached = this.#sessionMetrics.get(state.key);
+    if (cached === undefined || cached.sessionId !== sessionId) {
+      const provider = this.#options.usageProvider;
+      if (provider === undefined) {
+        if (!this.#metricsFallbackWarned.has(state.key)) {
+          this.#metricsFallbackWarned.add(state.key);
+          this.#logger.warn('metrics fallback: process buffer');
+        }
+        return aggregateMetrics(state.logEvents);
+      }
+      try {
+        const events = await provider(sessionId);
+        if (events !== undefined) {
+          cached = {
+            sessionId,
+            metrics: aggregateMetrics(events),
+            refreshedAtSeq: events.length,
+            turn: snapshot.turn,
+          };
+          this.#sessionMetrics.set(state.key, cached);
+        }
+      } catch {
+        // fall through to the process buffer
+      }
+      if (cached === undefined || cached.sessionId !== sessionId) {
+        if (!this.#metricsFallbackWarned.has(state.key)) {
+          this.#metricsFallbackWarned.add(state.key);
+          this.#logger.warn('metrics fallback: process buffer');
+        }
+        return aggregateMetrics(state.logEvents);
+      }
+    }
+    const base = cached.metrics;
+    // During a turn whose events are not in the cached snapshot yet, add the
+    // in-memory turn delta so numbers move monotonically until turn/end.
+    if (!state.running || snapshot.turn <= cached.turn) return base;
+    const usage = snapshot.usageTurn;
+    const input = base.inputTokens + (usage?.input ?? 0);
+    const output = base.outputTokens + (usage?.output ?? 0);
+    const cacheRead = base.cacheReadTokens + (usage?.cacheRead ?? 0);
+    const denominator = input + cacheRead;
+    const elapsed =
+      snapshot.startedAt === undefined ? undefined : this.#now() - snapshot.startedAt;
+    const tokensPerSecond =
+      elapsed !== undefined && elapsed >= 1000 && (usage?.output ?? 0) > 0
+        ? (usage?.output ?? 0) / (elapsed / 1000)
+        : undefined;
+    return {
+      rounds: Math.max(base.rounds, snapshot.turn),
+      steps: base.steps + snapshot.steps,
+      totalTokens: base.totalTokens + (usage?.total ?? 0),
+      inputTokens: input,
+      outputTokens: output,
+      cacheReadTokens: cacheRead,
+      ...(tokensPerSecond === undefined ? {} : { tokensPerSecond }),
+      ...(denominator === 0 ? {} : { cacheHitPercent: Math.round((cacheRead / denominator) * 100) }),
+      ...(base.contextPercent === undefined ? {} : { contextPercent: base.contextPercent }),
+    };
+  }
+
+  /** Recompute the full-session metrics once after each turn/end. */
+  async #refreshSessionMetrics(state: ScopeState): Promise<void> {
+    const sessionId = state.sessionId ?? this.#sessionMap.get(state.key);
+    if (sessionId === undefined) return;
+    const provider = this.#options.usageProvider;
+    if (provider === undefined) return;
+    try {
+      const events = await provider(sessionId);
+      if (events === undefined) return;
+      this.#sessionMetrics.set(state.key, {
+        sessionId,
+        metrics: aggregateMetrics(events),
+        refreshedAtSeq: events.length,
+        turn: state.status.get().turn,
+      });
+      this.#metricsFallbackWarned.delete(state.key);
+    } catch (error) {
+      this.#logger.warn(`metrics refresh failed: ${errorMessage(error)}`);
+    }
+  }
+
+  async #progressCardFor(state: ScopeState, snapshot: StatusSnapshot): Promise<FeishuCard> {
     const extraLines: string[] = [];
     if (snapshot.compaction === 'running') extraLines.push('上下文压缩中…');
     else if (snapshot.compaction === 'done') {
@@ -2050,10 +2148,7 @@ export class Bridge {
     if (snapshot.teamLine !== undefined) extraLines.push(snapshot.teamLine);
     const metricsMode = this.#config.metrics ?? 'compact';
     if (metricsMode !== 'off') {
-      const metricsLine = formatMetricsLine(
-        aggregateMetrics(state.logEvents),
-        metricsMode,
-      );
+      const metricsLine = formatMetricsLine(await this.#metricsFor(state, snapshot), metricsMode);
       if (metricsLine.length > 0) extraLines.push(metricsLine);
     }
     if (state.stopRequested === true) {

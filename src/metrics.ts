@@ -14,6 +14,10 @@ export interface Metrics {
   readonly steps: number;
   readonly tokensPerSecond?: number;
   readonly totalTokens: number;
+  /** Raw sums (used when merging an in-flight turn with the full log). */
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cacheReadTokens: number;
   readonly cacheHitPercent?: number;
   readonly contextPercent?: number;
 }
@@ -44,16 +48,18 @@ function usageDelta(value: unknown): UsageDelta | undefined {
   const output = num(record, 'outputTokens');
   const cacheRead = num(record, 'cacheReadTokens');
   const cacheWrite = num(record, 'cacheWriteTokens');
-  if (input === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0) return undefined;
+  const providerTotal =
+    typeof record['totalTokens'] === 'number' ? (record['totalTokens'] as number) : 0;
+  if (input === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0 && providerTotal === 0) {
+    return undefined;
+  }
   return {
     input,
     output,
     cacheRead,
     cacheWrite,
     total:
-      typeof record['totalTokens'] === 'number'
-        ? (record['totalTokens'] as number)
-        : input + output + cacheRead + cacheWrite,
+      providerTotal > 0 ? providerTotal : input + output + cacheRead + cacheWrite,
   };
 }
 
@@ -64,6 +70,7 @@ export function aggregateMetrics(events: readonly unknown[]): Metrics {
   let totalTokens = 0;
   let cacheRead = 0;
   let input = 0;
+  let outputTotal = 0;
   const outputByTurn = new Map<number, number>();
   const promptByTurn = new Map<number, number>();
   const startByTurn = new Map<number, number>();
@@ -96,6 +103,7 @@ export function aggregateMetrics(events: readonly unknown[]): Metrics {
     totalTokens += delta.total;
     cacheRead += delta.cacheRead;
     input += delta.input;
+    outputTotal += delta.output;
     if (turn !== undefined) {
       outputByTurn.set(turn, (outputByTurn.get(turn) ?? 0) + delta.output);
       promptByTurn.set(
@@ -126,6 +134,9 @@ export function aggregateMetrics(events: readonly unknown[]): Metrics {
     rounds,
     steps,
     totalTokens,
+    inputTokens: input,
+    outputTokens: outputTotal,
+    cacheReadTokens: cacheRead,
     ...(tokensPerSecond === undefined ? {} : { tokensPerSecond }),
     ...(cacheHitPercent === undefined ? {} : { cacheHitPercent }),
     ...(contextPercent === undefined ? {} : { contextPercent }),
