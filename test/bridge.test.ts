@@ -111,6 +111,9 @@ interface HarnessOptions {
   readonly admins?: readonly string[];
   readonly exportProvider?: import('../src/export.js').SessionExportProvider;
   readonly permissionPresetsProvider?: () => import('../src/bridge/types.js').PermissionPresetsLike | undefined;
+  readonly usageProvider?: (
+    sessionId: string,
+  ) => Promise<readonly unknown[] | undefined> | readonly unknown[] | undefined;
   /** `/doctor` data collector (optional; tests inject deterministic data). */
   readonly doctorInputs?: (
     session: import('../src/doctor.js').DoctorSessionInfo,
@@ -256,6 +259,9 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
     ...(options.permissionPresetsProvider === undefined
       ? {}
       : { permissionPresetsProvider: options.permissionPresetsProvider }),
+    ...(options.usageProvider === undefined
+      ? {}
+      : { usageProvider: options.usageProvider }),
   });
   return { dir, store, presets: agentPresets, transport, agents, clock, logger, titles, bridge };
 }
@@ -3336,19 +3342,13 @@ async function startRunningTurn(h: ReturnType<typeof makeHarness>): Promise<Retu
   return agent;
 }
 
-test('/usage：本回合/上回合/合计，含缓存命中', async (t) => {
-  const h = makeHarness(t);
+test('/usage：从日志聚合本回合/合计（含缓存命中）', async (t) => {
+  const events = [
+    { type: 'assistant/message', data: { turn: 1, usage: { inputTokens: 10, outputTokens: 2, cacheReadTokens: 4, totalTokens: 16 } } },
+    { type: 'assistant/message', data: { turn: 1, usage: { inputTokens: 5, outputTokens: 3, cacheReadTokens: 1, totalTokens: 9 } } },
+  ];
+  const h = makeHarness(t, { usageProvider: () => events });
   await h.bridge.handleInbound(inbound('hi'));
-  const agent = await startRunningTurn(h);
-  await h.bridge.handleSessionEvent(
-    agent.session,
-    event('assistant/message', { usage: { inputTokens: 10, outputTokens: 2, cacheReadTokens: 4, totalTokens: 16 } }, 120),
-  );
-  await h.bridge.handleSessionEvent(
-    agent.session,
-    event('assistant/message', { usage: { inputTokens: 5, outputTokens: 3, cacheReadTokens: 1, totalTokens: 9 } }, 130),
-  );
-  await h.bridge.handleSessionEvent(agent.session, event('turn/end', { reason: { kind: 'completed' } }, 140));
   await h.bridge.handleInbound(inbound('/usage'));
   const text = recordedTexts(h.transport).at(-1) ?? '';
   assert.match(text, /本回合：输入 15 · 输出 5 · 缓存命中 5 · 合计 25/);
@@ -3357,24 +3357,58 @@ test('/usage：本回合/上回合/合计，含缓存命中', async (t) => {
 });
 
 test('/usage：缺字段按 0 处理', async (t) => {
-  const h = makeHarness(t);
+  const events = [
+    { type: 'assistant/message', data: { turn: 1, usage: { inputTokens: 7 } } },
+  ];
+  const h = makeHarness(t, { usageProvider: () => events });
   await h.bridge.handleInbound(inbound('hi'));
-  const agent = await startRunningTurn(h);
-  await h.bridge.handleSessionEvent(
-    agent.session,
-    event('assistant/message', { usage: { inputTokens: 7 } }, 120),
-  );
-  await h.bridge.handleSessionEvent(agent.session, event('turn/end', { reason: { kind: 'completed' } }, 140));
   await h.bridge.handleInbound(inbound('/usage'));
-  const text = recordedTexts(h.transport).at(-1) ?? '';
-  assert.match(text, /本回合：输入 7 · 输出 0 · 缓存命中 0 · 合计 7/);
+  assert.match(
+    recordedTexts(h.transport).at(-1) ?? '',
+    /本回合：输入 7 · 输出 0 · 缓存命中 0 · 合计 7/,
+  );
 });
 
-test('/usage：无数据 → 暂无用量数据', async (t) => {
+test('/usage：日志无 usage → 还没有用量记录', async (t) => {
+  const h = makeHarness(t, { usageProvider: () => [] });
+  await h.bridge.handleInbound(inbound('hi'));
+  await h.bridge.handleInbound(inbound('/usage'));
+  assert.equal(recordedTexts(h.transport).at(-1), '会话里还没有用量记录');
+});
+
+test('/usage：多 turn 上回合有值', async (t) => {
+  const events = [
+    { type: 'assistant/message', data: { turn: 1, usage: { inputTokens: 3, outputTokens: 1 } } },
+    { type: 'assistant/message', data: { turn: 2, usage: { inputTokens: 4, outputTokens: 2 } } },
+  ];
+  const h = makeHarness(t, { usageProvider: () => events });
+  await h.bridge.handleInbound(inbound('hi'));
+  await h.bridge.handleInbound(inbound('/usage'));
+  const text = recordedTexts(h.transport).at(-1) ?? '';
+  assert.match(text, /本回合：输入 4 · 输出 2 · 缓存命中 0 · 合计 6/);
+  assert.match(text, /上回合：输入 3 · 输出 1 · 缓存命中 0 · 合计 4/);
+  assert.match(text, /会话合计：输入 7 · 输出 3 · 缓存命中 0 · 合计 10/);
+});
+
+test('/usage：readSession 抛错 → 读不到会话日志并带原因', async (t) => {
+  const h = makeHarness(t, {
+    usageProvider: async () => {
+      throw new Error('log boom');
+    },
+  });
+  await h.bridge.handleInbound(inbound('hi'));
+  await h.bridge.handleInbound(inbound('/usage'));
+  assert.match(recordedTexts(h.transport).at(-1) ?? '', /读不到会话日志（log boom）/);
+});
+
+test('/usage：sessionQuery 缺失 → 读不到会话日志', async (t) => {
   const h = makeHarness(t);
   await h.bridge.handleInbound(inbound('hi'));
   await h.bridge.handleInbound(inbound('/usage'));
-  assert.equal(recordedTexts(h.transport).at(-1), '暂无用量数据');
+  assert.match(
+    recordedTexts(h.transport).at(-1) ?? '',
+    /读不到会话日志（sessionQuery 服务不可用）/,
+  );
 });
 
 test('压缩：compaction/start 在过程卡显示“上下文压缩中…”', async (t) => {
@@ -3539,20 +3573,17 @@ test('停止按钮：cancel 抛错只记 warn', async (t) => {
   assert.ok(!runningProcessCardText(h).includes('已请求停止'));
 });
 
-test('/usage：第二轮开始时上回合有值', async (t) => {
-  const h = makeHarness(t);
+test('/usage：日志里多 turn 时上回合有值', async (t) => {
+  const h = makeHarness(t, {
+    usageProvider: () => [
+      { type: 'assistant/message', data: { turn: 1, usage: { inputTokens: 3, outputTokens: 1 } } },
+      { type: 'assistant/message', data: { turn: 2, usage: { inputTokens: 2, outputTokens: 0 } } },
+    ],
+  });
   await h.bridge.handleInbound(inbound('hi'));
-  const agent = await startRunningTurn(h);
-  await h.bridge.handleSessionEvent(
-    agent.session,
-    event('assistant/message', { usage: { inputTokens: 3, outputTokens: 1 } }, 120),
-  );
-  await h.bridge.handleSessionEvent(agent.session, event('turn/end', { reason: { kind: 'completed' } }, 130));
-  await h.bridge.handleInbound(inbound('再来一轮'));
-  await h.bridge.handleSessionEvent(agent.session, event('turn/start', { turn: 2 }, 200));
   await h.bridge.handleInbound(inbound('/usage'));
   const text = recordedTexts(h.transport).at(-1) ?? '';
-  assert.match(text, /本回合：输入 0 · 输出 0 · 缓存命中 0 · 合计 0/);
+  assert.match(text, /本回合：输入 2 · 输出 0 · 缓存命中 0 · 合计 2/);
   assert.match(text, /上回合：输入 3 · 输出 1 · 缓存命中 0 · 合计 4/);
 });
 

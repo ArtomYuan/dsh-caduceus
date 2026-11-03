@@ -173,6 +173,10 @@ export interface BridgeOptions {
   readonly exportProvider?: SessionExportProvider;
   /** Lazily resolve dsh's permissionPresets service. */
   readonly permissionPresetsProvider?: () => PermissionPresetsLike | undefined;
+  /** Session log reader for `/usage` (`sessionQuery.readSession().events`). */
+  readonly usageProvider?: (
+    sessionId: string,
+  ) => Promise<readonly unknown[] | undefined> | readonly unknown[] | undefined;
   /** Locale source (dsh settings/env); default zh. */
   readonly languageProvider?: () => import('../i18n.js').Lang;
   /** Lazily resolve dsh's approval service (agent-scoped setPolicy). */

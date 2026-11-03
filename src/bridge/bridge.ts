@@ -40,6 +40,7 @@ import {
 import { writeOwnership, type SessionScopeKind } from '../ownership.js';
 import { defaultExportCacheDir } from '../home.js';
 import { extractMediaMarkers, resolveMedia } from '../media.js';
+import { aggregateUsage, renderUsageReport } from '../usage.js';
 import { presetLabel, t, type Lang } from '../i18n.js';
 import {
   buildPermissionCard,
@@ -584,7 +585,7 @@ export class Bridge {
         return;
       }
       case 'usage-report': {
-        await this.#replyText(state, renderUsageText(state.status.get()));
+        await this.#handleUsage(state);
         return;
       }
       case 'whoami': {
@@ -818,6 +819,32 @@ export class Bridge {
       state,
       translatePermissionOutput(result.text, name, this.#lang()),
     );
+  }
+
+  /** `/usage`: aggregate durable assistant/message usage from the session log. */
+  async #handleUsage(state: ScopeState): Promise<void> {
+    const sessionId = state.sessionId ?? this.#sessionMap.get(state.key);
+    if (sessionId === undefined) {
+      await this.#replyText(state, '读不到会话日志（当前没有会话）');
+      return;
+    }
+    const provider = this.#options.usageProvider;
+    if (provider === undefined) {
+      await this.#replyText(state, '读不到会话日志（sessionQuery 服务不可用）');
+      return;
+    }
+    let events: readonly unknown[] | undefined;
+    try {
+      events = await provider(sessionId);
+    } catch (error) {
+      await this.#replyText(state, `读不到会话日志（${errorMessage(error)}）`);
+      return;
+    }
+    if (events === undefined) {
+      await this.#replyText(state, '读不到会话日志（sessionQuery 服务不可用）');
+      return;
+    }
+    await this.#replyText(state, renderUsageReport(aggregateUsage(events)));
   }
 
   #lang(): Lang {
@@ -2067,16 +2094,6 @@ export function progressCardForSnapshot(
   });
 }
 
-function renderUsageText(snapshot: StatusSnapshot): string {
-  if (snapshot.usageSeen !== true) return '暂无用量数据';
-  const line = (label: string, usage: NonNullable<StatusSnapshot['usageTurn']>): string =>
-    `${label}：输入 ${usage.input} · 输出 ${usage.output} · 缓存命中 ${usage.cacheRead} · 合计 ${usage.total}`;
-  const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
-  const lines = [line('本回合', snapshot.usageTurn ?? zero)];
-  lines.push(snapshot.usagePrevious === undefined ? '上回合：暂无' : line('上回合', snapshot.usagePrevious));
-  lines.push(line('会话合计', snapshot.usageTotal ?? zero));
-  return lines.join('\n');
-}
 
 /** Normalize a resource content-type to one of dsh's accepted image types. */
 function imageMediaType(contentType: string | undefined): string {

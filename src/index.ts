@@ -264,6 +264,14 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
     attachmentProvider: () => ctx.get('attachments') as AttachmentStoreLike | undefined,
     permissionPresetsProvider: () =>
       ctx.get('permissionPresets') as PermissionPresetsLike | undefined,
+    usageProvider: async (sessionId) => {
+      const query = ctx.get('sessionQuery') as
+        | { readSession?: (id: string) => Promise<{ events?: readonly unknown[] }> }
+        | undefined;
+      if (query?.readSession === undefined) return undefined;
+      const snapshot = await query.readSession(sessionId);
+      return snapshot.events ?? [];
+    },
     languageProvider: () => resolveLang(resolved.lang, () => ctx.get('settings')),
     exportProvider: async (sessionId) => {
       const query = ctx.get('sessionQuery') as
