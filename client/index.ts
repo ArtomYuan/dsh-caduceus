@@ -21,6 +21,8 @@ interface ClientConfig {
   readonly busyMode?: string;
 }
 
+type SlotName = 'conversation.session.header.actions' | 'settings.general.item';
+
 interface ClientCtx {
   readonly locale: {
     register(
@@ -31,13 +33,15 @@ interface ClientCtx {
   readonly slots: {
     register(
       spec: {
-        name: 'conversation.session.header.actions' | 'settings.general.item';
+        name: SlotName;
         id: string;
         order: number;
         locale?: string;
       },
       component: (props: StandardProps) => unknown,
     ): () => void;
+    /** Wait for another entry's declaration, then contribute (facade: {inject, register}). */
+    inject(name: SlotName, contribute: () => () => void): () => void;
   };
   effect(callback: () => () => void, label?: string): void;
 }
@@ -147,26 +151,38 @@ function SettingsItem(props: StandardProps): unknown {
 }
 
 export function apply(ctx: ClientCtx): void {
-  // Do not register main/main.*/shell.overlay: those are single slots already
-  // claimed by the host (ui-slots/src/index.ts:152 "Declaring is claiming").
   ctx.effect(
     () => ctx.locale.register(NS, { zh: ZH, en: EN }),
     'caduceus: client dictionaries',
   );
+  try {
+    console.info('[caduceus] apply start');
+    registerWhenDeclared(ctx, 'conversation.session.header.actions', HeaderAction, 'headerAction');
+    registerWhenDeclared(ctx, 'settings.general.item', SettingsItem, 'settingsRow');
+    console.info('[caduceus] apply ok');
+  } catch (error) {
+    console.error('[caduceus] apply failed:', (error as Error)?.message ?? error);
+  }
+}
+
+/**
+ * Contribute into a slot another entry declares.
+ *
+ * Boot order is not ours: the UI packages declare these slots after this entry
+ * applies, so a bare `register` throws `slot "<name>" is not declared`.
+ * `subscribeDeclaration` is the sanctioned wait-for-declaration primitive.
+ */
+function registerWhenDeclared(
+  ctx: ClientCtx,
+  name: SlotName,
+  component: (props: StandardProps) => unknown,
+  id: string,
+): void {
   ctx.effect(
     () =>
-      ctx.slots.register(
-        { name: 'conversation.session.header.actions', id: 'caduceus', order: 40, locale: NS },
-        HeaderAction,
+      ctx.slots.inject(name, () =>
+        ctx.slots.register({ name, id: `caduceus-${id}`, order: 40, locale: NS }, component),
       ),
-    'caduceus: header action',
-  );
-  ctx.effect(
-    () =>
-      ctx.slots.register(
-        { name: 'settings.general.item', id: 'caduceus', order: 40, locale: NS },
-        SettingsItem,
-      ),
-    'caduceus: settings row',
+    `caduceus: ${id}`,
   );
 }
