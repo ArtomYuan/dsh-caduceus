@@ -1,6 +1,6 @@
 {
   "name": "dsh-caduceus",
-  "version": "0.10.5",
+  "version": "0.11.0",
   "description": "Feishu/Lark surface plugin for DeepSeek Harness (dsh): one topic per session, SOUL persona sync, streaming process cards, /status and /doctor.",
   "type": "module",
   "main": "./dist/index.js",
@@ -31,10 +31,14 @@
       "default": "./dist/render/truncate.js"
     },
     "./cordis.patch.yml": "./cordis.patch.yml",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./client": {
+      "default": "./lib/client.js"
+    }
   },
   "files": [
     "dist/",
+    "lib/",
     "cordis.patch.yml",
     "README.md",
     "LICENSE",
@@ -55,6 +59,9 @@
       "dshReleases": {
         "0.2.1-rc.2": "compatible"
       }
+    },
+    "client": {
+      "platform": "web"
     }
   },
   "peerDependencies": {
@@ -79,7 +86,7 @@
     "typescript": "6.0.3"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/build-client.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
     "test": "tsc -p tsconfig.test.json && node --test .test-dist/test/*.test.js",
     "smoke": "node scripts/smoke.mjs",

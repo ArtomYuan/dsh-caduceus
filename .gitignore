@@ -8,3 +8,5 @@ coverage/
 .env
 .env.*
 .pnpm-store/
+
+lib/

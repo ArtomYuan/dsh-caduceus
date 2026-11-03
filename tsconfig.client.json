@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "client",
+    "outDir": ".client-typecheck",
+    "noEmit": true,
+    "types": [],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "declaration": false
+  },
+  "include": ["client/**/*.ts", "client/**/*.d.ts"]
+}
