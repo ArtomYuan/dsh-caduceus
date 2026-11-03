@@ -96,6 +96,7 @@ onlyBuiltDependencies:
 | `admins` | `[]` | 管理员 open_id 白名单；空=关闭访问控制 |
 | `lang` | `zh` | 权限面语言：`zh`（默认）、`en`、`auto`（设置/环境，最后回退 zh） |
 | `exportCacheMaxAgeHours` | `24` | 启动时清理超过该小时数的 `/export` 缓存文件 |
+| `metrics` | `compact` | 卡片指标：`off` / `compact` / `detailed`（增加上下文百分比） |
 
 ## 命令
 

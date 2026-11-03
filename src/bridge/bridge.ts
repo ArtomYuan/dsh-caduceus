@@ -41,6 +41,7 @@ import { writeOwnership, type SessionScopeKind } from '../ownership.js';
 import { defaultExportCacheDir } from '../home.js';
 import { extractMediaMarkers, resolveMedia } from '../media.js';
 import { aggregateUsage, renderUsageReport } from '../usage.js';
+import { aggregateMetrics, formatMetricsLine } from '../metrics.js';
 import { presetLabel, t, type Lang } from '../i18n.js';
 import {
   buildPermissionCard,
@@ -116,6 +117,8 @@ interface ScopeState {
   lastOutput: string;
   /** Stop button was accepted for the current turn. */
   stopRequested?: boolean;
+  /** Durable session events seen by this process (metrics source). */
+  logEvents: unknown[];
   /** Cached most recent agent request (used by /doctor on command turns). */
   lastAgentTurn?: DoctorLastTurn;
   /** Latest session title (from a `session/title` event or `/rename`). */
@@ -329,6 +332,8 @@ export class Bridge {
     const state = this.#states.get(key);
     if (state === undefined) return;
 
+    state.logEvents.push(event);
+    if (state.logEvents.length > 5000) state.logEvents.shift();
     state.status.apply(event);
 
     switch (event.type) {
@@ -844,7 +849,15 @@ export class Bridge {
       await this.#replyText(state, '读不到会话日志（sessionQuery 服务不可用）');
       return;
     }
-    await this.#replyText(state, renderUsageReport(aggregateUsage(events)));
+    const metricsLine = formatMetricsLine(
+      aggregateMetrics(events),
+      this.#config.metrics ?? 'compact',
+    );
+    await this.#replyText(
+      state,
+      renderUsageReport(aggregateUsage(events)) +
+        (metricsLine.length === 0 ? '' : `\n${metricsLine}`),
+    );
   }
 
   #lang(): Lang {
@@ -1338,7 +1351,7 @@ export class Bridge {
       await this.#replyText(state, result.reason);
       return;
     }
-    await this.#replyText(state, '已请求停止当前一轮（cancel kind=user）。');
+    await this.#replyText(state, '已停止当前回合。后台任务仍在运行，完成后结果会回来。');
   }
 
   /** Stop button callback: same cancel path as `/stop`, once per second. */
@@ -1977,6 +1990,7 @@ export class Bridge {
       lastOutput: '',
       reactionQueue: [],
       reactionStarts: new Map(),
+      logEvents: [],
     };
     this.#states.set(key, created);
     return created;
@@ -2034,7 +2048,17 @@ export class Bridge {
       );
     } else if (snapshot.compaction === 'failed') extraLines.push('上下文压缩失败');
     if (snapshot.teamLine !== undefined) extraLines.push(snapshot.teamLine);
-    if (state.stopRequested === true) extraLines.push('已请求停止');
+    const metricsMode = this.#config.metrics ?? 'compact';
+    if (metricsMode !== 'off') {
+      const metricsLine = formatMetricsLine(
+        aggregateMetrics(state.logEvents),
+        metricsMode,
+      );
+      if (metricsLine.length > 0) extraLines.push(metricsLine);
+    }
+    if (state.stopRequested === true) {
+      extraLines.push('已停止当前回合。后台任务仍在运行，完成后结果会回来。');
+    }
     return progressCardForSnapshot(
       snapshot,
       state.title,

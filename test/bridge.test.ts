@@ -111,6 +111,7 @@ interface HarnessOptions {
   readonly admins?: readonly string[];
   readonly exportProvider?: import('../src/export.js').SessionExportProvider;
   readonly permissionPresetsProvider?: () => import('../src/bridge/types.js').PermissionPresetsLike | undefined;
+  readonly metrics?: import('../src/metrics.js').MetricsMode;
   readonly usageProvider?: (
     sessionId: string,
   ) => Promise<readonly unknown[] | undefined> | readonly unknown[] | undefined;
@@ -203,6 +204,7 @@ function makeHarness(t: TestContext, options: HarnessOptions = {}): Harness {
       : { maxSendImageBytes: options.maxSendImageBytes }),
     ...(options.mediaRoots === undefined ? {} : { mediaRoots: options.mediaRoots }),
     ...(options.admins === undefined ? {} : { admins: options.admins }),
+    ...(options.metrics === undefined ? {} : { metrics: options.metrics }),
   };
   // Ownership sidecars must never escape into the real ~/.dsh during tests.
   const ownershipDir = join(dir, 'owners');
@@ -483,7 +485,7 @@ test('/stop 调 agent.cancel({kind:user})', async (t) => {
   await h.bridge.handleInbound(inbound('/stop'));
   assert.equal(agent.cancels.length, 1);
   assert.deepEqual(agent.cancels[0], { kind: 'user' });
-  assert.match(recordedTexts(h.transport).at(-1) ?? '', /已请求停止/);
+  assert.match(recordedTexts(h.transport).at(-1) ?? '', /已停止当前回合。后台任务仍在运行，完成后结果会回来。/);
 });
 
 test('/new 铸新会话，/resume 恢复上一会话', async (t) => {
@@ -3324,7 +3326,9 @@ test('权限卡片：切档后原地刷新为新档位标签', async (t) => {
 });
 
 function runningProcessCardText(h: ReturnType<typeof makeHarness>): string {
-  const card = cardOfTitle(recordedCards(h.transport), PROCESS_CARD_TITLE);
+  const card = recordedCards(h.transport)
+    .filter((entry) => entry.card.header?.title.content === PROCESS_CARD_TITLE)
+    .at(-1);
   assert.ok(card !== undefined);
   const patch = finalPatchOfCard(h.transport, card.messageId);
   return JSON.stringify(patch ?? card.card);
@@ -3489,7 +3493,7 @@ test('停止按钮：非运行态不出现', async (t) => {
   assert.ok(!text.includes('停止'));
 });
 
-test('停止按钮：点击调用 cancel 一次并卡片改为已请求停止', async (t) => {
+test('停止按钮：点击调用 cancel 一次并卡片显示新停止文案。后台任务仍在运行，完成后结果会回来。', async (t) => {
   const { InteractiveRuntime } = await import('../src/interactive/runtime.js');
   const runtime = new InteractiveRuntime({
     config: { approvalCard: true, questionCard: true, timeoutMs: 300_000 },
@@ -3512,7 +3516,7 @@ test('停止按钮：点击调用 cancel 一次并卡片改为已请求停止', 
   });
   assert.equal(agent.cancels.length, 1);
   await settleRender(h);
-  assert.match(runningProcessCardText(h), /已请求停止/);
+  assert.match(runningProcessCardText(h), /已停止当前回合。后台任务仍在运行，完成后结果会回来。/);
 });
 
 test('停止按钮：连点 1 秒内只 cancel 一次', async (t) => {
@@ -3570,7 +3574,7 @@ test('停止按钮：cancel 抛错只记 warn', async (t) => {
       (entry) => entry.level === 'warn' && entry.message.includes('stop card failed'),
     ),
   );
-  assert.ok(!runningProcessCardText(h).includes('已请求停止'));
+  assert.ok(!runningProcessCardText(h).includes('已停止当前回合。后台任务仍在运行，完成后结果会回来。'));
 });
 
 test('/usage：日志里多 turn 时上回合有值', async (t) => {
@@ -3597,4 +3601,75 @@ test('压缩：compaction/end error 显示失败，不崩', async (t) => {
   );
   await settleRender(h);
   assert.match(runningProcessCardText(h), /上下文压缩失败/);
+});
+
+test('metrics compact：过程卡显示轮/步/tok/s/累计/缓存', async (t) => {
+  const h = makeHarness(t, { metrics: 'compact' });
+  await h.bridge.handleInbound(inbound('hi'));
+  const agent = liveAgent(h);
+  const feed = async (type: string, data: unknown, time: number): Promise<void> => {
+    await h.bridge.handleSessionEvent(agent.session, event(type, data, time));
+  };
+  await feed('turn/start', { turn: 1 }, 1_000);
+  await feed('step/start', { turn: 1 }, 1_100);
+  await feed('assistant/message', { turn: 1, usage: { inputTokens: 500, outputTokens: 100, cacheReadTokens: 500, totalTokens: 1_100 } }, 3_000);
+  await settleRender(h);
+  const text = runningProcessCardText(h);
+  assert.match(text, /1 轮 · 1 步 · 50 tok\/s · 1\.1k tok · 缓存 50%/);
+  assert.ok(!text.includes('上下文'));
+  await feed('turn/end', { turn: 1, reason: { kind: 'completed' } }, 3_000);
+});
+
+test('metrics off：过程卡不显示指标', async (t) => {
+  const h = makeHarness(t, { metrics: 'off' });
+  await h.bridge.handleInbound(inbound('hi'));
+  const agent = await startRunningTurn(h);
+  await h.bridge.handleSessionEvent(
+    agent.session,
+    event('assistant/message', { turn: 1, usage: { inputTokens: 5, outputTokens: 5 } }, 200),
+  );
+  await settleRender(h);
+  const text = runningProcessCardText(h);
+  assert.ok(!text.includes('tok/s'));
+  assert.ok(!text.includes('缓存'));
+});
+
+test('metrics detailed：带上下文百分比', async (t) => {
+  const h = makeHarness(t, { metrics: 'detailed' });
+  await h.bridge.handleInbound(inbound('hi'));
+  const agent = liveAgent(h);
+  const feed = async (type: string, data: unknown, time: number): Promise<void> => {
+    await h.bridge.handleSessionEvent(agent.session, event(type, data, time));
+  };
+  await feed('turn/start', { turn: 1 }, 1_000);
+  await feed('assistant/message', { turn: 1, usage: { inputTokens: 500, cacheReadTokens: 500, outputTokens: 10 } }, 1_500);
+  await feed('turn/start', { turn: 2 }, 2_000);
+  await feed('request/context', { contextWindow: 10_000 }, 2_100);
+  await feed('assistant/message', { turn: 2, usage: { inputTokens: 100, outputTokens: 5 } }, 3_000);
+  await settleRender(h);
+  assert.match(runningProcessCardText(h), /上下文 10%/);
+});
+
+test('metrics detailed：缺 contextWindow 不显示上下文段', async (t) => {
+  const h = makeHarness(t, { metrics: 'detailed' });
+  await h.bridge.handleInbound(inbound('hi'));
+  const agent = liveAgent(h);
+  await h.bridge.handleSessionEvent(agent.session, event('turn/start', { turn: 1 }, 1_000));
+  await h.bridge.handleSessionEvent(
+    agent.session,
+    event('assistant/message', { turn: 1, usage: { inputTokens: 100, outputTokens: 5 } }, 2_000),
+  );
+  await settleRender(h);
+  assert.ok(!runningProcessCardText(h).includes('上下文'));
+});
+
+test('/stop 命令：使用新的诚实停止文案', async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.handleInbound(inbound('hi'));
+  await startRunningTurn(h);
+  await h.bridge.handleInbound(inbound('/stop'));
+  assert.equal(
+    recordedTexts(h.transport).at(-1),
+    '已停止当前回合。后台任务仍在运行，完成后结果会回来。',
+  );
 });

@@ -214,3 +214,10 @@ test('lang 默认 zh，可设 en/auto', async () => {
   assert.equal(resolveGatewayConfig({ lang: 'en' }).lang, 'en');
   assert.equal(resolveGatewayConfig({ lang: 'auto' }).lang, 'auto');
 });
+
+test('metrics 默认 compact，可 off/detailed', async () => {
+  const { resolveGatewayConfig } = await import('../src/config.js');
+  assert.equal(resolveGatewayConfig({}).bridge.metrics, 'compact');
+  assert.equal(resolveGatewayConfig({ metrics: 'off' }).bridge.metrics, 'off');
+  assert.equal(resolveGatewayConfig({ metrics: 'detailed' }).bridge.metrics, 'detailed');
+});

@@ -132,6 +132,8 @@ export interface BridgeConfig {
   readonly maxSendImageBytes?: number;
   /** Allowed roots for outbound MEDIA paths; empty = session cwd. */
   readonly mediaRoots?: readonly string[];
+  /** Process-card/usage metrics mode (default compact). */
+  readonly metrics?: import('../metrics.js').MetricsMode;
   /** Admin allowlist; empty disables access control (default). */
   readonly admins?: readonly string[];
 }

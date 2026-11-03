@@ -14,6 +14,7 @@ import z from '@deepseek-ai/schemastery';
 
 import type { ApprovalPolicy, BridgeConfig, BusyMode } from './bridge/types.js';
 import type { LangSetting } from './i18n.js';
+import type { MetricsMode } from './metrics.js';
 
 /** Raw entry config as written in the profile. */
 export interface GatewayConfig {
@@ -70,6 +71,8 @@ export interface GatewayConfig {
   readonly lang?: LangSetting;
   /** Export cache retention in hours (default 24). */
   readonly exportCacheMaxAgeHours?: number;
+  /** Process-card/usage metrics mode (default compact). */
+  readonly metrics?: MetricsMode;
 }
 
 /** Schemastery schema for the `caduceus-gateway` entry. */
@@ -104,6 +107,7 @@ export const Config = z.object({
   admins: z.array(z.string()).required(false),
   lang: z.union([z.const('zh'), z.const('en'), z.const('auto')]).required(false),
   exportCacheMaxAgeHours: z.natural().min(1).required(false),
+  metrics: z.union([z.const('off'), z.const('compact'), z.const('detailed')]).required(false),
 });
 
 /** Default card patch throttle: half of Feishu's 5 QPS budget. */
@@ -219,6 +223,7 @@ export function resolveGatewayConfig(
     maxSendImageBytes: config.maxSendImageBytes ?? DEFAULT_MAX_SEND_IMAGE_BYTES,
     mediaRoots: config.mediaRoots ?? [],
     admins: config.admins ?? [],
+    metrics: config.metrics ?? 'compact',
   };
   return {
     ...(appId === undefined || appSecret === undefined ? {} : { credentials: { appId, appSecret } }),

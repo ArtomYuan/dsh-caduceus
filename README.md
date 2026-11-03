@@ -97,6 +97,7 @@ onlyBuiltDependencies:
 | `admins` | `[]` | Admin open-id allowlist; empty disables access control |
 | `lang` | `zh` | Permission UI language: `zh` (default), `en`, or `auto` (settings/env, then zh) |
 | `exportCacheMaxAgeHours` | `24` | Delete `/export` cache files older than this on startup |
+| `metrics` | `compact` | Process-card metrics: `off`, `compact`, or `detailed` (adds context %) |
 
 ## Commands
 
