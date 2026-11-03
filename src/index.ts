@@ -193,6 +193,24 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
       busyMode: resolved.bridge.busyMode,
     }),
   );
+  const clientConfig = {
+    lang: resolved.lang,
+    metrics: resolved.bridge.metrics ?? 'compact',
+    busyMode: resolved.bridge.busyMode,
+  };
+  try {
+    // dsh's web server emits this before page scripts; the client reads the
+    // global synchronously. Other surfaces simply never emit the event.
+    const events = ctx as unknown as {
+      on(event: string, listener: (table: unknown[]) => void): void;
+    };
+    events.on('webserver/index-inject', (table) => {
+      table.push({ kind: 'global', name: '__CADUCEUS_CLIENT_CONFIG__', value: clientConfig });
+    });
+  } catch (error) {
+    logger.warn(`client config injection unavailable: ${errorText(error)}`);
+  }
+
   logger.info(`agent preset=${resolved.agentPreset}`);
   if (resolved.approvalPolicy !== undefined) {
     logger.info(`approval policy override=${resolved.approvalPolicy}`);

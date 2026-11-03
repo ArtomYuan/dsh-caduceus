@@ -1,30 +1,27 @@
 /**
- * Browser half of dsh-caduceus: a persistent Conversation/Caduceus switch in
- * `shell.overlay` and a minimal `main` panel keyed `caduceus`.
- *
- * The client bundle imports only `react` (module-table external); layout,
- * slots and locale arrive through the Cordis client context.
+ * Browser half of dsh-caduceus. It contributes only to additive list slots:
+ * a Session-header action button and a General-settings row. The drawer it
+ * opens is rendered by this module (fixed-position DOM), not by a host panel.
  */
-import { createElement, useState } from 'react';
+import { createElement } from 'react';
 import { EN, FALLBACK, NS, ZH, type LabelKey } from './labels.ts';
 
 declare const __CADUCEUS_VERSION__: string;
 
-export const inject = ['slots', 'layout', 'locale'];
-
-interface PanelInfo {
-  readonly activePanelId: string | null;
-}
+export const inject = ['slots', 'locale'];
 
 interface StandardProps {
   readonly t?: (key: LabelKey) => string;
-  readonly usePanelInfo?: <T>(selector: (info: PanelInfo) => T) => T;
+  readonly sessionId?: string;
+}
+
+interface ClientConfig {
+  readonly lang?: string;
+  readonly metrics?: string;
+  readonly busyMode?: string;
 }
 
 interface ClientCtx {
-  readonly layout: {
-    selectPanel(panelId: string | null): void;
-  };
   readonly locale: {
     register(
       namespace: string,
@@ -34,8 +31,9 @@ interface ClientCtx {
   readonly slots: {
     register(
       spec: {
-        name: 'shell.overlay' | 'main';
-        key?: string;
+        name: 'conversation.session.header.actions' | 'settings.general.item';
+        id: string;
+        order: number;
         locale?: string;
       },
       component: (props: StandardProps) => unknown,
@@ -48,106 +46,127 @@ function tr(props: StandardProps): (key: LabelKey) => string {
   return props.t ?? ((key) => FALLBACK[key]);
 }
 
-function buttonStyle(active: boolean): Record<string, string> {
-  return {
-    padding: '4px 10px',
-    border: '1px solid rgba(255,255,255,0.25)',
-    borderRadius: '6px',
-    background: active ? '#2f6fed' : 'rgba(20,20,24,0.9)',
-    color: '#fff',
-    font: '12px/1.4 system-ui, sans-serif',
-    cursor: 'pointer',
-  };
+function globalConfig(): ClientConfig | undefined {
+  return (globalThis as { __CADUCEUS_CLIENT_CONFIG__?: ClientConfig })
+    .__CADUCEUS_CLIENT_CONFIG__;
 }
 
-/** Persistent two-way switch; reads the layout store when the standard hook exists. */
-function WorkbenchSwitch(props: StandardProps & { ctx: ClientCtx }): unknown {
-  const { ctx } = props;
-  const [localPanel, setLocalPanel] = useState<string | null>(null);
-  const activePanelId =
-    props.usePanelInfo === undefined
-      ? localPanel
-      : props.usePanelInfo((info) => info.activePanelId);
+/** Self-rendered drawer: no main panel, no shell.overlay, no host-owned slots. */
+function openDrawer(props: StandardProps): void {
+  if (typeof document === 'undefined') return;
+  document.getElementById('caduceus-drawer')?.remove();
   const t = tr(props);
-  const select = (panelId: string | null): void => {
-    setLocalPanel(panelId);
-    ctx.layout.selectPanel(panelId);
-  };
+  const root = document.createElement('div');
+  root.id = 'caduceus-drawer';
+  Object.assign(root.style, {
+    position: 'fixed',
+    inset: '0',
+    zIndex: '10000',
+    background: 'rgba(0,0,0,0.45)',
+    display: 'flex',
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+  });
+  const panel = document.createElement('div');
+  Object.assign(panel.style, {
+    width: 'min(560px, calc(100vw - 32px))',
+    margin: '16px',
+    padding: '20px',
+    borderRadius: '12px',
+    background: '#17171d',
+    color: '#fff',
+    boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
+    font: '14px/1.6 system-ui, sans-serif',
+  });
+  const title = document.createElement('h2');
+  title.textContent = t('panel.title');
+  Object.assign(title.style, { margin: '0 0 12px', fontSize: '18px' });
+  const version = document.createElement('p');
+  version.textContent = `${t('panel.version')} ${__CADUCEUS_VERSION__}`;
+  const session = document.createElement('p');
+  session.textContent = `${t('drawer.session')}: ${props.sessionId ?? t('drawer.none')}`;
+  const loaded = document.createElement('p');
+  loaded.textContent = t('panel.loaded');
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.textContent = t('drawer.close');
+  Object.assign(close.style, {
+    marginTop: '12px',
+    padding: '4px 12px',
+    border: '1px solid rgba(255,255,255,0.25)',
+    borderRadius: '6px',
+    background: 'transparent',
+    color: '#fff',
+    cursor: 'pointer',
+  });
+  const dismiss = (): void => root.remove();
+  close.addEventListener('click', dismiss);
+  root.addEventListener('click', (event) => {
+    if (event.target === root) dismiss();
+  });
+  panel.append(title, version, session, loaded, close);
+  root.append(panel);
+  document.body.append(root);
+}
+
+function HeaderAction(props: StandardProps): unknown {
+  const t = tr(props);
   return createElement(
-    'div',
+    'button',
     {
+      type: 'button',
       style: {
-        position: 'fixed',
-        left: '50%',
-        bottom: '16px',
-        transform: 'translateX(-50%)',
-        zIndex: 9999,
-        display: 'flex',
-        gap: '6px',
-        padding: '4px',
-        borderRadius: '8px',
-        background: 'rgba(10,10,14,0.75)',
-        pointerEvents: 'auto',
+        padding: '4px 10px',
+        border: '1px solid rgba(255,255,255,0.25)',
+        borderRadius: '6px',
+        background: 'transparent',
+        color: 'inherit',
+        font: '12px/1.4 system-ui, sans-serif',
+        cursor: 'pointer',
       },
+      onClick: () => openDrawer(props),
     },
-    createElement(
-      'button',
-      {
-        type: 'button',
-        style: buttonStyle(activePanelId === null),
-        onClick: () => select(null),
-      },
-      `[ ${t('switch.conversation')} | ${t('switch.panel')} ]`,
-    ),
-    createElement(
-      'button',
-      {
-        type: 'button',
-        style: buttonStyle(activePanelId === 'caduceus'),
-        onClick: () => select('caduceus'),
-      },
-      t('switch.panel'),
-    ),
+    t('switch.panel'),
   );
 }
 
-/** Minimal main-slot panel: title, plugin version, loaded marker. */
-function WorkbenchPanel(props: StandardProps): unknown {
+function SettingsItem(props: StandardProps): unknown {
   const t = tr(props);
+  const config = globalConfig();
+  const value = config === undefined
+    ? t('settings.unavailable')
+    : `${t('settings.lang')}: ${config.lang ?? '-'} · ` +
+      `${t('settings.metrics')}: ${config.metrics ?? '-'} · ` +
+      `${t('settings.busyMode')}: ${config.busyMode ?? '-'}`;
   return createElement(
-    'section',
-    {
-      style: {
-        padding: '24px',
-        color: 'inherit',
-        font: '14px/1.6 system-ui, sans-serif',
-      },
-    },
-    createElement('h1', { style: { margin: '0 0 8px', fontSize: '20px' } }, t('panel.title')),
-    createElement(
-      'p',
-      { style: { margin: '0 0 4px', opacity: 0.7 } },
-      `${t('panel.version')} ${__CADUCEUS_VERSION__}`,
-    ),
-    createElement('p', { style: { margin: 0 } }, t('panel.loaded')),
+    'div',
+    { style: { padding: '8px 0', font: '13px/1.5 system-ui, sans-serif' } },
+    createElement('div', { style: { fontWeight: 600 } }, t('settings.title')),
+    createElement('div', { style: { opacity: 0.75 } }, value),
   );
 }
 
 export function apply(ctx: ClientCtx): void {
+  // Do not register main/main.*/shell.overlay: those are single slots already
+  // claimed by the host (ui-slots/src/index.ts:152 "Declaring is claiming").
   ctx.effect(
     () => ctx.locale.register(NS, { zh: ZH, en: EN }),
     'caduceus: client dictionaries',
   );
   ctx.effect(
-    () => ctx.slots.register({ name: 'main', key: 'caduceus', locale: NS }, WorkbenchPanel),
-    'caduceus: main panel',
+    () =>
+      ctx.slots.register(
+        { name: 'conversation.session.header.actions', id: 'caduceus', order: 40, locale: NS },
+        HeaderAction,
+      ),
+    'caduceus: header action',
   );
   ctx.effect(
     () =>
-      ctx.slots.register({ name: 'shell.overlay', locale: NS }, (props) =>
-        // `usePanelInfo` is a standard root-slot prop installed by ui-layout.
-        createElement(WorkbenchSwitch, { ...props, ctx }),
+      ctx.slots.register(
+        { name: 'settings.general.item', id: 'caduceus', order: 40, locale: NS },
+        SettingsItem,
       ),
-    'caduceus: workbench switch',
+    'caduceus: settings row',
   );
 }
