@@ -10,3 +10,6 @@ coverage/
 .pnpm-store/
 
 lib/
+
+# 打包产物不入库
+*.tgz
