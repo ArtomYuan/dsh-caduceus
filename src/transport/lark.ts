@@ -107,6 +107,14 @@ export class LarkFeishuApi implements FeishuApi {
         }
         this.handler?.(message);
       },
+      // Feishu pushes the app's own reaction writes back as events, and this
+      // plugin has no reaction-based interaction. Without a registered handle
+      // the SDK warns "no <key> handle" on every OnIt/DONE we add ourselves,
+      // which drowned the log (59.9% of dsh journal lines on 2026-11-07).
+      // An explicit no-op keeps the drop intentional and leaves the keys in
+      // place for a future reaction-driven interaction.
+      'im.message.reaction.created_v1': () => undefined,
+      'im.message.reaction.deleted_v1': () => undefined,
     });
     this.ws = new WSClient({ appId: options.appId, appSecret: options.appSecret });
   }
