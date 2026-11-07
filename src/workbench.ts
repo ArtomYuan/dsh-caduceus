@@ -51,6 +51,8 @@ export interface WorkbenchState {
   readonly sessions: readonly WorkbenchSession[];
   /** `sessionQuery` present? False means the table cannot be filled. */
   readonly sessionsAvailable: boolean;
+  /** Why the policy looks the way it does (settings service reachability). */
+  readonly settingsProbe: Record<string, unknown>;
 }
 
 /** Everything the handler reads; injected so the route is testable without dsh. */
@@ -60,6 +62,7 @@ export interface WorkbenchDeps {
   readonly sessions: () =>
     | { readonly rows: readonly WorkbenchSession[]; readonly available: boolean }
     | Promise<{ readonly rows: readonly WorkbenchSession[]; readonly available: boolean }>;
+  readonly settingsProbe?: () => Record<string, unknown>;
   readonly now?: () => number;
 }
 
@@ -128,6 +131,7 @@ export function createWorkbenchHandler(
       policy: deps.policy(),
       sessions: rows,
       sessionsAvailable: available,
+      settingsProbe: (deps.settingsProbe ?? (() => ({})))(),
     };
     json(res, 200, state);
   };
@@ -145,6 +149,7 @@ interface WorkbenchConfig {
 
 interface WorkbenchContext {
   readonly get?: (name: string) => unknown;
+  readonly root?: { readonly get?: (name: string) => unknown; readonly settings?: unknown };
   readonly settings?: unknown;
   readonly webServer: {
     register(spec: {
@@ -157,24 +162,64 @@ interface WorkbenchContext {
   readonly logger?: { warn?: (message: string) => void };
 }
 
-/** Resolve dsh's live settings service defensively (it may not exist yet). */
-function policyReader(ctx: WorkbenchContext): () => CardPolicy {
-  const service = (): { describe?: () => readonly SettingsEntryLike[] } | undefined => {
-    try {
-      const direct = (ctx as { settings?: unknown }).settings;
-      if (direct !== undefined) return direct as { describe?: () => readonly SettingsEntryLike[] };
-      return ctx.get?.('settings') as { describe?: () => readonly SettingsEntryLike[] } | undefined;
-    } catch {
-      return undefined;
-    }
+/**
+ * Resolve dsh's live settings service defensively (it may not exist yet) and
+ * report what was actually visible, so a wrong policy is diagnosable from the
+ * page instead of guessed at.
+ */
+function settingsReader(ctx: WorkbenchContext): {
+  policy: () => CardPolicy;
+  probe: () => Record<string, unknown>;
+} {
+  let lastProbe: Record<string, unknown> = {};
+  const candidates = (): { label: string; value: unknown }[] => {
+    const out: { label: string; value: unknown }[] = [];
+    const push = (label: string, read: () => unknown): void => {
+      try {
+        out.push({ label, value: read() });
+      } catch {
+        out.push({ label, value: undefined });
+      }
+    };
+    push('ctx.settings', () => (ctx as { settings?: unknown }).settings);
+    push('ctx.get(settings)', () => ctx.get?.('settings'));
+    push('ctx.root.settings', () => ctx.root?.settings);
+    push('ctx.root.get(settings)', () => ctx.root?.get?.('settings'));
+    return out;
   };
-  return () => {
+  const service = (): { describe?: () => readonly SettingsEntryLike[] } | undefined => {
+    for (const candidate of candidates()) {
+      const value = candidate.value as { describe?: () => readonly SettingsEntryLike[] } | undefined;
+      if (value !== undefined && typeof value.describe === 'function') return value;
+    }
+    return undefined;
+  };
+  const policy = (): CardPolicy => {
     try {
-      return cardPolicyFromSettings(service()?.describe?.());
-    } catch {
+      const svc = service();
+      const entries = svc?.describe?.() ?? [];
+      const namespaces = entries
+        .map((entry) => (typeof (entry as { ns?: unknown }).ns === 'string' ? (entry as { ns: string }).ns : `?${typeof (entry as { id?: unknown }).id}`))
+        .slice(0, 40);
+      const chat = entries.find((entry) => (entry as { ns?: unknown }).ns === 'ui-chat');
+      lastProbe = {
+        paths: candidates().map((candidate) => `${candidate.label}=${candidate.value === undefined ? 'undefined' : typeof candidate.value}`),
+        serviceVisible: svc !== undefined,
+        hasDescribe: typeof svc?.describe === 'function',
+        entryCount: entries.length,
+        namespaces,
+        chatValueKeys:
+          chat === undefined
+            ? null
+            : Object.keys((chat as { value?: Record<string, unknown> }).value ?? {}),
+      };
+      return cardPolicyFromSettings(entries);
+    } catch (error) {
+      lastProbe = { error: String(error) };
       return DEFAULT_CARD_POLICY;
     }
   };
+  return { policy, probe: () => lastProbe };
 }
 
 /** Session rows via `sessionQuery`, newest first, cached briefly. */
@@ -240,9 +285,11 @@ const PACKAGE_VERSION: string = (() => {
 /** Mount the workbench route; `version` is stamped into the JSON payload. */
 export function apply(ctx: WorkbenchContext, config: WorkbenchConfig = {}, version = PACKAGE_VERSION): void {
   const limit = Math.max(1, Math.min(config.limit ?? 12, 50));
+  const settings = settingsReader(ctx);
   const handler = createWorkbenchHandler({
     version,
-    policy: policyReader(ctx),
+    policy: settings.policy,
+    settingsProbe: settings.probe,
     sessions: sessionReader(ctx, limit),
   });
   ctx.effect(
