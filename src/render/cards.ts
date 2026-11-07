@@ -172,7 +172,13 @@ export function progressCard(input: ProgressCardInput): FeishuCard {
 
 /** Turn the live process card into the greyed, collapsed record of the turn. */
 export function collapsedProcessCard(card: FeishuCard, note: string): FeishuCard {
-  const elements = card.elements.filter((element) => element.tag !== 'action');
+  // Drop the buttons and the running-time footnote: both would lie on a card
+  // that has already ended.
+  const elements = card.elements.filter(
+    (element) =>
+      element.tag !== 'action' &&
+      !element.text?.content?.startsWith('_过程消息'),
+  );
   const text = note.trim();
   if (text.length > 0) elements.push(div(`_${text}_`));
   const grey: FeishuCard = {

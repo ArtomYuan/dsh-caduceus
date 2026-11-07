@@ -8,6 +8,7 @@ import test from 'node:test';
 import {
   CARD_BYTE_LIMIT,
   cardByteSize,
+  collapsedProcessCard,
   finalCard,
   finalCardPlainText,
   markdownCard,
@@ -215,4 +216,21 @@ test('CardStream: 默认卡通道错误只上报不炸事件循环', async () =>
   await tick();
   await stream.flush();
   assert.ok(errors.length >= 1);
+});
+
+test('收起卡：去按钮、去运行脚注、换灰底并附收起说明', () => {
+  const live = progressCard({
+    title: '过程',
+    stateLabel: '运行中',
+    steps: 1,
+    tools: 1,
+    stepLines: ['✓ bash · 0.5s'],
+    stopButton: true,
+  });
+  const grey = collapsedProcessCard(live, '已收起 · 1 步');
+  assert.equal(grey.header?.template, 'grey');
+  const serialized = JSON.stringify(grey);
+  assert.ok(!serialized.includes('停止'), 'the stop button must be gone');
+  assert.ok(!serialized.includes('结束后会置灰收起'), 'the running footnote must be gone');
+  assert.match(serialized, /已收起 · 1 步/);
 });
