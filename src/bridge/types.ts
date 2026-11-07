@@ -179,6 +179,12 @@ export interface BridgeOptions {
   readonly usageProvider?: (
     sessionId: string,
   ) => Promise<readonly unknown[] | undefined> | readonly unknown[] | undefined;
+  /**
+   * Card presentation level, read live from dsh's own settings
+   * (`ui-chat` / `ui-settings-general`). Resolved lazily per render so a
+   * settings change applies without a restart.
+   */
+  readonly cardPolicyProvider?: () => import('../card-policy.js').CardPolicy;
   /** Locale source (dsh settings/env); default zh. */
   readonly languageProvider?: () => import('../i18n.js').Lang;
   /** Lazily resolve dsh's approval service (agent-scoped setPolicy). */

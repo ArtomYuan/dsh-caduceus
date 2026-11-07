@@ -41,7 +41,16 @@ import { writeOwnership, type SessionScopeKind } from '../ownership.js';
 import { defaultExportCacheDir } from '../home.js';
 import { extractMediaMarkers, resolveMedia } from '../media.js';
 import { aggregateUsage, renderUsageReport } from '../usage.js';
-import { aggregateMetrics, formatMetricsLine } from '../metrics.js';
+import { aggregateMetrics, formatMetricsLine, formatPerformanceLines } from '../metrics.js';
+import {
+  DEFAULT_CARD_POLICY,
+  foldsAtTurnEnd,
+  formatStepLines,
+  showsStepElapsed,
+  stepLimit,
+  stepLinesFromEvents,
+  type CardPolicy,
+} from '../card-policy.js';
 import { presetLabel, t, type Lang } from '../i18n.js';
 import {
   buildPermissionCard,
@@ -56,6 +65,8 @@ import {
   writeExportFile,
 } from '../export.js';
 import {
+  clipLabel,
+  collapsedProcessCard,
   finalCard,
   finalCardPlainText,
   progressCard,
@@ -127,6 +138,10 @@ interface ScopeState {
   reactionQueue: string[];
   /** Start-reaction promises keyed by message id (to order remove after add). */
   reactionStarts: Map<string, Promise<string | undefined>>;
+  /** Recent assistant replies (cap 3); kept for `foldedReplies: all`. */
+  replies: string[];
+  /** Process card still awaiting its collapse (`collapseTiming: next-input`). */
+  pendingCollapse?: { readonly messageId: string; readonly card: FeishuCard };
 }
 
 function errorMessage(error: unknown): string {
@@ -351,6 +366,7 @@ export class Bridge {
         state.running = true;
         state.stopRequested = false;
         state.lastOutput = '';
+        state.replies = [];
         state.progress?.dispose();
         state.progress = this.#makeCardStream(state);
         await this.#renderProgress(state);
@@ -385,7 +401,14 @@ export class Bridge {
       }
       case 'assistant/message': {
         const text = assistantTextFromEvent(event.data);
-        if (text.length > 0) state.lastOutput = text;
+        if (text.length > 0) {
+          state.lastOutput = text;
+          const trimmed = text.trim();
+          if (trimmed.length > 0 && state.replies[state.replies.length - 1] !== trimmed) {
+            state.replies.push(trimmed);
+            if (state.replies.length > 3) state.replies.shift();
+          }
+        }
         await this.#renderProgress(state);
         break;
       }
@@ -416,6 +439,15 @@ export class Bridge {
 
   async #processInbound(message: InboundMessage): Promise<void> {
     const state = this.#stateFor(message);
+    const pending = state.pendingCollapse;
+    if (pending !== undefined) {
+      state.pendingCollapse = undefined;
+      try {
+        await this.#transport.updateCard(pending.messageId, pending.card);
+      } catch (error) {
+        this.#logger.warn(`deferred collapse failed: ${errorMessage(error)}`);
+      }
+    }
     state.lastInboundMessageId = message.messageId;
     state.ownerOpenId = message.senderOpenId;
     // Startup-stage failures have no session to notify yet; the first message
@@ -1054,18 +1086,26 @@ export class Bridge {
     }
 
     const card = finalCard(finalInput);
+    // 过程卡按 dsh 的「工作步骤收起时机」处理：completion 立刻置灰收起；
+    // next-input 留到下一次输入再收，正文始终另发一张摘要卡。
+    const policy = this.#policy();
     if (messageId !== undefined) {
-      try {
-        await this.#transport.updateCard(messageId, card);
-      } catch (error) {
-        await this.#finalFallback(state, finalInput, error);
+      const collapsed = this.#collapsedCard(state, snapshot, kind);
+      if (foldsAtTurnEnd(policy)) {
+        try {
+          if (process.env.CADUCEUS_DEBUG === '1') console.error('[dbg] collapse', messageId);
+          await this.#transport.updateCard(messageId, collapsed);
+        } catch (error) {
+          this.#logger.warn(`collapse patch failed: ${errorMessage(error)}`);
+        }
+      } else {
+        state.pendingCollapse = { messageId, card: collapsed };
       }
-    } else {
-      try {
-        await this.#sendNewCard(state, card);
-      } catch (error) {
-        await this.#finalFallback(state, finalInput, error);
-      }
+    }
+    try {
+      await this.#sendNewCard(state, card);
+    } catch (error) {
+      await this.#finalFallback(state, finalInput, error);
     }
 
     await this.#sendOutboundMedia(state, outbound.entries);
@@ -1165,7 +1205,7 @@ export class Bridge {
   ): FinalCardInput {
     const sessionTitle = this.#titleOf(state)?.trim() ?? state.title;
     return {
-      title: '飞书会话 · 过程',
+      title: '飞书会话 · 回答',
       // Event-derived, never the (possibly stale) tracker snapshot.
       stateLabel: finalStateLabel,
       steps: snapshot.steps,
@@ -2003,6 +2043,7 @@ export class Bridge {
       running: false,
       status: new StatusTracker(),
       lastOutput: '',
+      replies: [],
       reactionQueue: [],
       reactionStarts: new Map(),
       logEvents: [],
@@ -2019,6 +2060,7 @@ export class Bridge {
         return sent;
       },
       update: async (messageId: string, card: FeishuCard) => {
+        if (process.env.CADUCEUS_DEBUG === '1') console.error('[dbg] stream.update', messageId, card.header?.title.content);
         await this.#transport.updateCard(messageId, card);
       },
     };
@@ -2146,11 +2188,16 @@ export class Bridge {
       );
     } else if (snapshot.compaction === 'failed') extraLines.push('上下文压缩失败');
     if (snapshot.teamLine !== undefined) extraLines.push(snapshot.teamLine);
-    const metricsMode = this.#config.metrics ?? 'compact';
-    if (metricsMode !== 'off') {
-      const metricsLine = formatMetricsLine(await this.#metricsFor(state, snapshot), metricsMode);
-      if (metricsLine.length > 0) extraLines.push(metricsLine);
+    // 性能与用量：dsh 的 ui-chat.performanceUsage 决定密度；caduceus 的
+    // `metrics: off` 仅作排障用的整体关闭开关。
+    const policy = this.#policy();
+    if (this.#config.metrics !== 'off') {
+      const metrics = await this.#metricsFor(state, snapshot);
+      for (const line of formatPerformanceLines(metrics, policy.performance)) {
+        extraLines.push(line);
+      }
     }
+    const steps = this.#stepLines(state, snapshot, policy);
     if (state.stopRequested === true) {
       extraLines.push('已停止当前回合。后台任务仍在运行，完成后结果会回来。');
     }
@@ -2163,7 +2210,62 @@ export class Bridge {
       state.sessionId !== undefined && this.#presetFailures.has(state.sessionId),
       extraLines,
       state.running && state.stopRequested !== true,
+      steps.lines,
+      steps.note,
     );
+  }
+
+  /** Card policy from dsh's live settings; defaults only when unavailable. */
+  #policy(): CardPolicy {
+    try {
+      return this.#options.cardPolicyProvider?.() ?? DEFAULT_CARD_POLICY;
+    } catch {
+      return DEFAULT_CARD_POLICY;
+    }
+  }
+
+  /** Step rows for the current turn, limited by the transcript level. */
+  #stepLines(
+    state: ScopeState,
+    snapshot: StatusSnapshot,
+    policy: CardPolicy,
+  ): { readonly lines: string[]; readonly note?: string } {
+    const all = stepLinesFromEvents(state.logEvents, Number.POSITIVE_INFINITY, {
+      turn: snapshot.turn,
+      elapsed: showsStepElapsed(policy.transcript),
+    });
+    const limit = stepLimit(policy.transcript);
+    const shown = Number.isFinite(limit) ? all.slice(Math.max(0, all.length - limit)) : all;
+    const lines = formatStepLines(shown);
+    const note =
+      all.length > shown.length ? `共 ${all.length} 次调用，显示最近 ${shown.length} 条` : undefined;
+    return { lines, ...(note === undefined ? {} : { note }) };
+  }
+
+  /** Greyed, collapsed record of the finished turn's process card. */
+  #collapsedCard(state: ScopeState, snapshot: StatusSnapshot, kind: string | undefined): FeishuCard {
+    const policy = this.#policy();
+    const steps = this.#stepLines(state, snapshot, policy);
+    const card = progressCardForSnapshot(
+      snapshot,
+      state.title,
+      recentEventText(snapshot),
+      '',
+      this.#now(),
+      state.sessionId !== undefined && this.#presetFailures.has(state.sessionId),
+      [],
+      false,
+      steps.lines,
+      steps.note,
+    );
+    const noteLines = [`已收起 · ${snapshot.steps} 步`];
+    if (kind !== undefined && kind !== 'completed') noteLines[0] += ` · ${statusLabel(stateForTurnEnd(kind))}`;
+    if (policy.foldedReplies === 'all' && state.replies.length > 0) {
+      for (const [index, reply] of state.replies.slice(-3).entries()) {
+        noteLines.push(`过程回复 ${index + 1}：${clipLabel(reply.replace(/\s+/g, ' '), 60)}`);
+      }
+    }
+    return collapsedProcessCard(card, noteLines.join('\n'));
   }
 
   async #replyText(state: ScopeState, text: string): Promise<void> {
@@ -2196,10 +2298,14 @@ export function progressCardForSnapshot(
   presetMissing = false,
   extraLines: readonly string[] = [],
   stopButton = false,
+  stepLines: readonly string[] = [],
+  stepNote?: string,
 ): FeishuCard {
   return progressCard({
     title: '飞书会话 · 过程',
     ...(extraLines.length === 0 ? {} : { extraLines }),
+    ...(stepLines.length === 0 ? {} : { stepLines }),
+    ...(stepNote === undefined || stepNote.length === 0 ? {} : { stepNote }),
     ...(stopButton ? { stopButton: true } : {}),
     stateLabel: statusLabel(snapshot.state),
     steps: snapshot.steps,

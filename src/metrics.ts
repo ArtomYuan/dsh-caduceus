@@ -7,6 +7,8 @@
  *
  * @module dsh-caduceus/metrics
  */
+import type { PerformanceMode } from './card-policy.js';
+
 export type MetricsMode = 'off' | 'compact' | 'detailed';
 
 export interface Metrics {
@@ -165,4 +167,34 @@ export function formatMetricsLine(metrics: Metrics, mode: MetricsMode): string {
     parts.push(`上下文 ${metrics.contextPercent}%`);
   }
   return parts.join(' · ');
+}
+
+/**
+ * Performance/usage block, laid out per the user's dsh `性能与用量` level:
+ * `compact` is one dense line, `detailed` splits rate from volume so neither
+ * line has to be read across a long `·` chain.
+ */
+export function formatPerformanceLines(
+  metrics: Metrics,
+  performance: PerformanceMode,
+): string[] {
+  const rate: string[] = [];
+  if (metrics.tokensPerSecond !== undefined) {
+    rate.push(`${Math.round(metrics.tokensPerSecond)} tok/s`);
+  }
+  if (metrics.cacheHitPercent !== undefined) rate.push(`缓存 ${metrics.cacheHitPercent}%`);
+  if (metrics.contextPercent !== undefined) rate.push(`上下文 ${metrics.contextPercent}%`);
+  const volume: string[] = [];
+  if (metrics.rounds > 0) volume.push(`${metrics.rounds} 轮`);
+  if (metrics.steps > 0) volume.push(`${metrics.steps} 步`);
+  if (metrics.totalTokens > 0) volume.push(`${formatTokenCount(metrics.totalTokens)} tok`);
+  if (performance === 'compact') {
+    // 简洁档：一行放完，但把速度、总量、缓存分开读得懂的顺序。
+    const merged = [...volume, ...rate];
+    return merged.length === 0 ? [] : [merged.join(' · ')];
+  }
+  const lines: string[] = [];
+  if (rate.length > 0) lines.push(`性能：${rate.join(' · ')}`);
+  if (volume.length > 0) lines.push(`用量：${volume.join(' · ')}`);
+  return lines;
 }

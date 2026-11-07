@@ -72,14 +72,20 @@ export interface ProgressCardInput {
   /** Unix epoch ms when the turn started; used for the elapsed line. */
   readonly startedAt?: number;
   readonly now?: number;
-  /** Session title shown on the state line when known. */
+  /** Session title shown above the state line when known. */
   readonly sessionTitle?: string;
-  /** Latest tool/event label (clipped to 40 characters). */
+  /** Latest tool/event label (kept for callers that have no step log). */
   readonly recentEvent?: string;
   /** Assistant output tail shown while the turn runs (≤8 KB). */
   readonly tail?: string;
   /** Append `（preset 未挂载）` to the state line. */
   readonly presetMissing?: boolean;
+  /** 性能与用量 block, already density-adjusted for the user's level. */
+  readonly metricLines?: readonly string[];
+  /** Step log rows (one tool per row), already limited for the level. */
+  readonly stepLines?: readonly string[];
+  /** `共 N 次调用，显示最近 M 条` when the log was truncated. */
+  readonly stepNote?: string;
 }
 
 /** Clip by Unicode code point so a label never exceeds the budget. */
@@ -88,33 +94,65 @@ export function clipLabel(text: string, maxChars = 40): string {
 }
 
 /**
- * The single per-turn card: state line (title/state/steps/tools/elapsed) and a
- * one-line recent event. It deliberately carries NO assistant body — the final
- * message is the only place an answer is rendered, so a short answer can never
- * appear twice.
+ * The single per-turn card, laid out in stacked blocks so nothing is crammed
+ * onto one `·` chain:
+ *
+ *   会话标题
+ *   状态行（状态 + 已运行）
+ *   性能与用量（按档位一行或两行）
+ *   附加状态（压缩 / 协作 / 已请求停止）
+ *   ───
+ *   步骤流水（一行一个工具，按档位限量）
+ *   ───
+ *   正文尾部
+ *   [停止]
+ *   脚注
+ *
+ * It deliberately carries NO assistant body beyond the tail — the final card is
+ * the only place a complete answer is rendered.
  */
 export function progressCard(input: ProgressCardInput): FeishuCard {
-  const stateLine: string[] = [];
+  const elements: FeishuCardElement[] = [];
   const sessionTitle = input.sessionTitle?.trim();
   if (sessionTitle !== undefined && sessionTitle.length > 0) {
-    stateLine.push(`会话：${clipLabel(sessionTitle)}`);
+    elements.push(div(`会话：${clipLabel(sessionTitle)}`));
   }
-  stateLine.push(`**${input.stateLabel}**`, `步数 ${input.steps}`, `工具 ${input.tools}`);
+
+  const stateLine = [`**${input.stateLabel}**`];
   if (input.startedAt !== undefined) {
     const now = input.now ?? Date.now();
     const seconds = Math.max(0, Math.floor((now - input.startedAt) / 1000));
     stateLine.push(`已运行 ${seconds}s`);
   }
   if (input.presetMissing === true) stateLine.push('（preset 未挂载）');
-  const elements: FeishuCardElement[] = [
-    div(stateLine.join(' · ')),
-    div(`最近：${clipLabel(input.recentEvent ?? '（无）')}`),
-  ];
+  elements.push(div(stateLine.join(' · ')));
+
+  for (const line of input.metricLines ?? []) {
+    if (line.trim().length > 0) elements.push(div(line));
+  }
   for (const line of input.extraLines ?? []) {
     if (line.trim().length > 0) elements.push(div(line));
   }
+
+  const stepRows = (input.stepLines ?? []).filter((line) => line.trim().length > 0);
+  const rows =
+    stepRows.length > 0
+      ? stepRows
+      : input.recentEvent === undefined
+        ? []
+        : [`最近：${clipLabel(input.recentEvent)}`];
+  if (rows.length > 0) {
+    elements.push({ tag: 'hr' });
+    for (const row of rows) elements.push(div(row));
+    const note = input.stepNote?.trim();
+    if (note !== undefined && note.length > 0) elements.push(div(`_${note}_`));
+  }
+
   const tail = input.tail === undefined ? '' : tailText(input.tail);
-  if (tail.trim().length > 0) elements.push(div(tail));
+  if (tail.trim().length > 0) {
+    elements.push({ tag: 'hr' });
+    elements.push(div(tail));
+  }
   if (input.stopButton === true) {
     elements.push({
       tag: 'action',
@@ -128,8 +166,24 @@ export function progressCard(input: ProgressCardInput): FeishuCard {
       ],
     });
   }
-  elements.push(div('_过程消息；收尾会把终稿更新到本卡。_'));
+  elements.push(div('_过程消息；结束后会置灰收起，正文另发。_'));
   return buildCard({ title: input.title, template: 'blue', elements });
+}
+
+/** Turn the live process card into the greyed, collapsed record of the turn. */
+export function collapsedProcessCard(card: FeishuCard, note: string): FeishuCard {
+  const elements = card.elements.filter((element) => element.tag !== 'action');
+  const text = note.trim();
+  if (text.length > 0) elements.push(div(`_${text}_`));
+  const grey: FeishuCard = {
+    config: card.config,
+    ...(card.header === undefined
+      ? {}
+      : { header: { ...card.header, template: 'grey' } }),
+    elements,
+  };
+  assertCardFits(grey);
+  return grey;
 }
 
 export interface FinalCardInput {

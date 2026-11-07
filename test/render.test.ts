@@ -63,11 +63,12 @@ test('过程卡运行中承载正文尾部 + 状态行，且 ≤30KB', () => {
   const serialized = JSON.stringify(card);
   assert.match(serialized, /第一句完整回答/);
   assert.match(serialized, /会话：会话标题/);
-  assert.match(serialized, /步数 2/);
-  assert.match(serialized, /工具 1/);
-  assert.match(serialized, /已运行 5s/);
+  // 状态行只留状态与计时；步数/工具数改由步骤段与用量段承载。
+  assert.match(serialized, /\*\*运行中\*\* · 已运行 5s/);
+  assert.ok(!serialized.includes('步数 2'), 'step count must not be crammed on the status line');
+  assert.ok(serialized.includes('"tag":"hr"'), 'blocks are separated by a divider');
   assert.match(serialized, /最近：tool\/call/);
-  assert.match(serialized, /收尾会把终稿更新到本卡/);
+  assert.match(serialized, /结束后会置灰收起，正文另发/);
 
   const long = progressCard({
     title: '过程',

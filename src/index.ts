@@ -32,6 +32,7 @@ import type {
   AgentsLike,
   SessionTitleLike,
 } from './bridge/types.js';
+import { cardPolicyFromSettings, type SettingsEntryLike } from './card-policy.js';
 import { runHarnessCommand } from './commands/harness.js';
 import { cleanupExportCache, parseSessionEvents } from './export.js';
 import { resolveLang } from './i18n.js';
@@ -97,6 +98,23 @@ function agentOptions(ctx: Context): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+
+/** Read dsh's live Chat/General settings as a card policy (lazy each render). */
+function makeCardPolicy(ctx: Context): () => import('./card-policy.js').CardPolicy {
+  const read = (): import('./card-policy.js').CardPolicy => {
+    try {
+      const settings = ctx.get('settings') as
+        | { describe?: () => readonly SettingsEntryLike[] }
+        | undefined;
+      const entries = settings?.describe?.();
+      return cardPolicyFromSettings(entries);
+    } catch {
+      return cardPolicyFromSettings(undefined);
+    }
+  };
+  return read;
 }
 
 /** Adapt `ctx.get('agents')` to the bridge's structural seam. */
@@ -275,6 +293,8 @@ export function apply(ctx: Context, config: GatewayConfig = {}): void {
     sessionIdsProvider: () => scanSessionDirs().map((entry) => entry.sessionId),
     // Lazy per use: the preset registry can register AFTER this plugin mounts.
     agentPresetsProvider: () => ctx.get('agentPresets') as AgentPresetsLike | undefined,
+    // Card detail follows dsh's own Chat/General settings (live, no restart).
+    cardPolicyProvider: makeCardPolicy(ctx),
     selfCheck,
     interactive,
     rootCtx: ctx,
