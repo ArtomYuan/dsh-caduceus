@@ -14,3 +14,8 @@
         lang: zh
     - id: caduceus-persona
       name: 'dsh-caduceus/persona'
+    # Browser workbench host half: one read-only same-origin route
+    # (/caduceus/state). Safe without Feishu credentials — the gateway can sit
+    # idle while the workbench still reports sessions, usage and card policy.
+    - id: caduceus-workbench
+      name: 'dsh-caduceus/workbench'
